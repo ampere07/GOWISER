@@ -91,7 +91,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
     onEditModeChange,
     requireFields = true
   } = props;
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.atssfiber.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
   const COVERAGE_CENTER = { lat: 14.9136, lng: 121.0464 }; // Norzagaray, Bulacan
   const COVERAGE_RADIUS = 25000; // 25km in meters - covers Norzagaray area
@@ -1864,7 +1864,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
                 onClick={() => {
                   setShowSuccessModal(false);
                   handleReset();
-                  window.location.href = 'https://sync.atssfiber.ph';
+                  window.location.href = 'https://sync.gowiser.ph';
                 }}
                 className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >

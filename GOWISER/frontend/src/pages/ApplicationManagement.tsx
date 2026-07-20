@@ -1211,7 +1211,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                     console.error('Failed to parse authData');
                   }
                 }
-                const url = email ? `https://apply.atssfiber.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.atssfiber.ph';
+                const url = email ? `https://apply.gowiser.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.gowiser.ph';
                 window.open(url, '_blank', 'noopener,noreferrer');
               }}
               className="px-2.5 py-1 text-xs font-medium rounded flex items-center transition-colors shadow-sm text-white hover:opacity-90"
@@ -1409,8 +1409,8 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                   <button
                     onClick={() => setMobileViewMode('sidebar')}
                     className={`md:hidden p-2 rounded-lg border transition-colors flex items-center justify-center flex-shrink-0 ${isDarkMode
-                        ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                      ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                       }`}
                     title="Back to Filters"
                   >

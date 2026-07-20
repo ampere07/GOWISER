@@ -20,8 +20,8 @@ return [
     'allowed_methods' => ['*'],
 
     'allowed_origins' => [
-        'https://apply.atssfiber.ph',
-        'https://backend1.atssfiber.ph',
+        'https://apply.gowiser.ph',
+        'https://backend1.gowiser.ph',
     ],
 
     'allowed_origins_patterns' => [],

@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "ATSS",
-    "slug": "atss",
-    "scheme": "atss-app",
+    "name": "GOWISER",
+    "slug": "gowiser",
+    "scheme": "gowiser-app",
     "version": "2.5.51",
     "orientation": "portrait",
     "icon": "./assets/applogo.png",
@@ -16,7 +16,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.atss.sync",
+      "bundleIdentifier": "com.gowiser.sync",
       "entitlements": {
         "aps-environment": "production"
       },
@@ -25,7 +25,7 @@
       }
     },
     "android": {
-      "name": "ATSS",
+      "name": "GOWISER",
       "icon": "./assets/applogo.png",
       "allowBackup": false,
       "adaptiveIcon": {
@@ -34,7 +34,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.atss.sync",
+      "package": "com.gowiser.sync",
       "launchMode": "singleTask",
       "googleServicesFile": "./google-services.json",
       "config": {
@@ -79,15 +79,15 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow ATSS to access your photos to select job order images.",
-          "savePhotosPermission": "Allow ATSS to save taken photos to your phone gallery."
+          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
+          "savePhotosPermission": "Allow GOWISER to save taken photos to your phone gallery."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow ATSS to access your photos to select job order images.",
-          "cameraPermission": "Allow ATSS to access your camera to take job order pictures."
+          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
+          "cameraPermission": "Allow GOWISER to access your camera to take job order pictures."
         }
       ]
     ],

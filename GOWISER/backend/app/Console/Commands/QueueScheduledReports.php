@@ -102,9 +102,9 @@ class QueueScheduledReports extends Command
 
                     \App\Models\EmailQueue::create([
                         'recipient_email' => $email,
-                        'email_sender' => 'billing@atssfiber.ph',
-                        'reply_to' => 'billing@atssfiber.ph',
-                        'sender_name' => 'ATSS Fiber',
+                        'email_sender' => 'billing@gowiser.ph',
+                        'reply_to' => 'billing@gowiser.ph',
+                        'sender_name' => 'GOWISER',
                         'subject' => 'Scheduled Report: ' . $report->report_name,
                         'body_html' => 'Report ' . htmlspecialchars($report->report_type),
                         'attachment_path' => $tempPath,

@@ -430,8 +430,8 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
 
   const openApplyForm = () => {
     const url = userEmail
-      ? `https://apply.atssfiber.ph?created_by_email=${encodeURIComponent(userEmail)}`
-      : 'https://apply.atssfiber.ph';
+      ? `https://apply.gowiser.ph?created_by_email=${encodeURIComponent(userEmail)}`
+      : 'https://apply.gowiser.ph';
     Linking.openURL(url).catch(() => { });
   };
 

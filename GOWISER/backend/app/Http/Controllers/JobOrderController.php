@@ -1305,8 +1305,8 @@ class JobOrderController extends Controller
                         $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
                         $emailBody = str_replace('{{customer_name}}', $customerName, $emailBody);
                         $emailBody = str_replace('{{customer_tag}}', $customerName, $emailBody);
-                        $emailBody = str_replace('{{company_name}}', 'ATSS Fiber', $emailBody);
-                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/atssfiber', $emailBody);
+                        $emailBody = str_replace('{{company_name}}', 'GOWISER', $emailBody);
+                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/gowiserzc', $emailBody);
                         $emailBody = str_replace('{{account_no}}', $accountNumber, $emailBody);
                         $emailBody = str_replace('{{username}}', $generatedUsername, $emailBody);
                         $emailBody = str_replace('{{password}}', $generatedPassword, $emailBody);
@@ -2021,7 +2021,7 @@ class JobOrderController extends Controller
      */
     private function replaceGlobalVariables(string $message): string
     {
-        $portalUrl = 'sync.atssfiber.ph';
+        $portalUrl = 'sync.gowiser.ph';
         $brandName = DB::table('form_ui')->value('brand_name') ?? 'Your ISP';
 
         $message = str_replace('{{portal_url}}', $portalUrl, $message);

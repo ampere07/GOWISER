@@ -645,7 +645,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 type="button"
                 className="apply-button"
                 onClick={() => {
-                  window.open('https://apply.atssfiber.ph', '_blank');
+                  window.open('https://apply.gowiser.ph', '_blank');
                 }}
                 style={{
                   padding: '16px 48px',

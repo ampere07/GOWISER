@@ -5,7 +5,7 @@ import { technicianLocationService } from './technicianLocationService';
 
 // Cadence for the OS-driven location "cron". Kept well under the backend's
 // 2-minute stale window so an active technician stays "online".
-export const TECH_LOCATION_TASK = 'atss-tech-location-task';
+export const TECH_LOCATION_TASK = 'gowiser-tech-location-task';
 // Life360-like cadence: report every ~10s. distanceInterval 0 means "report on the
 // time interval even when standing still", so a technician stays reliably "online"
 // (not just when moving). Trade-off: higher battery use — acceptable for on-duty techs.
@@ -73,7 +73,7 @@ export async function startTechLocationUpdates(): Promise<void> {
     // Android: a persistent foreground-service notification is what keeps location
     // flowing when the app is backgrounded AND after it is swiped from recents.
     foregroundService: {
-      notificationTitle: 'ATSS location sharing active',
+      notificationTitle: 'GOWISER location sharing active',
       notificationBody: 'Sharing your live location with dispatch while you are on duty.',
       notificationColor: '#7c3aed',
       killServiceOnDestroy: false,

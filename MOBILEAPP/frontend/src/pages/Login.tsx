@@ -363,7 +363,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               textAlign: 'center',
             }}>Apply online in just 2 minutes.</Text>
             <TouchableOpacity
-              onPress={() => Linking.openURL('https://apply.atssfiber.ph')}
+              onPress={() => Linking.openURL('https://apply.gowiser.ph')}
               style={{
                 paddingVertical: 16,
                 paddingHorizontal: 48,
