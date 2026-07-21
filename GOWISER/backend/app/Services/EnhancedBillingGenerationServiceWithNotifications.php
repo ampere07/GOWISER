@@ -274,9 +274,12 @@ class EnhancedBillingGenerationServiceWithNotifications
             ]);
 
             $prorateAmount = $this->calculateProrateAmount($account, $plan->price, $adjustedDate);
-            $monthlyFeeGross = $prorateAmount / (1 + self::VAT_RATE);
+            $reconProrate = $this->calculateReconnectionProrate($account, $statementDate, $plan->price);
+            
+            $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
+            $monthlyFeeGross = $effectiveProrateAmount / (1 + self::VAT_RATE);
             $vat = $monthlyFeeGross * self::VAT_RATE;
-            $monthlyServiceFee = $prorateAmount - $vat;
+            $monthlyServiceFee = $effectiveProrateAmount - $vat;
 
             // Use statement ID as the reference for charges
             $charges = $this->calculateChargesAndDeductions(
@@ -298,6 +301,18 @@ class EnhancedBillingGenerationServiceWithNotifications
             $remainingBalance = $previousBalance - $paymentReceived;
             $totalAmountDue = $remainingBalance + $amountDue;
 
+            $proRateStart = $reconProrate['pro_rate_start'];
+            if (!$proRateStart) {
+                $planChange = DB::table('plan_change_logs')
+                    ->where('account_id', $account->id)
+                    ->where('status', 'Unused')
+                    ->orderBy('date_changed', 'desc')
+                    ->first();
+                if ($planChange && !empty($planChange->date_changed)) {
+                    $proRateStart = Carbon::parse($planChange->date_changed)->format('Y-m-d');
+                }
+            }
+
             // Update statement with actual values
             $statement->update([
                 'balance_from_previous_bill' => round($previousBalance, 2),
@@ -311,7 +326,9 @@ class EnhancedBillingGenerationServiceWithNotifications
                 'staggered' => round($charges['staggered_install_fees'], 2),
                 'vat' => round($vat, 2),
                 'amount_due' => round($amountDue, 2),
-                'total_amount_due' => round($totalAmountDue, 2)
+                'total_amount_due' => round($totalAmountDue, 2),
+                'pro_rate' => round($reconProrate['total_prorate'], 2),
+                'pro_rate_start' => $proRateStart
             ]);
 
             DB::commit();
@@ -407,6 +424,10 @@ class EnhancedBillingGenerationServiceWithNotifications
             ]);
             
             $prorateAmount = $this->calculateProrateAmount($account, $plan->price, $adjustedDate);
+            $reconProrate = $this->calculateReconnectionProrate($account, $invoiceDate, $plan->price);
+            
+            $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
+
             $charges = $this->calculateChargesAndDeductions(
                 $account, 
                 $invoiceDate, 
@@ -419,21 +440,35 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $othersBasicCharges = 0;
 
-            $totalAmount = $prorateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+            $totalAmount = $effectiveProrateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
             
             if ($account->account_balance < 0) {
                 $totalAmount += $account->account_balance;
             }
 
+            $proRateStartInvoice = $reconProrate['pro_rate_start'];
+            if (!$proRateStartInvoice) {
+                $planChange = DB::table('plan_change_logs')
+                    ->where('account_id', $account->id)
+                    ->where('status', 'Unused')
+                    ->orderBy('date_changed', 'desc')
+                    ->first();
+                if ($planChange && !empty($planChange->date_changed)) {
+                    $proRateStartInvoice = Carbon::parse($planChange->date_changed)->format('Y-m-d');
+                }
+            }
+
             $invoice->update([
-                'invoice_balance' => round($prorateAmount, 2),
+                'invoice_balance' => round($effectiveProrateAmount, 2),
                 'others_and_basic_charges' => round($othersBasicCharges, 2),
                 'service_charge' => round($charges['service_fees'], 2),
                 'rebate' => round($charges['rebates'], 2),
                 'discounts' => round($charges['discounts'], 2),
                 'staggered' => round($charges['staggered_install_fees'], 2),
                 'total_amount' => round($totalAmount, 2),
-                'status' => $totalAmount <= 0 ? 'Paid' : 'Unpaid'
+                'status' => $totalAmount <= 0 ? 'Paid' : 'Unpaid',
+                'pro_rate' => round($reconProrate['total_prorate'], 2),
+                'pro_rate_start' => $proRateStartInvoice
             ]);
 
             $appliedDiscounts = $charges['discounts'];
@@ -449,7 +484,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $this->log('info', 'Invoice updated with discount applied to balance', [
                 'account_no' => $account->account_no,
-                'invoice_balance' => $prorateAmount,
+                'invoice_balance' => $effectiveProrateAmount,
                 'total_amount' => $totalAmount,
                 'discounts_applied' => $appliedDiscounts,
                 'previous_balance' => $account->account_balance,
@@ -459,6 +494,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             $this->markDiscountsAsUsed($account, $userId, (string)$invoice->id);
             $this->markRebatesAsUsed($account, $userId, (string)$invoice->id);
             $this->markPlanChangesAsUsed($account, $userId, (string)$invoice->id);
+            $this->markReconnectionProrateAsUsed($account, $userId, (string)$invoice->id, $reconProrate['log_ids'] ?? []);
             $this->trackStaggeredInvoiceAssociation($account->account_no, $invoice->id);
 
             DB::commit();
@@ -537,41 +573,171 @@ class EnhancedBillingGenerationServiceWithNotifications
         $totalDays = $cycleStart->diffInDays($cycleEnd);
         if ($totalDays <= 0) $totalDays = self::DAYS_IN_MONTH; 
 
-        // Check if the plan change occurred within this billing cycle
+        // Check if the plan change occurred within or prior to this billing cycle
         if ($dateChanged->lte($cycleEnd)) {
             
             if ($dateChanged->gt($cycleStart)) {
-                // Change happened during the cycle
+                // Change happened during the current billing cycle
                 $daysOnOldPlan = $cycleStart->diffInDays($dateChanged);
-                // Ensure we don't exceed the total days in the period
                 if ($daysOnOldPlan > $totalDays) $daysOnOldPlan = $totalDays;
                 
                 $daysOnNewPlan = $totalDays - $daysOnOldPlan;
+                $proratedAmount = (($daysOnOldPlan / $totalDays) * $oldPrice) + (($daysOnNewPlan / $totalDays) * $newPrice);
+
+                $this->log('info', 'Prorating monthly fee due to mid-cycle plan change', [
+                    'account_no' => $account->account_no,
+                    'old_plan' => $oldPlan->plan_name,
+                    'new_plan' => $newPlan->plan_name,
+                    'days_old' => $daysOnOldPlan,
+                    'days_new' => $daysOnNewPlan,
+                    'old_price' => $oldPrice,
+                    'new_price' => $newPrice,
+                    'total_days_in_month' => $totalDays,
+                    'total_amount' => $proratedAmount
+                ]);
+
+                return round($proratedAmount, 2);
+
             } else {
-                // Change happened before the cycle start but was not used (pushed to this bill)
-                // If it's unused, we'll assume they were on the new plan for the whole month
-                // since they officially switched but it hasn't been applied to a bill yet.
+                // Change happened prior to cycle start (e.g. after previous advance generation).
+                // Compute retroactive delta adjustment for the unbilled days in the previous cycle.
+                $prevCycleEnd = $cycleStart->copy();
+                $prevCycleStart = $prevCycleEnd->copy()->subMonth();
+                $prevTotalDays = $prevCycleStart->diffInDays($prevCycleEnd);
+                if ($prevTotalDays <= 0) $prevTotalDays = self::DAYS_IN_MONTH;
+
+                if ($dateChanged->betweenIncluded($prevCycleStart, $prevCycleEnd)) {
+                    $unbilledDays = $dateChanged->diffInDays($prevCycleEnd);
+                    if ($unbilledDays > 0 && $unbilledDays < $prevTotalDays) {
+                        $dailyDelta = ($newPrice - $oldPrice) / $prevTotalDays;
+                        $retroactiveAdjustment = round($dailyDelta * $unbilledDays, 2);
+                        $proratedAmount = $monthlyFee + $retroactiveAdjustment;
+
+                        $this->log('info', 'Calculated retroactive plan change adjustment for post-advance generation change', [
+                            'account_no' => $account->account_no,
+                            'old_plan' => $oldPlan->plan_name,
+                            'new_plan' => $newPlan->plan_name,
+                            'date_changed' => $dateChanged->format('Y-m-d'),
+                            'unbilled_days' => $unbilledDays,
+                            'daily_delta' => round($dailyDelta, 2),
+                            'retroactive_adjustment' => $retroactiveAdjustment,
+                            'new_monthly_fee' => $monthlyFee,
+                            'total_amount' => $proratedAmount
+                        ]);
+
+                        return round($proratedAmount, 2);
+                    }
+                }
+
                 return $monthlyFee;
             }
-
-            $proratedAmount = (($daysOnOldPlan / $totalDays) * $oldPrice) + (($daysOnNewPlan / $totalDays) * $newPrice);
-            
-            $this->log('info', 'Prorating monthly fee due to plan change', [
-                'account_no' => $account->account_no,
-                'old_plan' => $oldPlan->plan_name,
-                'new_plan' => $newPlan->plan_name,
-                'days_old' => $daysOnOldPlan,
-                'days_new' => $daysOnNewPlan,
-                'old_price' => $oldPrice,
-                'new_price' => $newPrice,
-                'total_days_in_month' => $totalDays,
-                'total_amount' => $proratedAmount
-            ]);
-
-            return round($proratedAmount, 2);
         }
 
         return $monthlyFee;
+    }
+
+    public function calculateReconnectionProrate(BillingAccount $account, Carbon $generationDate, float $monthlyFee): array
+    {
+        $unbilledLogs = DB::table('reconnection_logs')
+            ->where('account_id', $account->id)
+            ->where(function ($q) {
+                $q->where('pro_rate_applied', 0)
+                  ->orWhereNull('pro_rate_applied');
+            })
+            ->where(function ($q) {
+                $q->whereNull('billing_status')
+                  ->orWhere('billing_status', 'Unused');
+            })
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        if ($unbilledLogs->isEmpty()) {
+            return [
+                'total_prorate' => 0.00,
+                'pro_rate_start' => null,
+                'log_ids' => []
+            ];
+        }
+
+        $totalProrate = 0.00;
+        $proRateStart = null;
+        $logIds = [];
+
+        foreach ($unbilledLogs as $log) {
+            $reconDate = Carbon::parse($log->created_at);
+            
+            $cycleEnd = $this->calculateAdjustedBillingDate($account, $reconDate);
+            $cycleStart = $cycleEnd->copy()->subMonth();
+
+            $totalDaysInCycle = $cycleStart->diffInDays($cycleEnd);
+            if ($totalDaysInCycle <= 0) {
+                $totalDaysInCycle = self::DAYS_IN_MONTH;
+            }
+
+            if ($reconDate->betweenIncluded($cycleStart, $cycleEnd)) {
+                $activeDays = $reconDate->diffInDays($cycleEnd);
+                if ($activeDays > 0 && $activeDays < $totalDaysInCycle) {
+                    $dailyRate = $monthlyFee / $totalDaysInCycle;
+                    $proratedAmount = round($dailyRate * $activeDays, 2);
+                    
+                    $totalProrate += $proratedAmount;
+                    $logIds[] = $log->id;
+
+                    if (!$proRateStart || $reconDate->lt(Carbon::parse($proRateStart))) {
+                        $proRateStart = $reconDate->format('Y-m-d');
+                    }
+
+                    $this->log('info', 'Calculated mid-cycle reconnection prorate', [
+                        'account_no' => $account->account_no,
+                        'reconnection_log_id' => $log->id,
+                        'reconnection_date' => $reconDate->format('Y-m-d'),
+                        'cycle_end' => $cycleEnd->format('Y-m-d'),
+                        'active_days' => $activeDays,
+                        'daily_rate' => round($dailyRate, 2),
+                        'prorated_amount' => $proratedAmount
+                    ]);
+                }
+            }
+        }
+
+        return [
+            'total_prorate' => round($totalProrate, 2),
+            'pro_rate_start' => $proRateStart,
+            'log_ids' => $logIds
+        ];
+    }
+
+    protected function markReconnectionProrateAsUsed(BillingAccount $account, int $userId, string $invoiceId, array $logIds = []): void
+    {
+        if (empty($logIds)) {
+            $logIds = DB::table('reconnection_logs')
+                ->where('account_id', $account->id)
+                ->where(function ($q) {
+                    $q->where('pro_rate_applied', 0)
+                      ->orWhereNull('pro_rate_applied');
+                })
+                ->pluck('id')
+                ->toArray();
+        }
+
+        if (!empty($logIds)) {
+            DB::table('reconnection_logs')
+                ->whereIn('id', $logIds)
+                ->update([
+                    'pro_rate_applied' => 1,
+                    'billing_status' => 'Billed',
+                    'pro_rate_invoice_id' => $invoiceId,
+                    'pro_rate_billed_at' => now(),
+                    'updated_by_user' => (string) $userId,
+                    'updated_at' => now()
+                ]);
+
+            $this->log('info', 'Marked reconnection logs as billed', [
+                'account_no' => $account->account_no,
+                'invoice_id' => $invoiceId,
+                'log_ids' => $logIds
+            ]);
+        }
     }
 
     protected function getDaysBetweenDatesIncludingDueDate(Carbon $startDate, Carbon $endDate): int

@@ -21,8 +21,6 @@ class HandleCorsManually
         $allowedOrigins = [
             'https://sync.gowiser.ph',
             'https://backend.gowiser.ph',
-            'http://localhost:3000',
-            'http://127.0.0.1:3000'
         ];
 
         // Handle preflight OPTIONS request
@@ -33,8 +31,8 @@ class HandleCorsManually
             if ($origin && in_array($origin, $allowedOrigins)) {
                 $response->header('Access-Control-Allow-Origin', $origin);
             } else {
-                // Default to first allowed origin for development
-                $response->header('Access-Control-Allow-Origin', in_array('http://localhost:3000', $allowedOrigins) ? 'http://localhost:3000' : 'http://localhost:3000');
+                // Default to the frontend portal origin
+                $response->header('Access-Control-Allow-Origin', 'https://sync.gowiser.ph');
             }
             
             $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
@@ -52,8 +50,8 @@ class HandleCorsManually
         if ($origin && in_array($origin, $allowedOrigins)) {
             $response->headers->set('Access-Control-Allow-Origin', $origin);
         } else {
-            // Default to first allowed origin for development
-            $response->headers->set('Access-Control-Allow-Origin', in_array('http://localhost:3000', $allowedOrigins) ? 'http://localhost:3000' : 'http://localhost:3000');
+            // Default to the frontend portal origin
+            $response->headers->set('Access-Control-Allow-Origin', 'https://sync.gowiser.ph');
         }
         
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
