@@ -112,7 +112,7 @@ class XenditPaymentController extends Controller
                     'raw_email' => $account->email_address,
                     'reason' => $rawEmail === '' ? 'empty' : 'malformed'
                 ]);
-                $payerEmail = 'noreply@akmiis.com';
+                $payerEmail = 'noreply@gowiser.ph';
             }
 
             // Parse customer name. The SQL CONCAT leaves a double space when the
