@@ -1,6 +1,12 @@
 {
   "build": {
     "preview": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://backend.gowiser.ph/api",
+        "EXPO_PUBLIC_STORAGE_ENCRYPTION_KEY": "810dec70ac762744fb6d6fdcf3e45b517168a4f6027d8126a5222ed3b48a2b31",
+        "EXPO_PUBLIC_SESSION_TIMEOUT": "28800000",
+        "EXPO_PUBLIC_ENABLE_LOGGING": "true"
+      },
       "android": {
         "image": "latest",
         "buildType": "apk"
@@ -10,6 +16,12 @@
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://backend.gowiser.ph/api",
+        "EXPO_PUBLIC_STORAGE_ENCRYPTION_KEY": "810dec70ac762744fb6d6fdcf3e45b517168a4f6027d8126a5222ed3b48a2b31",
+        "EXPO_PUBLIC_SESSION_TIMEOUT": "28800000",
+        "EXPO_PUBLIC_ENABLE_LOGGING": "true"
+      },
       "android": {
         "image": "latest",
         "buildType": "app-bundle",

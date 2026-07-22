@@ -1080,7 +1080,7 @@ class ManualRadiusOperationsService
 
         // Harmless read-only lookup of a username that will never exist; a live server
         // returns 404/empty, an unreachable one throws, and bad credentials return 401/403.
-        $probePath = "/rest/user-manage/user/__atss_healthcheck__";
+        $probePath = "/rest/user-manage/user/__gowiser_healthcheck__";
 
         foreach ($radiusEndpoints as $index => $endpoint) {
             // Try the configured protocol first, then the alternate (same strategy as callApiWithRetry).
