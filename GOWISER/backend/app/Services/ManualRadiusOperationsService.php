@@ -1058,6 +1058,68 @@ class ManualRadiusOperationsService
     }
 
     /**
+     * Lightweight connectivity + authentication probe against the configured RADIUS servers.
+     *
+     * Returns true as soon as ANY configured server answers an authenticated request
+     * (this mirrors the failover used by the disconnect/restrict operations, which try
+     * every server). Returns false when no server can be reached for a connection-related
+     * reason — connection timeout, network error, or authentication failure (HTTP 401/403) —
+     * so callers can queue the operation for later retry instead of aborting.
+     *
+     * Any HTTP response that is not an auth failure (including a 404 for the throwaway probe
+     * username) proves the server is up and the credentials are valid, so it counts as reachable.
+     */
+    public function isRadiusReachable(): bool
+    {
+        try {
+            $radiusEndpoints = $this->getRadiusEndpoints();
+        } catch (Throwable $e) {
+            $this->writeLog("[PING] Unable to load RADIUS endpoints: " . $e->getMessage());
+            return false;
+        }
+
+        // Harmless read-only lookup of a username that will never exist; a live server
+        // returns 404/empty, an unreachable one throws, and bad credentials return 401/403.
+        $probePath = "/rest/user-manage/user/__atss_healthcheck__";
+
+        foreach ($radiusEndpoints as $index => $endpoint) {
+            // Try the configured protocol first, then the alternate (same strategy as callApiWithRetry).
+            $urlsToTry = [$endpoint['url']];
+            if (str_starts_with($endpoint['url'], 'https://')) {
+                $urlsToTry[] = str_replace('https://', 'http://', $endpoint['url']);
+            } elseif (str_starts_with($endpoint['url'], 'http://')) {
+                $urlsToTry[] = str_replace('http://', 'https://', $endpoint['url']);
+            }
+
+            foreach ($urlsToTry as $baseUrl) {
+                try {
+                    $response = Http::withBasicAuth($endpoint['username'], $endpoint['password'])
+                        ->connectTimeout(2)
+                        ->timeout(4)
+                        ->withOptions(['verify' => false])
+                        ->get($baseUrl . $probePath);
+
+                    $status = $response->status();
+
+                    // Rejected credentials => treat as NOT reachable so the operation is queued.
+                    if ($status === 401 || $status === 403) {
+                        $this->writeLog("[PING] Authentication failure (HTTP {$status}) at {$baseUrl}");
+                        continue;
+                    }
+
+                    $this->writeLog("[PING] RADIUS reachable at {$baseUrl} (HTTP {$status})");
+                    return true;
+                } catch (Throwable $e) {
+                    $this->writeLog("[PING] Connection error at {$baseUrl}: " . $e->getMessage());
+                }
+            }
+        }
+
+        $this->writeLog("[PING] No RADIUS server reachable on any configured endpoint/protocol.");
+        return false;
+    }
+
+    /**
      * Call API with retry logic
      * Tries both HTTPS and HTTP protocols per URL (same strategy as RadiusStatusSyncService)
      */

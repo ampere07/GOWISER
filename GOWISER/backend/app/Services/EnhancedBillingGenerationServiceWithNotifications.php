@@ -44,6 +44,7 @@ class EnhancedBillingGenerationServiceWithNotifications
         $results = [
             'success' => 0,
             'failed' => 0,
+            'skipped' => 0,
             'errors' => [],
             'statements' => [],
             'notifications' => []
@@ -54,13 +55,24 @@ class EnhancedBillingGenerationServiceWithNotifications
 
             foreach ($accounts as $account) {
                 try {
+                    // Idempotency guard: skip (no new record, no notification) if this
+                    // account was already billed for the current cycle.
+                    if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
+                        $results['skipped']++;
+                        $this->log('info', 'Skipped SOA generation — statement already exists for this billing cycle', [
+                            'account_no' => $account->account_no,
+                            'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
+                        ]);
+                        continue;
+                    }
+
                     $statement = $this->createEnhancedStatement($account, $generationDate, $userId);
                     $results['statements'][] = $statement;
                     $results['success']++;
-                    
+
                     $notificationResult = $this->queueNotification($account, null, $statement);
                     $results['notifications'][] = $notificationResult;
-                    
+
                 } catch (\Exception $e) {
                     $results['failed']++;
                     $results['errors'][] = [
@@ -84,6 +96,7 @@ class EnhancedBillingGenerationServiceWithNotifications
         $results = [
             'success' => 0,
             'failed' => 0,
+            'skipped' => 0,
             'errors' => [],
             'invoices' => [],
             'notifications' => []
@@ -94,13 +107,24 @@ class EnhancedBillingGenerationServiceWithNotifications
 
             foreach ($accounts as $account) {
                 try {
+                    // Idempotency guard: skip (no new record, no notification) if this
+                    // account was already billed for the current cycle.
+                    if ($this->invoiceAlreadyGeneratedForCycle($account, $generationDate)) {
+                        $results['skipped']++;
+                        $this->log('info', 'Skipped invoice generation — invoice already exists for this billing cycle', [
+                            'account_no' => $account->account_no,
+                            'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
+                        ]);
+                        continue;
+                    }
+
                     $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
                     $results['invoices'][] = $invoice;
                     $results['success']++;
-                    
+
                     $notificationResult = $this->queueNotification($account, $invoice, null);
                     $results['notifications'][] = $notificationResult;
-                    
+
                 } catch (\Exception $e) {
                     $results['failed']++;
                     $results['errors'][] = [
@@ -199,6 +223,43 @@ class EnhancedBillingGenerationServiceWithNotifications
         ]);
 
         return $accounts;
+    }
+
+    /**
+     * Idempotency guard: has a Statement of Account already been generated for this
+     * account in the billing period (month/year) of the generation date?
+     *
+     * Regular generation only ever runs for Active accounts on their billing day (once
+     * per month), so an existing statement in the same period means this cycle was already
+     * billed. This keeps the generator safe to run repeatedly (e.g. if the cron fires more
+     * than once) without producing duplicate statements or duplicate notifications.
+     */
+    protected function statementAlreadyGeneratedForCycle(BillingAccount $account, Carbon $generationDate): bool
+    {
+        $period = $generationDate->copy()->setTimezone('Asia/Manila');
+
+        return StatementOfAccount::where('account_no', $account->account_no)
+            ->whereMonth('statement_date', $period->month)
+            ->whereYear('statement_date', $period->year)
+            ->exists();
+    }
+
+    /**
+     * Idempotency guard: has an Invoice already been generated for this account in the
+     * billing period (month/year) of the generation date?
+     *
+     * Same rationale as {@see statementAlreadyGeneratedForCycle()} — prevents duplicate
+     * invoices (and the duplicate notifications that would follow) when generation runs
+     * more than once for the same customer and billing cycle.
+     */
+    protected function invoiceAlreadyGeneratedForCycle(BillingAccount $account, Carbon $generationDate): bool
+    {
+        $period = $generationDate->copy()->setTimezone('Asia/Manila');
+
+        return Invoice::where('account_no', $account->account_no)
+            ->whereMonth('invoice_date', $period->month)
+            ->whereYear('invoice_date', $period->year)
+            ->exists();
     }
 
     protected function adjustBillingDayForMonth(int $billingDay, Carbon $date): int
@@ -819,28 +880,30 @@ class EnhancedBillingGenerationServiceWithNotifications
             'date' => $today->format('Y-m-d'),
             'advance_generation_day' => $advanceGenerationDay,
             'billing_days_processed' => [],
-            'invoices' => ['success' => 0, 'failed' => 0, 'errors' => [], 'notifications' => []],
-            'statements' => ['success' => 0, 'failed' => 0, 'errors' => [], 'notifications' => []]
+            'invoices' => ['success' => 0, 'failed' => 0, 'skipped' => 0, 'errors' => [], 'notifications' => []],
+            'statements' => ['success' => 0, 'failed' => 0, 'skipped' => 0, 'errors' => [], 'notifications' => []]
         ];
 
         foreach ($targetBillingDays as $billingDay) {
             $billingDayLabel = $billingDay === self::END_OF_MONTH_BILLING ? 'End of Month (0)' : "Day {$billingDay}";
-            
+
             $this->log('info', "Processing billing day: {$billingDayLabel}");
-            
+
             // Use Unified Billing Generation to prevent duplicate SMS
             $unifiedResults = $this->generateUnifiedBilling($billingDay, $today, $userId);
-            
+
             $results['billing_days_processed'][] = $billingDayLabel;
-            
+
             // Merge Invoice Results
             $results['invoices']['success'] += $unifiedResults['invoices']['success'];
             $results['invoices']['failed'] += $unifiedResults['invoices']['failed'];
+            $results['invoices']['skipped'] += $unifiedResults['invoices']['skipped'] ?? 0;
             $results['invoices']['errors'] = array_merge($results['invoices']['errors'], $unifiedResults['invoices']['errors']);
             
             // Merge Statement Results
             $results['statements']['success'] += $unifiedResults['statements']['success'];
             $results['statements']['failed'] += $unifiedResults['statements']['failed'];
+            $results['statements']['skipped'] += $unifiedResults['statements']['skipped'] ?? 0;
             $results['statements']['errors'] = array_merge($results['statements']['errors'], $unifiedResults['statements']['errors']);
             
             // Merge Notifications (Unified) - adding to statements for tracking, though it covers both
@@ -853,8 +916,8 @@ class EnhancedBillingGenerationServiceWithNotifications
     public function generateUnifiedBilling(int $billingDay, Carbon $generationDate, int $userId): array
     {
         $results = [
-            'invoices' => ['success' => 0, 'failed' => 0, 'errors' => []],
-            'statements' => ['success' => 0, 'failed' => 0, 'errors' => []],
+            'invoices' => ['success' => 0, 'failed' => 0, 'skipped' => 0, 'errors' => []],
+            'statements' => ['success' => 0, 'failed' => 0, 'skipped' => 0, 'errors' => []],
             'notifications' => []
         ];
 
@@ -865,10 +928,18 @@ class EnhancedBillingGenerationServiceWithNotifications
                 $soa = null;
                 $invoice = null;
 
-                // 1. Generate SOA
+                // 1. Generate SOA — skip if one already exists for this billing cycle
                 try {
-                    $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
-                    $results['statements']['success']++;
+                    if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
+                        $results['statements']['skipped']++;
+                        $this->log('info', 'Skipped SOA generation — statement already exists for this billing cycle', [
+                            'account_no' => $account->account_no,
+                            'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
+                        ]);
+                    } else {
+                        $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
+                        $results['statements']['success']++;
+                    }
                 } catch (\Exception $e) {
                     $results['statements']['failed']++;
                     $results['statements']['errors'][] = [
@@ -879,10 +950,18 @@ class EnhancedBillingGenerationServiceWithNotifications
                     $this->log('error', "Failed to generate SOA for account {$account->account_no}: " . $e->getMessage());
                 }
 
-                // 2. Generate Invoice
+                // 2. Generate Invoice — skip if one already exists for this billing cycle
                 try {
-                    $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
-                    $results['invoices']['success']++;
+                    if ($this->invoiceAlreadyGeneratedForCycle($account, $generationDate)) {
+                        $results['invoices']['skipped']++;
+                        $this->log('info', 'Skipped invoice generation — invoice already exists for this billing cycle', [
+                            'account_no' => $account->account_no,
+                            'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
+                        ]);
+                    } else {
+                        $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
+                        $results['invoices']['success']++;
+                    }
                 } catch (\Exception $e) {
                     $results['invoices']['failed']++;
                     $results['invoices']['errors'][] = [
@@ -893,7 +972,8 @@ class EnhancedBillingGenerationServiceWithNotifications
                     $this->log('error', "Failed to generate Invoice for account {$account->account_no}: " . $e->getMessage());
                 }
 
-                // 3. Notify ONCE (if either exists)
+                // 3. Notify ONCE — only when we actually created something new this run.
+                // If both SOA and invoice were skipped as duplicates, no notification is sent.
                 if ($soa || $invoice) {
                      $notificationResult = $this->queueNotification($account, $invoice, $soa);
                      $results['notifications'][] = $notificationResult;
