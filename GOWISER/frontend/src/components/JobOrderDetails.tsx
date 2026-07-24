@@ -150,6 +150,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     'billingStatus',
     'billingDay',
     'choosePlan',
+    'generationType',
     'statusRemarks',
     'remarks',
     'installationLandmark',
@@ -855,6 +856,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
       choosePlan: 'Choose Plan',
+      generationType: 'Generation Type',
       statusRemarks: 'Status Remarks',
       remarks: 'Remarks',
       installationLandmark: 'Installation Landmark',
@@ -1094,6 +1096,16 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {loadingPlanOverlay ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowRightCircle className="w-4 h-4" />}
               </button>
             </div>
+          </div>
+        );
+
+      case 'generationType':
+        const generationType = jobOrder.generation_type || jobOrder.Generation_Type;
+        if (!generationType) return null;
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>Generation Type:</div>
+            <div className={valueClass}>{generationType}</div>
           </div>
         );
 

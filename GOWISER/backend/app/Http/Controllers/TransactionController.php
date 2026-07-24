@@ -211,7 +211,7 @@ class TransactionController extends Controller
                         $this->sendApprovalEmail($billingAccount, $appliedData['invoices_updated']['invoices_paid'] ?? [], $transaction->received_payment, $transaction->payment_date);
 
                         // Attempt reconnection for auto-applied payments
-                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user);
+                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
                     }
 
                 }
@@ -479,7 +479,7 @@ class TransactionController extends Controller
 
 
             // Attempt reconnection after successful approval
-            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user);
+            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
 
             event(new TransactionUpdated(['action' => 'approved', 'transaction_id' => $transactionId, 'account_no' => $accountNo]));
 
@@ -1088,7 +1088,7 @@ class TransactionController extends Controller
                     $accountPayments[$accountNo]['total'] += $paymentReceived;
 
                     // Attempt reconnection after successful approval
-                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user);
+                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
 
                     $results['success'][] = [
                         'transaction_id' => $transactionId,
@@ -1200,7 +1200,7 @@ class TransactionController extends Controller
      * Attempt to reconnect user account after transaction approval
      * Only reconnects if billing_status_id is not 1 (Active) and balance is 0 or negative
      */
-    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System'): string
+    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null): string
     {
         try {
             // Reload billing account to get latest balance and status
@@ -1214,6 +1214,19 @@ class TransactionController extends Controller
             if ($balance > 0) {
                 \Log::info('[TRANSACTION RECONNECT SKIP] Balance is positive: ₱' . $balance);
                 return 'balance_positive';
+            }
+
+            // Prepaid: a settling *service* payment extends (if still active) or restarts (if
+            // expired) the prepaid service period. Done BEFORE the already-online short-circuit
+            // below so an early payer whose session is still up still gets extended. Non-service
+            // transactions (Security Deposit, Installation Fee) must NEVER grant service days, and
+            // it is a no-op for postpaid accounts. Anchored to the actual payment date.
+            if (!in_array($transactionType, ['Security Deposit', 'Installation Fee'], true)) {
+                $prepaidPayDate = $paymentDate ? \Carbon\Carbon::parse($paymentDate) : null;
+                $prepaidRenewal = app(\App\Services\PrepaidRenewalService::class)->renewByAccountNo($accountNo, $prepaidPayDate);
+                if (!empty($prepaidRenewal['prepaid'])) {
+                    \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}");
+                }
             }
 
             // Step 2: Check current billing status.

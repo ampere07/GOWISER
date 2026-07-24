@@ -68,6 +68,8 @@ export interface JobOrder {
   Preferred_Day?: string | null;
   Billing_Status?: string | null;
   billing_status?: string | null;
+  Generation_Type?: string | null;
+  generation_type?: string | null;
 
   // Technical Information
   Modem_Router_SN?: string | null;

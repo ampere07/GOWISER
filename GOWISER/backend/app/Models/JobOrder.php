@@ -17,6 +17,7 @@ class JobOrder extends Model
         'installation_fee',
         'billing_day',
         'billing_status',
+        'generation_type',
         'modem_router_sn',
         'router_model',
         'group_name',

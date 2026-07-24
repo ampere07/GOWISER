@@ -20,6 +20,8 @@ class BillingAccount extends Model
         'balance_update_date',
         'billing_day',
         'billing_status_id',
+        'generation_type',
+        'prepaid_expires_at',
         'created_by',
         'updated_by',
         'vip_expiration',
@@ -30,6 +32,7 @@ class BillingAccount extends Model
         'date_installed' => 'datetime',
         'balance_update_date' => 'datetime',
         'account_balance' => 'decimal:2',
+        'prepaid_expires_at' => 'datetime',
     ];
 
     public function customer()

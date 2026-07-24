@@ -53,6 +53,15 @@ class AutoDisconnectService
      *   - Proration always divides by 30 (never 28, 29 or 31).
      */
     private const BILLING_CYCLE_DAYS = 30;
+
+    /**
+     * Remark stamped on the RADIUS restriction (and the disconnected_logs row) when a prepaid
+     * account is auto-restricted because its rolling service period lapsed. This is NOT an
+     * idempotency signal — idempotency comes from only selecting Active accounts whose
+     * prepaid_expires_at has passed (see {@see processPrepaidRestrictions()}).
+     */
+    private const PREPAID_RESTRICTION_REMARKS = 'Prepaid Period Expired';
+
     private const DC_OFFSET_DAYS = 10;
     private const ADDITIONAL_INVOICE_OFFSET_DAYS = 7;
     private const PRORATE_DIVISOR_DAYS = 30;
@@ -268,6 +277,14 @@ class AutoDisconnectService
             return ['success' => false, 'reason' => 'Billing account not found'];
         }
 
+        // Prepaid accounts are governed by their rolling prepaid period, not by overdue
+        // invoices — they are restricted exclusively by processPrepaidRestrictions(). Never
+        // subject them to the postpaid overdue-based auto-disconnect.
+        if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+            $this->writeLog("  [SKIP] Prepaid account — handled by prepaid restriction flow, not postpaid auto-disconnect");
+            return ['success' => false, 'reason' => 'Prepaid account (handled separately)'];
+        }
+
         // Check if already disconnected today
         $alreadyDisconnected = DB::table('disconnected_logs')
             ->where('account_id', $billingAccount->id)
@@ -478,6 +495,187 @@ class AutoDisconnectService
     }
 
     /**
+     * Restrict prepaid customers whose rolling service period has EXPIRED.
+     *
+     * A prepaid customer stays active only while billing_accounts.prepaid_expires_at is in the
+     * future — that date is set/extended by {@see PrepaidRenewalService} when they pay. Once it
+     * lapses, this restricts them via the EXISTING RADIUS restriction workflow
+     * ({@see ManualRadiusOperationsService::restrictedUser()}) and flips the billing status to
+     * Inactive, mirroring the postpaid auto-disconnect. The restriction is removed automatically
+     * on their next successful payment (the existing payment reconnect flow), so the whole
+     * restrict → pay → renew → restrict cycle can repeat indefinitely.
+     *
+     * Idempotent & fault-isolated:
+     *   - Only currently-Active accounts whose prepaid_expires_at has passed are selected. Once
+     *     restricted they become Inactive and drop out of the query; after a renewal payment they
+     *     are Active again with a future expiry — so an account is never restricted twice for the
+     *     same period, yet is correctly re-restricted each time a new period lapses.
+     *   - RADIUS-unreachable / restrict-failure paths queue (deduped) for retry instead of
+     *     aborting the run.
+     *
+     * @return array{success:bool, restricted:int, skipped:int, queued:int, errors:array, duration:int}
+     */
+    public function processPrepaidRestrictions(): array
+    {
+        $this->writeLog("");
+        $this->writeLog("╔════════════════════════════════════════════════════════════════╗");
+        $this->writeLog("║         STARTING PREPAID PERIOD-EXPIRY RESTRICTION PROCESS     ║");
+        $this->writeLog("╚════════════════════════════════════════════════════════════════╝");
+        $startTime = Carbon::now();
+        $this->writeLog("Start Time: " . $startTime->format('Y-m-d H:i:s'));
+        $this->writeLog("");
+
+        $restricted = 0;
+        $skipped = 0;
+        $queued = 0;
+        $errors = [];
+
+        try {
+            $now = Carbon::now();
+            $activeStatusId = DB::table('billing_status')->where('status_name', 'Active')->value('id') ?? 1;
+            $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
+
+            // Active prepaid accounts whose current service period has already lapsed.
+            $accounts = BillingAccount::with(['technicalDetails', 'billingStatus'])
+                ->where('generation_type', 'Pre Paid')
+                ->where('billing_status_id', $activeStatusId)
+                ->whereNotNull('prepaid_expires_at')
+                ->where('prepaid_expires_at', '<=', $now)
+                ->get();
+
+            $totalCount = $accounts->count();
+            $this->writeLog("[QUERY] Found {$totalCount} active prepaid account(s) with an expired service period.");
+            $this->writeLog("");
+
+            if ($totalCount === 0) {
+                $duration = Carbon::now()->diffInSeconds($startTime);
+                $this->writeLog("[INFO] No prepaid accounts to process.");
+                $this->writeLog("[PREPAID] Summary: Restricted 0, Queued 0, Skipped 0, Errors 0, Duration {$duration}s");
+                return ['success' => true, 'restricted' => 0, 'skipped' => 0, 'queued' => 0, 'errors' => [], 'duration' => $duration];
+            }
+
+            $counter = 0;
+            foreach ($accounts as $account) {
+                $counter++;
+                $accountNo = $account->account_no;
+                $this->writeLog("");
+                $this->writeLog("[{$counter}/{$totalCount}] ══════════════════════════════════════════════");
+                $this->writeLog("[ACCOUNT] {$accountNo}");
+
+                // Isolate each customer: a single unexpected failure must never abort the run.
+                try {
+                    $expiry = Carbon::parse($account->prepaid_expires_at);
+                    $this->writeLog("  [INFO] Prepaid period expired: {$expiry->format('Y-m-d H:i')}");
+
+                    // Need a PPPoE username to act on.
+                    $technicalDetail = $account->technicalDetails->first();
+                    if (!$technicalDetail || empty($technicalDetail->username)) {
+                        $this->writeLog("  [SKIP] PPPoE username not found");
+                        $skipped++;
+                        continue;
+                    }
+                    $username = $technicalDetail->username;
+                    $this->writeLog("  [INFO] Username: {$username}");
+
+                    // Skip if a restrict is already queued for retry, so we never issue a direct
+                    // restrict while the RADIUS queue still holds a pending one.
+                    $pendingQueued = DB::table('radius_operation_queue')
+                        ->where('account_no', $accountNo)
+                        ->where('operation', 'restricted_user')
+                        ->whereIn('status', ['pending', 'processing'])
+                        ->exists();
+                    if ($pendingQueued) {
+                        $this->writeLog("  [SKIP] A restrict operation is already queued for retry");
+                        $skipped++;
+                        continue;
+                    }
+
+                    // Pre-flight RADIUS reachability — queue for retry instead of aborting.
+                    if (!$this->isRadiusReachable()) {
+                        $this->writeLog("  [RADIUS] Server unreachable — queueing restrict for retry");
+                        $this->queueRadiusOperation(
+                            $account,
+                            $username,
+                            $accountNo,
+                            'restricted_user',
+                            self::PREPAID_RESTRICTION_REMARKS,
+                            'RADIUS server unreachable during prepaid restriction'
+                        );
+                        $queued++;
+                        $this->writeLog("[{$counter}/{$totalCount}] ⧗ QUEUED for retry (RADIUS unreachable)");
+                        continue;
+                    }
+
+                    // Restrict via the existing RADIUS restriction workflow, then flip the billing
+                    // status to Inactive (mirrors the postpaid auto-disconnect flow).
+                    $this->writeLog("  [RADIUS] Initiating restriction (prepaid period expired)...");
+                    $restrictResult = $this->radiusService->restrictedUser([
+                        'username' => $username,
+                        'accountNumber' => $accountNo,
+                        'remarks' => self::PREPAID_RESTRICTION_REMARKS,
+                        'updatedBy' => 'System',
+                    ]);
+
+                    if (($restrictResult['status'] ?? '') === 'success') {
+                        DB::table('billing_accounts')
+                            ->where('id', $account->id)
+                            ->update([
+                                'billing_status_id' => $inactiveStatusId,
+                                'updated_by' => 'System',
+                                'updated_at' => Carbon::now(),
+                            ]);
+                        $restricted++;
+                        $this->writeLog("  [RADIUS] ✓ Successfully restricted");
+                        $this->writeLog("  [DB] Status overridden to Inactive (ID: {$inactiveStatusId})");
+                        $this->writeLog("[{$counter}/{$totalCount}] ✓ SUCCESS - Restricted (status: Inactive)");
+                    } else {
+                        $reason = $restrictResult['message'] ?? 'Unknown RADIUS error';
+                        $this->writeLog("  [RADIUS] Restrict failed: {$reason}. Queueing for retry.");
+                        \Log::channel('radiusrelated')->error('[PREPAID RESTRICT FAILURE] Account: ' . $accountNo . ' - Reason: ' . $reason);
+                        $this->queueRadiusOperation(
+                            $account,
+                            $username,
+                            $accountNo,
+                            'restricted_user',
+                            self::PREPAID_RESTRICTION_REMARKS,
+                            'RADIUS restrict failed during prepaid restriction: ' . $reason
+                        );
+                        $queued++;
+                        $this->writeLog("[{$counter}/{$totalCount}] ⧗ QUEUED for retry");
+                    }
+                } catch (Throwable $e) {
+                    $skipped++;
+                    $errors[] = "Account {$accountNo}: " . $e->getMessage();
+                    $this->writeLog("[{$counter}/{$totalCount}] ✗ ERROR (isolated, continuing): " . $e->getMessage());
+                    \Log::channel('radiusrelated')->error('[PREPAID RESTRICT EXCEPTION] Account: ' . $accountNo . ' - ' . $e->getMessage());
+                }
+            }
+
+            $duration = Carbon::now()->diffInSeconds($startTime);
+            $this->writeLog("");
+            $this->writeLog("╔════════════════════════════════════════════════════════════════╗");
+            $this->writeLog("║         PREPAID RESTRICTION COMPLETE                          ║");
+            $this->writeLog("╚════════════════════════════════════════════════════════════════╝");
+            $this->writeLog("Summary:");
+            $this->writeLog("  • Total Prepaid: {$totalCount}");
+            $this->writeLog("  • Restricted: {$restricted}");
+            $this->writeLog("  • Queued for Retry: {$queued}");
+            $this->writeLog("  • Skipped: {$skipped}");
+            $this->writeLog("  • Errors: " . count($errors));
+            $this->writeLog("  • Duration: {$duration} second(s)");
+            $this->writeLog("");
+
+            return ['success' => true, 'restricted' => $restricted, 'skipped' => $skipped, 'queued' => $queued, 'errors' => $errors, 'duration' => $duration];
+
+        } catch (Throwable $e) {
+            $duration = Carbon::now()->diffInSeconds($startTime);
+            $this->writeLog("[CRITICAL] Prepaid restriction process failed: " . $e->getMessage());
+            $this->writeLog("[TRACE] " . $e->getTraceAsString());
+            return ['success' => false, 'restricted' => $restricted, 'skipped' => $skipped, 'queued' => $queued, 'errors' => $errors, 'error' => $e->getMessage(), 'duration' => $duration];
+        }
+    }
+
+    /**
      * Process automatic pullout requests
      */
     public function processAutoPullout(): array
@@ -585,6 +783,14 @@ class AutoDisconnectService
                     $billingAccount = $invoice->billingAccount;
                     if (!$billingAccount) {
                         $this->writeLog("  [SKIP] Billing account not found");
+                        $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
+                        $skippedCount++;
+                        continue;
+                    }
+
+                    // Prepaid accounts are never pulled out by the postpaid overdue flow.
+                    if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+                        $this->writeLog("  [SKIP] Prepaid account — not subject to postpaid pullout");
                         $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
                         $skippedCount++;
                         continue;
@@ -1289,6 +1495,13 @@ class AutoDisconnectService
 
             if (!$billingAccount) {
                 $this->writeLog("  [SKIP] Billing account not found");
+                $skipped++;
+                continue;
+            }
+
+            // Prepaid accounts don't accrue postpaid grace/proration charges.
+            if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+                $this->writeLog("  [SKIP] Prepaid account — not subject to postpaid grace charge");
                 $skipped++;
                 continue;
             }

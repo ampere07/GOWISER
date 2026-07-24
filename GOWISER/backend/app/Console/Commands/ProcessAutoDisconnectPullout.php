@@ -136,6 +136,42 @@ class ProcessAutoDisconnectPullout extends Command
                 }
 
                 $this->newLine();
+
+                // Process Prepaid Restrictions (prepaid customers are restricted once their
+                // rolling prepaid service period expires; they are never part of the
+                // overdue-based postpaid DC flow).
+                $this->info("─────────────────────────────────────────────────────────");
+                $this->info("[PROCESS] Processing Prepaid Period-Expiry Restrictions...");
+                $this->info("─────────────────────────────────────────────────────────");
+
+                $prepaidResult = $this->autoDisconnectService->processPrepaidRestrictions();
+
+                if ($prepaidResult['success']) {
+                    $this->newLine();
+                    $this->info("[SUCCESS] Prepaid Restriction Complete:");
+                    $this->table(
+                        ['Metric', 'Count'],
+                        [
+                            ['Restricted', $prepaidResult['restricted']],
+                            ['Queued', $prepaidResult['queued']],
+                            ['Skipped', $prepaidResult['skipped']],
+                            ['Duration', $prepaidResult['duration'] . 's']
+                        ]
+                    );
+
+                    if (!empty($prepaidResult['errors'])) {
+                        $this->newLine();
+                        $this->warn("[WARNING] Errors encountered:");
+                        foreach ($prepaidResult['errors'] as $error) {
+                            $this->line("   - " . $error);
+                        }
+                    }
+                } else {
+                    // Non-fatal: log and continue so the pullout step still runs.
+                    $this->warn("[WARNING] Prepaid Restriction reported a failure: " . ($prepaidResult['error'] ?? 'Unknown error'));
+                }
+
+                $this->newLine();
             }
 
             // Process Auto Pullout

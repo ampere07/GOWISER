@@ -48,6 +48,7 @@ interface JOFormData {
   remarks: string;
   installationFee: number | string;
   billingDay: string;
+  generationType: string;
 
   onsiteStatus: string;
   assignedEmail: string;
@@ -106,6 +107,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     remarks: '',
     installationFee: 0,
     billingDay: '',
+    generationType: '',
 
     onsiteStatus: 'In Progress',
     assignedEmail: '',
@@ -581,6 +583,10 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       newErrors.billingDay = 'Billing Day cannot exceed 30';
     }
 
+    if (!formData.generationType.trim()) {
+      newErrors.generationType = 'Generation Type is required';
+    }
+
     if (formData.status === 'Confirmed') {
       if (!formData.onsiteStatus.trim()) {
         newErrors.onsiteStatus = 'Onsite Status is required when status is Confirmed';
@@ -620,6 +626,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       timestamp: formattedTimestamp,
       installation_fee: Number(data.installationFee) || 0,
       billing_day: parseInt(data.billingDay) || 30,
+      generation_type: toNullIfEmpty(data.generationType),
       billing_status: 'In Progress',
       modem_router_sn: null,
       onsite_status: data.onsiteStatus || 'In Progress',
@@ -1157,6 +1164,30 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                     }`} size={20} />
                 </div>
                 {errors.choosePlan && <p className="text-red-500 text-xs mt-1">{errors.choosePlan}</p>}
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>
+                  Generation Type<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={formData.generationType}
+                    onChange={(e) => handleInputChange('generationType', e.target.value)}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
+                      ? 'bg-gray-800 text-white border-gray-700'
+                      : 'bg-white text-gray-900 border-gray-300'
+                      } ${errors.generationType ? 'border-red-500' : ''}`}
+                  >
+                    <option value="" disabled>Select Generation Type</option>
+                    <option value="Pre Paid">Pre Paid</option>
+                    <option value="Post Paid">Post Paid</option>
+                  </select>
+                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                    }`} size={20} />
+                </div>
+                {errors.generationType && <p className="text-red-500 text-xs mt-1">{errors.generationType}</p>}
               </div>
 
               <div>

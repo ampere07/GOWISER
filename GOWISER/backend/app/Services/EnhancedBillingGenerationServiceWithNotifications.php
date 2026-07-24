@@ -206,7 +206,17 @@ class EnhancedBillingGenerationServiceWithNotifications
         ])
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
-            ->whereNotNull('account_no');
+            ->whereNotNull('account_no')
+            // Prepaid accounts are not billed on the fixed billing-day cadence — their bills are
+            // driven by their rolling prepaid period: the initial bill at approval
+            // (generateInitialBillingForAccount) and renewal bills once the period expires
+            // (generatePrepaidRenewalInvoices). They are therefore excluded from THIS billing-day
+            // path only — NOT from the service as a whole. Post Paid and legacy NULL-generation_type
+            // accounts bill normally here.
+            ->where(function ($q) {
+                $q->where('generation_type', '!=', 'Pre Paid')
+                  ->orWhereNull('generation_type');
+            });
 
         if ($billingDay === self::END_OF_MONTH_BILLING) {
             $query->where('billing_day', self::END_OF_MONTH_BILLING);
@@ -1002,6 +1012,187 @@ class EnhancedBillingGenerationServiceWithNotifications
             'statements' => $unifiedResults['statements'],
             'notifications' => $unifiedResults['notifications']
         ];
+    }
+
+    /**
+     * Generate the initial bill for a single, freshly-approved account immediately.
+     *
+     * Used by the Job Order approval flow for PREPAID customers, whose only bill is created at
+     * approval time (they are permanently excluded from the scheduled generator by
+     * {@see getActiveAccountsForBillingDay()}). This mirrors {@see generateUnifiedBilling()} for
+     * a single account: it creates the SOA + Invoice with the exact same logic and reuses the
+     * per-cycle idempotency guards ({@see statementAlreadyGeneratedForCycle()} /
+     * {@see invoiceAlreadyGeneratedForCycle()}) so re-running never produces duplicate records,
+     * and it notifies at most once (only when something new was actually created).
+     *
+     * It bypasses the prepaid exclusion filter by operating on the passed account directly,
+     * which is exactly why prepaid accounts can still be billed here even though the scheduled
+     * path skips them.
+     *
+     * @return array{success:bool, statement_created:bool, invoice_created:bool, skipped:bool, error?:string}
+     */
+    public function generateInitialBillingForAccount(BillingAccount $account, int $userId): array
+    {
+        $generationDate = Carbon::now('Asia/Manila');
+        $result = [
+            'success' => false,
+            'statement_created' => false,
+            'invoice_created' => false,
+            'skipped' => false,
+        ];
+
+        $soa = null;
+        $invoice = null;
+
+        try {
+            // 1. SOA — skip if one already exists for this billing cycle.
+            if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
+                $this->log('info', 'Initial billing: SOA already exists for this cycle, skipping', [
+                    'account_no' => $account->account_no,
+                ]);
+            } else {
+                $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
+                $result['statement_created'] = true;
+            }
+
+            // 2. Invoice — skip if one already exists for this billing cycle.
+            if ($this->invoiceAlreadyGeneratedForCycle($account, $generationDate)) {
+                $this->log('info', 'Initial billing: invoice already exists for this cycle, skipping', [
+                    'account_no' => $account->account_no,
+                ]);
+            } else {
+                $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
+                $result['invoice_created'] = true;
+            }
+
+            // 3. Notify ONCE — only when we actually created something new this run.
+            if ($soa || $invoice) {
+                $this->queueNotification($account, $invoice, $soa);
+            } else {
+                $result['skipped'] = true;
+            }
+
+            $result['success'] = true;
+
+            $this->log('info', 'Initial billing generation completed for prepaid account', [
+                'account_no' => $account->account_no,
+                'statement_created' => $result['statement_created'],
+                'invoice_created' => $result['invoice_created'],
+                'skipped' => $result['skipped'],
+            ]);
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->log('error', 'Initial billing generation failed for account ' . $account->account_no . ': ' . $e->getMessage());
+            $result['error'] = $e->getMessage();
+            return $result;
+        }
+    }
+
+    /**
+     * Generate renewal invoices for prepaid accounts whose service period has EXPIRED.
+     *
+     * This is how prepaid customers "rejoin" normal billing after their first period: instead of
+     * being permanently excluded, they are billed again the moment their prepaid_expires_at passes.
+     * It reuses the exact same createEnhancedStatement()/createEnhancedInvoice() logic as the
+     * postpaid generator — the only difference is the TRIGGER (period expiry) rather than
+     * billing-day, because a prepaid period is a rolling 30-day window that does not align with a
+     * fixed billing day.
+     *
+     * Deliberately NOT filtered on billing_status: an expired prepaid account has usually already
+     * been restricted (Inactive), and we still want to give it a renewal bill to pay.
+     *
+     * Idempotent & non-duplicating: an account that already carries an outstanding (Unpaid/Partial)
+     * invoice is skipped, so renewal bills never stack — and since the invoice we create is Unpaid,
+     * a same-day re-run finds it and skips. Each account is isolated so one failure never aborts
+     * the batch.
+     *
+     * @return array{success:int, failed:int, skipped:int, errors:array, invoices:array, notifications:array}
+     */
+    public function generatePrepaidRenewalInvoices(Carbon $generationDate, int $userId): array
+    {
+        $results = [
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'errors' => [],
+            'invoices' => [],
+            'notifications' => [],
+        ];
+
+        $now = $generationDate->copy();
+
+        $accounts = BillingAccount::with(['customer', 'technicalDetails', 'plan'])
+            ->where('generation_type', 'Pre Paid')
+            ->whereNotNull('prepaid_expires_at')
+            ->where('prepaid_expires_at', '<=', $now)
+            ->whereNotNull('account_no')
+            ->get();
+
+        $this->log('info', 'Prepaid renewal scan: expired prepaid accounts found', [
+            'generation_date' => $now->format('Y-m-d'),
+            'expired_count' => $accounts->count(),
+        ]);
+
+        foreach ($accounts as $account) {
+            try {
+                // Never stack a new renewal on top of an existing outstanding bill: if the
+                // customer still owes an Unpaid/Partial invoice, that IS their renewal bill.
+                $hasOutstanding = Invoice::where('account_no', $account->account_no)
+                    ->whereIn('status', ['Unpaid', 'Partial'])
+                    ->exists();
+
+                if ($hasOutstanding) {
+                    $results['skipped']++;
+                    $this->log('info', 'Skipped prepaid renewal — account already has an outstanding invoice', [
+                        'account_no' => $account->account_no,
+                    ]);
+                    continue;
+                }
+
+                // Per-period idempotency, robust to zero-amount renewals: an invoice/statement
+                // dated on/after the current expiry means THIS lapsed period was already billed.
+                // Comparing by DATE (not status) also catches a renewal invoice that computed to
+                // <= 0 and was saved 'Paid' — the status filter above would miss it and cause
+                // unbounded daily re-generation. prepaid_expires_at only advances on payment, so
+                // this guard naturally resets once the customer renews. The SOA and invoice guards
+                // are independent (mirroring the postpaid unified flow) so a partial failure of
+                // one recovers cleanly on the next run without duplicating the other.
+                $expiryDate = Carbon::parse($account->prepaid_expires_at)->toDateString();
+                $soa = null;
+                $invoice = null;
+
+                if (!StatementOfAccount::where('account_no', $account->account_no)->whereDate('statement_date', '>=', $expiryDate)->exists()) {
+                    $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
+                }
+
+                if (!Invoice::where('account_no', $account->account_no)->whereDate('invoice_date', '>=', $expiryDate)->exists()) {
+                    $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
+                    $results['invoices'][] = $invoice;
+                    $results['success']++;
+                }
+
+                if ($soa || $invoice) {
+                    $results['notifications'][] = $this->queueNotification($account, $invoice, $soa);
+                    $this->log('info', 'Prepaid renewal generated (period expired)', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => $expiryDate,
+                        'invoice_id' => $invoice->id ?? null,
+                    ]);
+                } else {
+                    $results['skipped']++;
+                }
+            } catch (\Exception $e) {
+                $results['failed']++;
+                $results['errors'][] = [
+                    'account_no' => $account->account_no,
+                    'error' => $e->getMessage(),
+                ];
+                $this->log('error', "Failed prepaid renewal for account {$account->account_no}: " . $e->getMessage());
+            }
+        }
+
+        return $results;
     }
 
     protected function calculateChargesAndDeductions(

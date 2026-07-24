@@ -293,6 +293,7 @@ class JobOrderController extends Controller
                 'installation_fee' => 'nullable|numeric|min:0',
                 'billing_day' => 'nullable|integer|min:0|max:31',
                 'billing_status' => 'nullable|string|max:255',
+                'generation_type' => 'nullable|string|in:Pre Paid,Post Paid|max:100',
                 'onsite_status' => 'nullable|string|max:255',
                 'assigned_email' => 'nullable|email|max:255',
                 'onsite_remarks' => 'nullable|string',
@@ -1130,6 +1131,15 @@ class JobOrderController extends Controller
                 }
             }
             
+            // Prepaid accounts start Inactive (pay-first): the customer must pay their initial
+            // bill before service is granted. Setting the status inside the committed transaction
+            // (rather than a post-commit flip) guarantees a prepaid account is durably Inactive the
+            // instant approval commits — no window where a crash leaves it Active/unrestricted.
+            $isPrepaidAccount = ($jobOrder->generation_type === 'Pre Paid');
+            $newAccountStatusId = $isPrepaidAccount
+                ? (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4)
+                : 1;
+
             $billingAccount = BillingAccount::create([
                 'customer_id' => $customer->id,
                 'account_no' => $accountNumber,
@@ -1138,7 +1148,8 @@ class JobOrderController extends Controller
                 'account_balance' => $installationFee,
                 'balance_update_date' => now(),
                 'billing_day' => $jobOrder->billing_day,
-                'billing_status_id' => 1,
+                'billing_status_id' => $newAccountStatusId,
+                'generation_type' => $jobOrder->generation_type,
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
                 'updated_by' => $actionUserEmail,
@@ -1271,6 +1282,61 @@ class JobOrderController extends Controller
             }
 
             DB::commit();
+
+            // Prepaid onboarding: a prepaid customer must PAY before they get service. At approval
+            // we (1) generate their initial bill immediately, and (2) start them Inactive +
+            // RADIUS-restricted with NO prepaid period yet (prepaid_expires_at stays NULL). The
+            // 30-day prepaid clock only starts once they pay (see PrepaidRenewalService, invoked
+            // from the payment pipelines), at which point the existing payment reconnect flow
+            // reactivates them. Postpaid customers are untouched — they stay Active as before.
+            //
+            // Best-effort by design: the approval transaction is already committed, so a billing
+            // or RADIUS hiccup must never undo the approval. The generator's own per-cycle
+            // idempotency guards mean re-running will not create duplicate invoices.
+            if ($jobOrder->generation_type === 'Pre Paid') {
+                try {
+                    $billingAccount->load(['customer', 'technicalDetails']);
+                    $initialBilling = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class)
+                        ->generateInitialBillingForAccount($billingAccount, $actionUserId);
+
+                    \Log::info('Prepaid initial billing generated on approval', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'result' => $initialBilling,
+                    ]);
+                } catch (\Throwable $billingEx) {
+                    \Log::error('Prepaid initial billing generation failed on approval (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'error' => $billingEx->getMessage(),
+                    ]);
+                }
+
+                // The account is already durably Inactive (set in the committed transaction above).
+                // Best-effort RADIUS restriction on top: if the RADIUS user isn't provisioned yet
+                // the call just reports an error we log — the customer is Inactive either way and
+                // gets provisioned/reconnected on their first successful payment.
+                try {
+                    $radiusRestrict = app(\App\Services\ManualRadiusOperationsService::class)->restrictedUser([
+                        'username' => $generatedUsername,
+                        'accountNumber' => $accountNumber,
+                        'remarks' => 'Prepaid Awaiting Initial Payment',
+                        'updatedBy' => 'System',
+                    ]);
+
+                    \Log::info('Prepaid account RADIUS-restricted on approval (already Inactive in billing)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'radius_status' => $radiusRestrict['status'] ?? 'unknown',
+                    ]);
+                } catch (\Throwable $restrictEx) {
+                    \Log::error('Prepaid approval RADIUS restriction failed (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'error' => $restrictEx->getMessage(),
+                    ]);
+                }
+            }
 
             // Create Activity Log using helper
             ActivityLog::log(

@@ -240,6 +240,13 @@ class PaymentWorkerService
                         ->update(['reconnect_status' => $reconnectStatus]);
 
                     $this->workerLog("Reconnect attempt for $ref: $reconnectStatus");
+
+                    // Prepaid: a settling payment extends (if still active) or restarts (if
+                    // expired) the prepaid service period. No-op for postpaid accounts.
+                    $prepaidRenewal = app(\App\Services\PrepaidRenewalService::class)->renewByAccountNo($accountNo);
+                    if (!empty($prepaidRenewal['prepaid'])) {
+                        $this->workerLog("Prepaid period {$prepaidRenewal['mode']} for $ref — new expiry: {$prepaidRenewal['new_expiry']}");
+                    }
                 }
                 
             } else {
