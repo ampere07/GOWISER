@@ -284,7 +284,7 @@ use Carbon\Carbon;
         echo "<h2>🔧 Cron Job Command Reference</h2>";
         echo "<div class='status-box'>";
         echo "<p><strong>Recommended Command for Hostinger:</strong></p>";
-        echo "<code>cd /home/u450636736/domains/atssfiber.ph/public_html/backend && /usr/bin/php artisan schedule:run >> /dev/null 2>&1</code>";
+        echo "<code>cd /home/u450636736/domains/gowiser.ph/public_html/backend && /usr/bin/php artisan schedule:run >> /dev/null 2>&1</code>";
         echo "<p style='margin-top: 15px;'><strong>Schedule:</strong> Every minute (* * * * *)</p>";
         echo "<p><strong>Actual Execution:</strong> Daily at 1:00 AM</p>";
         echo "</div>";

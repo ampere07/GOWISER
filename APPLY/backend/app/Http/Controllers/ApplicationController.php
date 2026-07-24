@@ -20,6 +20,15 @@ class ApplicationController extends Controller
     public function store(Request $request)
     {
         try {
+            // Load the form field visibility settings so validation matches what the
+            // applicant actually saw. A hidden field must not be required.
+            $formUi = DB::table('form_ui')->first();
+            $isVisible = function ($field) use ($formUi) {
+                // Default to visible when there is no saved config for the field.
+                return !$formUi || !isset($formUi->$field) || $formUi->$field === 'active';
+            };
+            $presence = fn ($visible) => $visible ? 'required' : 'nullable';
+
             $validator = Validator::make($request->all(), [
                 'email' => 'required|email|max:255',
                 'mobile' => 'required|string|regex:/^09[0-9]{9}$/',
@@ -37,10 +46,10 @@ class ApplicationController extends Controller
                 'referredBy' => 'nullable|string|max:255',
                 'plan' => 'required|string|max:255',
                 'promo' => 'nullable|string|max:255',
-                'proofOfBilling' => 'required|file|mimes:jpg,jpeg,png,pdf|max:10240',
-                'governmentIdPrimary' => 'required|file|mimes:jpg,jpeg,png,pdf|max:10240',
+                'proofOfBilling' => $presence($isVisible('proof_of_billing')) . '|file|mimes:jpg,jpeg,png,pdf|max:10240',
+                'governmentIdPrimary' => $presence($isVisible('id_primary')) . '|file|mimes:jpg,jpeg,png,pdf|max:10240',
                 'governmentIdSecondary' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
-                'houseFrontPicture' => 'required|file|mimes:jpg,jpeg,png|max:10240',
+                'houseFrontPicture' => $presence($isVisible('house_front_')) . '|file|mimes:jpg,jpeg,png|max:10240',
                 'promoProof' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
                 'created_by_email' => 'nullable|email|max:255',
             ]);

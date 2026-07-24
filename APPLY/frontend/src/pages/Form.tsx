@@ -93,8 +93,8 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
   } = props;
   const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
-  const COVERAGE_CENTER = { lat: 14.9136, lng: 121.0464 }; // Norzagaray, Bulacan
-  const COVERAGE_RADIUS = 25000; // 25km in meters - covers Norzagaray area
+  const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
+  const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
 
   const [showMapModal, setShowMapModal] = useState(false);
   const [mapCenter, setMapCenter] = useState(COVERAGE_CENTER);

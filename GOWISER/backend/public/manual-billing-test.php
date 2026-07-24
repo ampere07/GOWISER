@@ -242,7 +242,7 @@ $userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 1;
 
                     echo "<div class='info'>";
                     echo "<a href='?key=" . SECRET_KEY . "&action=preview' class='btn btn-back'>Back to Preview</a>";
-                    echo "<a href='../billing-check.php?key=atss2025billing' class='btn btn-preview' target='_blank'>📊 View Full Status</a>";
+                    echo "<a href='../billing-check.php?key=gowiser2025billing' class='btn btn-preview' target='_blank'>📊 View Full Status</a>";
                     echo "</div>";
 
                 } catch (\Exception $e) {
