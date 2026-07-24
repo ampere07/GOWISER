@@ -151,6 +151,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     'billingDay',
     'choosePlan',
     'generationType',
+    'vatType',
     'statusRemarks',
     'remarks',
     'installationLandmark',
@@ -856,7 +857,8 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
       choosePlan: 'Choose Plan',
-      generationType: 'Generation Type',
+      generationType: 'Billing Type',
+      vatType: 'VAT Type',
       statusRemarks: 'Status Remarks',
       remarks: 'Remarks',
       installationLandmark: 'Installation Landmark',
@@ -1104,8 +1106,18 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!generationType) return null;
         return (
           <div className={baseFieldClass}>
-            <div className={labelClass}>Generation Type:</div>
+            <div className={labelClass}>Billing Type:</div>
             <div className={valueClass}>{generationType}</div>
+          </div>
+        );
+
+      case 'vatType':
+        const vatType = jobOrder.vat_type || jobOrder.Vat_Type;
+        if (!vatType) return null;
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>VAT Type:</div>
+            <div className={valueClass}>{vatType}</div>
           </div>
         );
 

@@ -21,6 +21,7 @@ class BillingAccount extends Model
         'billing_day',
         'billing_status_id',
         'generation_type',
+        'vat_type',
         'prepaid_expires_at',
         'created_by',
         'updated_by',

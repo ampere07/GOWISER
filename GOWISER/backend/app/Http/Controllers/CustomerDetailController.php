@@ -119,6 +119,9 @@ class CustomerDetailController extends Controller
                     'updatedAt' => $billingAccount->updated_at ? $billingAccount->updated_at->format('Y-m-d H:i:s') : null,
                     'vip_expiration' => $billingAccount->vip_expiration,
                     'vip_remarks' => $billingAccount->vip_remarks,
+                    'generation_type' => $billingAccount->generation_type,
+                    'vat_type' => $billingAccount->vat_type,
+                    'prepaid_expires_at' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
                 ],
                 
                 'technicalDetails' => $technicalDetail ? [

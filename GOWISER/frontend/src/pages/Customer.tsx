@@ -108,6 +108,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     sessionIP: (customerData as any).session_ip || customerData.technicalDetails?.ipAddress || '',
     vip_expiration: customerData.billingAccount?.vip_expiration || '',
     vip_remarks: customerData.billingAccount?.vip_remarks || '',
+    generationType: customerData.billingAccount?.generation_type || '',
+    prepaidExpiration: customerData.billingAccount?.prepaid_expires_at || '',
+    vatType: customerData.billingAccount?.vat_type || '',
   };
 };
 

@@ -49,6 +49,7 @@ interface JOFormData {
   installationFee: number | string;
   billingDay: string;
   generationType: string;
+  vatType: string;
 
   onsiteStatus: string;
   assignedEmail: string;
@@ -108,6 +109,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     installationFee: 0,
     billingDay: '',
     generationType: '',
+    vatType: '',
 
     onsiteStatus: 'In Progress',
     assignedEmail: '',
@@ -584,7 +586,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     }
 
     if (!formData.generationType.trim()) {
-      newErrors.generationType = 'Generation Type is required';
+      newErrors.generationType = 'Billing Type is required';
+    }
+
+    if (!formData.vatType.trim()) {
+      newErrors.vatType = 'VAT Type is required';
     }
 
     if (formData.status === 'Confirmed') {
@@ -627,6 +633,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       installation_fee: Number(data.installationFee) || 0,
       billing_day: parseInt(data.billingDay) || 30,
       generation_type: toNullIfEmpty(data.generationType),
+      vat_type: toNullIfEmpty(data.vatType),
       billing_status: 'In Progress',
       modem_router_sn: null,
       onsite_status: data.onsiteStatus || 'In Progress',
@@ -1169,7 +1176,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
-                  Generation Type<span className="text-red-500">*</span>
+                  Billing Type<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <select
@@ -1180,7 +1187,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                       : 'bg-white text-gray-900 border-gray-300'
                       } ${errors.generationType ? 'border-red-500' : ''}`}
                   >
-                    <option value="" disabled>Select Generation Type</option>
+                    <option value="" disabled>Select Billing Type</option>
                     <option value="Pre Paid">Pre Paid</option>
                     <option value="Post Paid">Post Paid</option>
                   </select>
@@ -1188,6 +1195,31 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                     }`} size={20} />
                 </div>
                 {errors.generationType && <p className="text-red-500 text-xs mt-1">{errors.generationType}</p>}
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>
+                  VAT Type<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={formData.vatType}
+                    onChange={(e) => handleInputChange('vatType', e.target.value)}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
+                      ? 'bg-gray-800 text-white border-gray-700'
+                      : 'bg-white text-gray-900 border-gray-300'
+                      } ${errors.vatType ? 'border-red-500' : ''}`}
+                  >
+                    <option value="" disabled>Select VAT Type</option>
+                    <option value="Vat Included">Vat Included</option>
+                    <option value="Excluded Vat">Excluded Vat</option>
+                    <option value="No Vat">No Vat</option>
+                  </select>
+                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                    }`} size={20} />
+                </div>
+                {errors.vatType && <p className="text-red-500 text-xs mt-1">{errors.vatType}</p>}
               </div>
 
               <div>

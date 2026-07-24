@@ -173,6 +173,9 @@ export const getBillingRecordDetails = async (id: string): Promise<BillingDetail
 
       const detailRecord: BillingDetailRecord = {
         ...basicRecord,
+        generationType: item.Generation_Type || '',
+        prepaidExpiration: item.Prepaid_Expires_At || '',
+        vatType: item.Vat_Type || '',
         lcpnapport: item.LCPNAPPORT || '',
         referredBy: item.Referred_By || '',
         referrersAccountNumber: '',

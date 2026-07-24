@@ -451,6 +451,9 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       'accountNumber',
       'billingStatus',
       'billingDay',
+      'generationType',
+      'vatType',
+      'prepaidExpiration',
       'vip_expiration',
       'vip_remarks',
       'plan',
@@ -736,6 +739,9 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       accountNumber: 'Account Number',
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
+      generationType: 'Billing Type',
+      vatType: 'VAT Type',
+      prepaidExpiration: 'Prepaid Expiration',
       plan: 'Plan',
       accountBalance: 'Account Balance',
       totalPaid: 'Total Paid',
@@ -1179,6 +1185,30 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`}>Billing Status</span>
           <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`} title={billingRecord.billingStatus}>{billingRecord.billingStatus}</span>
+        </div>
+      ) : null,
+      generationType: () => billingRecord.generationType ? (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>Billing Type</span>
+          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`} title={billingRecord.generationType}>{billingRecord.generationType}</span>
+        </div>
+      ) : null,
+      vatType: () => billingRecord.vatType ? (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>VAT Type</span>
+          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`} title={billingRecord.vatType}>{billingRecord.vatType}</span>
+        </div>
+      ) : null,
+      prepaidExpiration: () => billingRecord.prepaidExpiration ? (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>Prepaid Expiration</span>
+          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>{formatDateTime(billingRecord.prepaidExpiration)}</span>
         </div>
       ) : null,
       vip_expiration: () => billingRecord.vip_expiration ? (

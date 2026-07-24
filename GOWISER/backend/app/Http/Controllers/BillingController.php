@@ -97,7 +97,10 @@ class BillingController extends Controller
                     'Account_Balance' => $billingAccount->account_balance,
                     'account_balance' => $billingAccount->account_balance,
                     'Balance_Update_Date' => $billingAccount->balance_update_date ? $billingAccount->balance_update_date->format('Y-m-d H:i:s') : null,
-                    
+                    'Generation_Type' => $billingAccount->generation_type,
+                    'Prepaid_Expires_At' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                    'Vat_Type' => $billingAccount->vat_type,
+
                     'First_Name' => $customer ? $customer->first_name : null,
                     'Middle_Initial' => $customer ? $customer->middle_initial : null,
                     'Last_Name' => $customer ? $customer->last_name : null,
@@ -234,7 +237,10 @@ class BillingController extends Controller
                 'Account_Balance' => $billingAccount->account_balance,
                 'account_balance' => $billingAccount->account_balance,
                 'Balance_Update_Date' => $billingAccount->balance_update_date ? $billingAccount->balance_update_date->format('Y-m-d H:i:s') : null,
-                
+                'Generation_Type' => $billingAccount->generation_type,
+                'Prepaid_Expires_At' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                'Vat_Type' => $billingAccount->vat_type,
+
                 'First_Name' => $customer ? $customer->first_name : null,
                 'Middle_Initial' => $customer ? $customer->middle_initial : null,
                 'Last_Name' => $customer ? $customer->last_name : null,

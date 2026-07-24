@@ -18,6 +18,9 @@ export interface BillingRecord {
   billing_status_id?: number;
   vip_expiration?: string;
   vip_remarks?: string;
+  generationType?: string;
+  prepaidExpiration?: string;
+  vatType?: string;
   dateInstalled?: string;
   contactNumber?: string;
   secondContactNumber?: string;

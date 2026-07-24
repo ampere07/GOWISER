@@ -43,6 +43,9 @@ export interface CustomerDetailData {
     updatedBy?: string;
     vip_expiration?: string;
     vip_remarks?: string;
+    generation_type?: string;
+    prepaid_expires_at?: string;
+    vat_type?: string;
   };
 
   technicalDetails?: {

@@ -60,6 +60,37 @@ use Carbon\Carbon;
 class EnhancedBillingGenerationService
 {
     protected const VAT_RATE = 0.12;
+
+    /** Resolved VAT rate for this instance (billing_config lookup performed once). */
+    private ?float $resolvedVatRate = null;
+
+    /**
+     * VAT rate to apply during bill generation.
+     *
+     * Reads billing_config.vat_rate (stored as a fraction, e.g. 0.12 = 12%) and falls back to the
+     * historical default (self::VAT_RATE) when no valid rate is configured, so behaviour is
+     * unchanged for installs that never set one. Resolved once per instance to avoid a per-account
+     * query during a batch run.
+     */
+    protected function getVatRate(): float
+    {
+        if ($this->resolvedVatRate !== null) {
+            return $this->resolvedVatRate;
+        }
+
+        try {
+            $configured = \App\Models\BillingConfig::first()?->vat_rate;
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVatRate = (is_numeric($configured) && (float) $configured >= 0)
+            ? (float) $configured
+            : self::VAT_RATE;
+
+        return $this->resolvedVatRate;
+    }
+
     protected const DAYS_IN_MONTH = 30;
     protected const DAYS_UNTIL_DUE = 7;
     protected const DAYS_UNTIL_DC_NOTICE = 4;
@@ -274,8 +305,9 @@ class EnhancedBillingGenerationService
             $dueDate = $adjustedDate->copy()->addDays(self::DAYS_UNTIL_DUE);
 
             $prorateAmount = $this->calculateProrateAmount($account, $plan->price, $adjustedDate);
-            $monthlyFeeGross = $prorateAmount / (1 + self::VAT_RATE);
-            $vat = $monthlyFeeGross * self::VAT_RATE;
+            $vatRate = $this->getVatRate();
+            $monthlyFeeGross = $prorateAmount / (1 + $vatRate);
+            $vat = $monthlyFeeGross * $vatRate;
             $monthlyServiceFee = $prorateAmount - $vat;
 
             $invoiceId = $this->generateInvoiceId($statementDate);

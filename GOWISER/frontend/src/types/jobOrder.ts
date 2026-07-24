@@ -70,6 +70,8 @@ export interface JobOrder {
   billing_status?: string | null;
   Generation_Type?: string | null;
   generation_type?: string | null;
+  Vat_Type?: string | null;
+  vat_type?: string | null;
 
   // Technical Information
   Modem_Router_SN?: string | null;

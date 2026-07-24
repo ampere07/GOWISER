@@ -18,6 +18,7 @@ class JobOrder extends Model
         'billing_day',
         'billing_status',
         'generation_type',
+        'vat_type',
         'modem_router_sn',
         'router_model',
         'group_name',

@@ -4,6 +4,12 @@ import { customAccountNumberService, CustomAccountNumber } from '../services/cus
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
+// VAT is stored in billing_config.vat_rate as a fraction (0.12) but shown/edited as a percent (12).
+const fractionToPercent = (fraction: number | string): number =>
+  Math.round(Number(fraction) * 10000) / 100;
+const percentToFraction = (percent: number | string): number =>
+  Math.round((Number(percent) / 100) * 10000) / 10000;
+
 interface BillingConfigData {
   advance_generation_day: number;
   due_date_day: number;
@@ -11,6 +17,7 @@ interface BillingConfigData {
   overdue_day: number;
   disconnection_notice: number;
   disconnection_fee: number;
+  vat_rate?: number;
   pullout_day: number;
   created_at?: string;
   updated_at?: string;
@@ -53,6 +60,10 @@ const BillingConfig: React.FC = () => {
   });
   const [loadingBillingConfig, setLoadingBillingConfig] = useState<boolean>(false);
 
+  // VAT configuration (persisted to billing_config.vat_rate as a fraction, edited here as a %).
+  const [isEditingVatConfig, setIsEditingVatConfig] = useState<boolean>(false);
+  const [vatRateInput, setVatRateInput] = useState<string>('12');
+
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
     type: 'success',
@@ -87,6 +98,8 @@ const BillingConfig: React.FC = () => {
       if (response.data.success && response.data.data) {
         setBillingConfig(response.data.data);
         setBillingConfigInput(response.data.data);
+        const vr = response.data.data.vat_rate;
+        setVatRateInput(vr !== undefined && vr !== null ? String(fractionToPercent(vr)) : '12');
       } else {
         setBillingConfig(null);
       }
@@ -369,6 +382,81 @@ const BillingConfig: React.FC = () => {
       });
     }
     setIsEditingBillingConfig(false);
+  };
+
+  const handleVatRateInputChange = (value: string) => {
+    // Allow blank while typing; otherwise accept a number in the 0-100 (%) range.
+    if (value === '') {
+      setVatRateInput('');
+      return;
+    }
+    const numValue = parseFloat(value);
+    if (!isNaN(numValue) && numValue >= 0 && numValue <= 100) {
+      setVatRateInput(value);
+    }
+  };
+
+  const handleSaveVatConfig = async () => {
+    const percent = parseFloat(vatRateInput);
+    if (vatRateInput === '' || isNaN(percent) || percent < 0 || percent > 100) {
+      setModal({
+        isOpen: true,
+        type: 'error',
+        title: 'Validation Error',
+        message: 'VAT Rate must be a number between 0 and 100 (%).'
+      });
+      return;
+    }
+
+    try {
+      setLoadingBillingConfig(true);
+
+      const authData = localStorage.getItem('authData');
+      let userEmail = '';
+      if (authData) {
+        try {
+          const userData = JSON.parse(authData);
+          userEmail = userData.email || userData.user?.email || '';
+        } catch (error) {
+          console.error('Error parsing auth data:', error);
+        }
+      }
+
+      // Send only vat_rate — the backend preserves every other billing-config field it isn't given.
+      const payload = { user_email: userEmail, vat_rate: percentToFraction(percent) };
+
+      if (billingConfig) {
+        await apiClient.put('/billing-config', payload);
+      } else {
+        await apiClient.post('/billing-config', payload);
+      }
+
+      setModal({
+        isOpen: true,
+        type: 'success',
+        title: 'Success',
+        message: 'VAT configuration saved successfully'
+      });
+      await fetchBillingConfig();
+      setIsEditingVatConfig(false);
+    } catch (error: any) {
+      console.error('Error saving VAT config:', error);
+      const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error occurred';
+      setModal({
+        isOpen: true,
+        type: 'error',
+        title: 'Error',
+        message: `Failed to save: ${errorMessage}`
+      });
+    } finally {
+      setLoadingBillingConfig(false);
+    }
+  };
+
+  const handleCancelVatConfigEdit = () => {
+    const vr = billingConfig?.vat_rate;
+    setVatRateInput(vr !== undefined && vr !== null ? String(fractionToPercent(vr)) : '12');
+    setIsEditingVatConfig(false);
   };
 
   const handleBillingConfigInputChange = (field: keyof BillingConfigData, value: string) => {
@@ -897,6 +985,122 @@ const BillingConfig: React.FC = () => {
                   {billingConfig && (
                     <button
                       onClick={handleCancelBillingConfigEdit}
+                      disabled={loadingBillingConfig}
+                      className={`flex items-center gap-2 px-4 py-2 disabled:opacity-50 text-white rounded transition-colors ${isDarkMode
+                        ? 'bg-gray-700 hover:bg-gray-600'
+                        : 'bg-gray-400 hover:bg-gray-500'
+                        }`}
+                    >
+                      <X size={18} />
+                      <span>Cancel</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={`space-y-4 pb-6 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'
+          }`}>
+          <div className="flex items-center gap-3">
+            <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+              VAT Configuration
+            </h3>
+          </div>
+
+          <div className="space-y-4">
+            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>
+              Configure the Value-Added Tax (VAT) rate applied during bill generation. Entered as a percentage.
+            </p>
+
+            {loadingBillingConfig ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
+              </div>
+            ) : billingConfig && !isEditingVatConfig ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'
+                    }`}>
+                    <p className={`text-xs mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                      }`}>VAT Rate</p>
+                    <p className={`font-medium text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'
+                      }`}>
+                      {billingConfig.vat_rate !== undefined && billingConfig.vat_rate !== null
+                        ? `${fractionToPercent(billingConfig.vat_rate)}%`
+                        : 'Not set'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    onClick={() => setIsEditingVatConfig(true)}
+                    className="flex items-center gap-2 px-4 py-2 text-blue-400 hover:text-blue-300 hover:bg-blue-900 rounded transition-colors"
+                  >
+                    <Edit2 size={18} />
+                    <span>Edit</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      VAT Rate (%)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={vatRateInput}
+                        onChange={(e) => handleVatRateInputChange(e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className={`w-full pl-4 pr-8 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
+                          ? 'bg-gray-800 border-gray-700 text-white'
+                          : 'bg-white border-gray-300 text-gray-900'
+                          }`}
+                        min="0"
+                        max="100"
+                        disabled={loadingBillingConfig}
+                      />
+                      <span className={`absolute right-3 top-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>%</span>
+                    </div>
+                    <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'
+                      }`}>
+                      Standard VAT rate (e.g., 12). Applied to plan charges during bill generation (0-100%).
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleSaveVatConfig}
+                    disabled={loadingBillingConfig}
+                    className="flex items-center gap-2 px-4 py-2 disabled:opacity-50 text-white rounded transition-colors"
+                    style={{
+                      backgroundColor: loadingBillingConfig ? '#4b5563' : (colorPalette?.primary || '#7c3aed')
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!loadingBillingConfig && colorPalette?.accent) {
+                        e.currentTarget.style.backgroundColor = colorPalette.accent;
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!loadingBillingConfig && colorPalette?.primary) {
+                        e.currentTarget.style.backgroundColor = colorPalette.primary;
+                      }
+                    }}
+                  >
+                    <Save size={18} />
+                    <span>{billingConfig ? 'Update' : 'Create'}</span>
+                  </button>
+                  {billingConfig && (
+                    <button
+                      onClick={handleCancelVatConfigEdit}
                       disabled={loadingBillingConfig}
                       className={`flex items-center gap-2 px-4 py-2 disabled:opacity-50 text-white rounded transition-colors ${isDarkMode
                         ? 'bg-gray-700 hover:bg-gray-600'
