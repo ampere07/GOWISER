@@ -221,6 +221,18 @@ class RadiusQueueService
                 }
                 return true;
 
+            // Plan/group change. Queued by PrepaidPlanChangeService when the direct push fails,
+            // so a RADIUS outage at the moment a prepaid plan switch lands cannot leave the
+            // database on the new plan while RADIUS keeps serving the old one.
+            case 'update_group':
+                $service = app(ManualRadiusOperationsService::class);
+                $result = $service->updateGroup($params);
+                if (($result['status'] ?? '') !== 'success') {
+                    $errorMessage = $result['message'] ?? 'Operation returned failure status';
+                    return false;
+                }
+                return true;
+
             default:
                 $errorMessage = "Unknown operation: {$operation}";
                 $this->writeLog("  [ERROR] " . $errorMessage);

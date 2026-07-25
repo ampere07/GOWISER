@@ -263,7 +263,17 @@ class CustomerDetailUpdateController extends Controller
                 'billing_day' => 'nullable|integer|min:0|max:31',
                 'date_installed' => 'nullable|date',
                 'vip_expiration' => 'nullable|date',
-                'vip_remarks' => 'nullable|string'
+                'vip_remarks' => 'nullable|string',
+                // Billing Type. Both spellings accepted while older clients are still in the wild;
+                // 'Prepaid'/'Postpaid' are canonical. Changing this switches the account between
+                // the fixed-billing-day flow and the rolling prepaid-period flow.
+                // Canonical plus legacy spellings — `in` is case- and whitespace-sensitive, and the
+                // value is normalised to canonical on write below regardless of what arrives.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid',
+                'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat',
+                // End of the prepaid service period. Only sent for prepaid accounts; nullable so
+                // an account whose clock has not started yet can be saved with it empty.
+                'prepaid_expires_at' => 'nullable|date',
             ]);
 
             DB::beginTransaction();
@@ -277,6 +287,9 @@ class CustomerDetailUpdateController extends Controller
                 'date_installed' => $billingAccount->date_installed,
                 'vip_expiration' => $billingAccount->vip_expiration,
                 'vip_remarks' => $billingAccount->vip_remarks,
+                'generation_type' => $billingAccount->generation_type,
+                'vat_type' => $billingAccount->vat_type,
+                'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 
             // Resolve billing_status_id
@@ -327,6 +340,29 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['vip_remarks'] = $validated['vip_remarks'];
             }
 
+            // Normalise on write so the database converges on the canonical spellings even when an
+            // older client posts 'Pre Paid'.
+            if ($request->has('generation_type')) {
+                $generationType = $validated['generation_type'] ?? null;
+                if ($generationType !== null && $generationType !== '') {
+                    $generationType = \App\Models\BillingAccount::isPrepaidType($generationType)
+                        ? \App\Models\BillingAccount::GENERATION_PREPAID
+                        : \App\Models\BillingAccount::GENERATION_POSTPAID;
+                }
+                $updateData['generation_type'] = $generationType;
+            }
+
+            if ($request->has('vat_type')) {
+                $updateData['vat_type'] = $validated['vat_type'] ?? null;
+            }
+
+            if ($request->has('prepaid_expires_at')) {
+                $prepaidExpiry = $validated['prepaid_expires_at'] ?? null;
+                $updateData['prepaid_expires_at'] = ($prepaidExpiry === null || $prepaidExpiry === '')
+                    ? null
+                    : \Carbon\Carbon::parse($prepaidExpiry);
+            }
+
             $billingAccount->update($updateData);
 
             // Capture new billing details after update
@@ -337,6 +373,9 @@ class CustomerDetailUpdateController extends Controller
                 'date_installed' => $billingAccount->date_installed,
                 'vip_expiration' => $billingAccount->vip_expiration,
                 'vip_remarks' => $billingAccount->vip_remarks,
+                'generation_type' => $billingAccount->generation_type,
+                'vat_type' => $billingAccount->vat_type,
+                'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 
             $changedOldBillingDetails = [];

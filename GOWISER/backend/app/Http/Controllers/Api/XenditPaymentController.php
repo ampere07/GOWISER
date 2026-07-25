@@ -48,6 +48,9 @@ class XenditPaymentController extends Controller
             $accountNo = $request->input('account_no');
             $amount = $request->input('amount');
             $frontendRedirectUrl = $request->input('redirect_url');
+            // Optional: a prepaid customer can pick the plan they are paying for. Held on the
+            // pending payment and acted on once the payment settles (see PrepaidPlanChangeService).
+            $selectedPlanId = $request->input('plan_id');
 
             if (!$accountNo) {
                 return response()->json([
@@ -85,6 +88,19 @@ class XenditPaymentController extends Controller
                     'status' => 'error',
                     'message' => 'Account not found'
                 ], 404);
+            }
+
+            // Validate the selected plan up front rather than discovering it is bogus at
+            // settlement time, when the customer has already been charged.
+            $selectedPlan = null;
+            if (!empty($selectedPlanId)) {
+                $selectedPlan = DB::table('plan_list')->where('id', $selectedPlanId)->first();
+                if (!$selectedPlan) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'The selected plan is no longer available. Please reopen the payment screen and try again.'
+                    ], 422);
+                }
             }
 
             // Note: Duplicate check now handled by frontend via check-pending endpoint
@@ -163,7 +179,9 @@ class XenditPaymentController extends Controller
                 'customer' => $customer,
                 'items' => [
                     [
-                        'name' => "Account $accountNo - " . ($account->desired_plan ?? 'Internet Service'),
+                        // Name the plan being purchased, so the Xendit invoice the customer sees
+                        // matches what they picked rather than the plan they are leaving.
+                        'name' => "Account $accountNo - " . ($selectedPlan->plan_name ?? $account->desired_plan ?? 'Internet Service'),
                         'quantity' => 1,
                         'price' => $amount,
                         'category' => 'Internet Service'
@@ -224,7 +242,10 @@ class XenditPaymentController extends Controller
                 'status' => 'PENDING',
                 'payment_date' => now(),
                 'provider' => 'XENDIT',
+                // `plan` stays the plan the account was ON at checkout (unchanged historical
+                // meaning); `selected_plan_id` is the plan the customer is paying to switch TO.
                 'plan' => $account->desired_plan ?? '',
+                'selected_plan_id' => $selectedPlan->id ?? null,
                 'payment_id' => $paymentId,
                 'payment_method_id' => null,
                 'json_payload' => json_encode($payload),

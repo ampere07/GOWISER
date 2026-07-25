@@ -519,6 +519,16 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     });
   };
 
+  /**
+   * Prepaid accounts have no billing day: they are billed on a rolling 30-day period that starts
+   * when they pay, and are excluded from the fixed-billing-day generator entirely. So the Billing
+   * Day field is hidden and not required for them.
+   *
+   * Letters-only compare so a job order still holding the older 'Pre Paid' also resolves.
+   */
+  const isPrepaidBillingType =
+    String(formData.generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -578,11 +588,15 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
 
 
-    const billingDayNum = parseInt(formData.billingDay);
-    if (isNaN(billingDayNum) || billingDayNum < 1) {
-      newErrors.billingDay = 'Billing Day must be at least 1';
-    } else if (billingDayNum > 30) {
-      newErrors.billingDay = 'Billing Day cannot exceed 30';
+    // Skipped for prepaid: the field is hidden, so requiring it would block submission with an
+    // error the user cannot see or fix.
+    if (!isPrepaidBillingType) {
+      const billingDayNum = parseInt(formData.billingDay);
+      if (isNaN(billingDayNum) || billingDayNum < 1) {
+        newErrors.billingDay = 'Billing Day must be at least 1';
+      } else if (billingDayNum > 30) {
+        newErrors.billingDay = 'Billing Day cannot exceed 30';
+      }
     }
 
     if (!formData.generationType.trim()) {
@@ -1188,8 +1202,8 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                       } ${errors.generationType ? 'border-red-500' : ''}`}
                   >
                     <option value="" disabled>Select Billing Type</option>
-                    <option value="Pre Paid">Pre Paid</option>
-                    <option value="Post Paid">Post Paid</option>
+                    <option value="Prepaid">Prepaid</option>
+                    <option value="Postpaid">Postpaid</option>
                   </select>
                   <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
                     }`} size={20} />
@@ -1291,6 +1305,22 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
 
 
+              {/* Hidden for prepaid — they bill on a rolling period, not a fixed day. */}
+              {isPrepaidBillingType ? (
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>
+                    Billing Day
+                  </label>
+                  <p className={`text-xs px-3 py-2 rounded border ${isDarkMode
+                    ? 'text-gray-400 border-gray-700 bg-gray-800'
+                    : 'text-gray-500 border-gray-300 bg-gray-50'
+                    }`}>
+                    Not applicable to prepaid accounts — billing runs on a rolling 30-day period
+                    that starts when the customer pays.
+                  </p>
+                </div>
+              ) : (
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
@@ -1337,6 +1367,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
                 {errors.billingDay && <p className="text-red-500 text-xs mt-1">{errors.billingDay}</p>}
               </div>
+              )}
             </div>
 
             <div className="space-y-4">

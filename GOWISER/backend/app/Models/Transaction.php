@@ -30,6 +30,9 @@ class Transaction extends Model
         'account_balance_before',
         'organization_id',
         'updated_column',
+        // Prepaid only: the plan this payment buys. Acted on at approval by
+        // PrepaidPlanChangeService (queued if the period is live, applied if it has lapsed).
+        'selected_plan_id',
     ];
 
     protected $casts = [

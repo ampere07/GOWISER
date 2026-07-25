@@ -92,7 +92,15 @@ export const paymentService = {
     }
   },
 
-  createPayment: async (accountNo: string, amount: number, redirectUrl?: string): Promise<PaymentResponse> => {
+  /**
+   * Create a payment link.
+   *
+   * `planId` is only sent by prepaid customers who picked a plan in the Pay Now modal. The
+   * backend holds it on the pending payment and, once the payment settles, either queues the
+   * switch for when the current prepaid period lapses or applies it immediately if the period
+   * had already expired.
+   */
+  createPayment: async (accountNo: string, amount: number, redirectUrl?: string, planId?: number | null): Promise<PaymentResponse> => {
     try {
       console.log('Payment Service - Creating payment:', { accountNo, amount });
 
@@ -120,6 +128,10 @@ export const paymentService = {
 
       if (redirectUrl) {
         payload.redirect_url = redirectUrl;
+      }
+
+      if (planId) {
+        payload.plan_id = planId;
       }
 
       console.log('Payment payload:', payload);

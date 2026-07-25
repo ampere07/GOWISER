@@ -57,7 +57,7 @@ class PrepaidRenewalService
     public function renew(BillingAccount $account, ?Carbon $paymentDate = null): array
     {
         // Only prepaid accounts have a service period; postpaid is entirely unaffected.
-        if ($account->generation_type !== 'Pre Paid') {
+        if (!BillingAccount::isPrepaidType($account->generation_type)) {
             return ['prepaid' => false];
         }
 

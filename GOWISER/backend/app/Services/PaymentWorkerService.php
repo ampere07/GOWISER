@@ -247,6 +247,18 @@ class PaymentWorkerService
                     if (!empty($prepaidRenewal['prepaid'])) {
                         $this->workerLog("Prepaid period {$prepaidRenewal['mode']} for $ref — new expiry: {$prepaidRenewal['new_expiry']}");
                     }
+
+                    // Prepaid plan change: if the customer picked a plan at checkout, either queue
+                    // it for when their current period lapses (they are mid-period on a plan they
+                    // already paid for) or apply it now (their period had expired). MUST run after
+                    // the renewal above — it reads that call's `mode` / `previous_expiry` to know
+                    // which case applies, since the renewal has already moved prepaid_expires_at.
+                    $planChange = app(\App\Services\PrepaidPlanChangeService::class)
+                        ->handleSettledPayment($accountNo, $payment->selected_plan_id ?? null, $prepaidRenewal);
+                    if (($planChange['action'] ?? 'none') !== 'none') {
+                        $this->workerLog("Prepaid plan {$planChange['action']} for $ref — plan: {$planChange['plan']}"
+                            . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
+                    }
                 }
                 
             } else {

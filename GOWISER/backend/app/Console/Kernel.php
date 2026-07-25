@@ -222,6 +222,22 @@ class Kernel extends ConsoleKernel
                  });
 
         // ===================================================================
+        // PREPAID PLAN CHANGES
+        // ===================================================================
+
+        // Apply prepaid plan changes queued by a payment, once the customer's current prepaid
+        // period lapses. Uses: PrepaidPlanChangeService, ManualRadiusOperationsService
+        // Hourly (not daily) because prepaid_expires_at carries a time-of-day, so an account
+        // that lapses mid-afternoon switches that afternoon rather than at the next midnight.
+        $schedule->command('prepaid:apply-pending-plans')
+                 ->hourly()
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Prepaid pending plan application failed');
+                 });
+
+        // ===================================================================
         // MAINTENANCE & CLEANUP
         // ===================================================================
 

@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { paymentService, PendingPayment } from '../services/paymentService';
 import { useCustomerDataContext } from '../contexts/CustomerDataContext';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { planService, Plan } from '../services/planService';
 
 interface Payment {
     id: string;
@@ -32,6 +33,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const [isPaymentProcessing, setIsPaymentProcessing] = useState<boolean>(false);
     const [showPaymentVerifyModal, setShowPaymentVerifyModal] = useState<boolean>(false);
     const [paymentAmount, setPaymentAmount] = useState<number>(0);
+
+    // ── Prepaid plan selection ──────────────────────────────────────────────
+    // Prepaid customers buy a service period at a plan's price, so they pick the plan they are
+    // paying for and the amount follows it. Postpaid is untouched: they keep paying their balance.
+    const [plans, setPlans] = useState<Plan[]>([]);
+    const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
+    const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
+    const [isPlanListOpen, setIsPlanListOpen] = useState<boolean>(false);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -148,6 +157,69 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const usageType = customerDetail?.technicalDetails?.usageType || 'N/A';
     const emailAddress = customerDetail?.emailAddress || user?.email || 'N/A';
 
+    // ── Prepaid state ───────────────────────────────────────────────────────
+    // Letters-only comparison so both the canonical 'Prepaid' and the older 'Pre Paid' resolve —
+    // an account that has not been through the rename must still get the plan picker.
+    const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
+        .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+    const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
+    const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
+    const pendingPlanName = customerDetail?.billingAccount?.pending_plan_name || null;
+    const pendingPlanEffectiveAt = customerDetail?.billingAccount?.pending_plan_effective_at || null;
+
+    // Whether the paid-for period is still running. This is what makes a plan change QUEUE
+    // rather than apply immediately, so the modal can tell the customer which will happen.
+    const isPrepaidPeriodActive = useMemo(() => {
+        if (!prepaidExpiresAt) return false;
+        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T')).getTime();
+        return !isNaN(expiry) && expiry > Date.now();
+    }, [prepaidExpiresAt]);
+
+    // Mirrors the backend's extractPlanName(): the plan name is the first token, before any
+    // ' - ' separator or space. Keeps "which plan am I on" consistent with what billing resolves.
+    const extractPlanName = useCallback((raw?: string | null): string => {
+        if (!raw) return '';
+        let value = String(raw);
+        if (value.includes(' - ')) value = value.split(' - ')[0].trim();
+        if (value.includes(' ')) return value.split(' ')[0].trim();
+        return value.trim();
+    }, []);
+
+    const currentPlan = useMemo(
+        () => plans.find(p => p.name === extractPlanName(planName)) || null,
+        [plans, planName, extractPlanName]
+    );
+    const selectedPlan = useMemo(
+        () => plans.find(p => p.id === selectedPlanId) || null,
+        [plans, selectedPlanId]
+    );
+    // A switch already paid for and waiting. It takes priority when preselecting, so a top-up is
+    // priced at the plan the customer will actually be on rather than the one they are leaving.
+    const pendingPlan = useMemo(
+        () => (pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null),
+        [plans, pendingPlanId]
+    );
+
+    // Load the plan list once, only for prepaid customers — postpaid never sees the picker.
+    // Gated on a ref, not on plans.length: an empty or all-zero-price response would otherwise
+    // leave the guard false and re-trigger this effect forever.
+    const plansRequestedRef = React.useRef(false);
+    useEffect(() => {
+        if (!isPrepaid || plansRequestedRef.current) return;
+        plansRequestedRef.current = true;
+        let cancelled = false;
+        (async () => {
+            setIsLoadingPlans(true);
+            try {
+                const fetched = await planService.getAllPlans();
+                if (!cancelled) setPlans(fetched.filter(p => Number(p.price) > 0));
+            } finally {
+                if (!cancelled) setIsLoadingPlans(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [isPrepaid]);
+
     // Format a stored date string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or ISO) to
     // MM/DD/YYYY by reading the parts directly — avoids the timezone shift that
     // `new Date(...)` can introduce (which turned 07/17 into 08/17, etc.).
@@ -184,6 +256,30 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         const nextDueDate = new Date(dueYear, dueMonth, billingDay);
         dueDateString = `${String(nextDueDate.getMonth() + 1).padStart(2, '0')}/${String(nextDueDate.getDate()).padStart(2, '0')}/${nextDueDate.getFullYear()}`;
     }
+
+    // ── Prepaid: the card shows the end of the paid period, not an invoice due date ──────────
+    // A prepaid customer's service is governed by prepaid_expires_at, so a billing-day due date
+    // is meaningless to them. Show the expiry plus how long they have left.
+    const prepaidDaysLeft = useMemo(() => {
+        if (!isPrepaid || !prepaidExpiresAt) return null;
+        // Replace the space so the string parses on both iOS and Android.
+        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T')).getTime();
+        if (isNaN(expiry)) return null;
+        // Rounded UP, so any remaining part of a day still reads as "1 day left" rather than 0.
+        return Math.ceil((expiry - Date.now()) / (24 * 60 * 60 * 1000));
+    }, [isPrepaid, prepaidExpiresAt]);
+
+    const dueDateLabel = isPrepaid ? 'Expires' : 'Due Date';
+    const dueDateValue = isPrepaid
+        ? (formatDbDate(prepaidExpiresAt) ?? 'Not started')
+        : dueDateString;
+
+    // null when there is nothing meaningful to say (postpaid, or a prepaid clock not yet started).
+    const prepaidDaysLeftText = useMemo(() => {
+        if (prepaidDaysLeft === null) return null;
+        if (prepaidDaysLeft <= 0) return 'Expired';
+        return `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'} left`;
+    }, [prepaidDaysLeft]);
 
     useEffect(() => {
         const loadData = async () => {
@@ -337,21 +433,49 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 setPendingPayment(pending);
                 setShowPendingPaymentModal(true);
             } else {
-                setPaymentAmount(balance);
-                setShowPaymentVerifyModal(true);
+                openVerifyModal();
             }
         } catch (error: any) {
             console.error('Error checking pending payment:', error);
-            setPaymentAmount(balance);
-            setShowPaymentVerifyModal(true);
+            openVerifyModal();
         } finally {
             setIsPaymentProcessing(false);
         }
     };
 
+    /**
+     * Open the confirm-payment sheet with the right starting amount.
+     *
+     * Prepaid: preselect the plan they are currently on and set the amount to that plan's price —
+     * they are buying a service period, so the amount always tracks the selected plan.
+     * Postpaid: unchanged, the amount starts at the outstanding balance.
+     */
+    function openVerifyModal() {
+        if (isPrepaid) {
+            // A queued switch wins over the plan currently in force: the customer has already
+            // bought it, so a top-up must be priced at that plan, not the one being replaced.
+            const preselected = pendingPlan ?? currentPlan ?? plans[0] ?? null;
+            setSelectedPlanId(preselected?.id ?? null);
+            setPaymentAmount(Number(preselected?.price ?? 0));
+        } else {
+            setPaymentAmount(balance);
+        }
+        setIsPlanListOpen(false);
+        setShowPaymentVerifyModal(true);
+    }
+
+    /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
+    const handleSelectPlan = (plan: Plan) => {
+        setSelectedPlanId(plan.id);
+        setPaymentAmount(Number(plan.price ?? 0));
+        setIsPlanListOpen(false);
+        setErrorMessage('');
+    };
+
     function handleCloseVerifyModal() {
         setShowPaymentVerifyModal(false);
-        setPaymentAmount(balance);
+        setIsPlanListOpen(false);
+        setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
     const handleProceedToCheckout = async () => {
@@ -363,7 +487,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             return;
         }
 
-        if (paymentAmount < balance) {
+        // Prepaid pays the selected plan's price, which can legitimately be LESS than the
+        // outstanding balance (a downgrade). The postpaid "must cover your balance" rule is
+        // replaced by "must have picked a plan" rather than applied on top of it.
+        if (isPrepaid) {
+            if (!selectedPlan) {
+                setErrorMessage('Please select a plan to continue.');
+                return;
+            }
+        } else if (paymentAmount < balance) {
             setErrorMessage(`Payment amount must be at least your current balance of ₱${formatCurrency(balance)}`);
             return;
         }
@@ -375,7 +507,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
         try {
             const redirectUrl = LinkingExpo.createURL('payment-success');
-            const response = await paymentService.createPayment(accountNo, paymentAmount, redirectUrl);
+            const response = await paymentService.createPayment(
+                accountNo,
+                paymentAmount,
+                redirectUrl,
+                isPrepaid ? selectedPlanId : null
+            );
 
             if (response.status === 'success' && response.payment_url) {
                 setShowPaymentVerifyModal(false);
@@ -458,7 +595,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
     const handleDeletePendingPayment = async () => {
         if (!pendingPayment?.reference_no) return;
-
+        
         setIsPaymentProcessing(true);
         try {
             await paymentService.cancelPayment(pendingPayment.reference_no);
@@ -502,9 +639,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     <Text style={[styles.initialsText, { fontSize: isShort ? 18 : 20 }]}>{initials}</Text>
                                 </View>
                                 <View style={{ flex: 1, marginHorizontal: 12 }}>
-                                    <Text
-                                        allowFontScaling={false}
-                                        numberOfLines={1}
+                                    <Text 
+                                        allowFontScaling={false} 
+                                        numberOfLines={1} 
                                         adjustsFontSizeToFit
                                         style={[styles.customerNameText, { fontSize: isShort ? 16 : 18 }]}
                                     >
@@ -513,7 +650,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     <Text allowFontScaling={false} style={styles.customerAccountText}>Account No: {accountNo}</Text>
                                     {isCardFlipped && <Text allowFontScaling={false} numberOfLines={1} style={styles.customerAccountText}>{emailAddress}</Text>}
                                 </View>
-                                <Pressable
+                                <Pressable 
                                     onPress={handleFlipCard}
                                     style={({ pressed }) => ({
                                         opacity: pressed ? 0.6 : 1,
@@ -526,38 +663,50 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
                             {!isCardFlipped ? (
                                 <View style={{ minHeight: isShort ? 80 : 90 }}>
-                                    <View style={styles.billingRow}>
-                                        <View style={styles.billingLeft}>
-                                            <Text allowFontScaling={false} style={styles.balanceLabel}>Total Amount</Text>
-                                            <Text
-                                                numberOfLines={1}
-                                                adjustsFontSizeToFit
-                                                minimumFontScale={0.5}
-                                                allowFontScaling={false}
-                                                style={[styles.balanceAmountText, { fontSize: balance >= 1000 ? (isMobile ? (isShort ? 28 : 32) : 44) : (isMobile ? (isShort ? 36 : 40) : 56) }]}
-                                            >
-                                                {formatCurrency(balance)}
-                                            </Text>
-                                        </View>
-
-                                        <View style={styles.billingRightCol}>
-                                            <View style={styles.dueDateContainer}>
-                                                <Text allowFontScaling={false} style={styles.infoText}>Due Date: <Text allowFontScaling={false} style={styles.infoValue}>{dueDateString}</Text></Text>
-                                            </View>
-
-                                            <Pressable
-                                                onPress={handlePayNow}
-                                                disabled={isPaymentProcessing}
-                                                style={[styles.payBtn, { opacity: isPaymentProcessing ? 0.5 : 1 }]}
-                                            >
-                                                <View style={styles.payBtnInner}>
-                                                    <Text style={styles.payBtnText}>
-                                                        {isPaymentProcessing ? '...' : (pendingPayment ? 'Proceed' : 'Pay Now')}
-                                                    </Text>
-                                                </View>
-                                            </Pressable>
-                                        </View>
+                                <View style={styles.billingRow}>
+                                    <View style={styles.billingLeft}>
+                                        <Text allowFontScaling={false} style={styles.balanceLabel}>Total Amount</Text>
+                                        <Text 
+                                            numberOfLines={1} 
+                                            adjustsFontSizeToFit
+                                            minimumFontScale={0.5}
+                                            allowFontScaling={false}
+                                            style={[styles.balanceAmountText, { fontSize: balance >= 1000 ? (isMobile ? (isShort ? 28 : 32) : 44) : (isMobile ? (isShort ? 36 : 40) : 56) }]}
+                                        >
+                                            {formatCurrency(balance)}
+                                        </Text>
                                     </View>
+
+                                    <View style={styles.billingRightCol}>
+                                        <View style={styles.dueDateContainer}>
+                                            {/* Prepaid shows when the paid period ends; postpaid keeps the invoice due date. */}
+                                            <Text allowFontScaling={false} style={styles.infoText}>{dueDateLabel}: <Text allowFontScaling={false} style={styles.infoValue}>{dueDateValue}</Text></Text>
+                                            {prepaidDaysLeftText && (
+                                                <Text
+                                                    allowFontScaling={false}
+                                                    style={[
+                                                        styles.daysLeftText,
+                                                        prepaidDaysLeft !== null && prepaidDaysLeft <= 3 && styles.daysLeftUrgent,
+                                                    ]}
+                                                >
+                                                    {prepaidDaysLeftText}
+                                                </Text>
+                                            )}
+                                        </View>
+
+                                        <Pressable
+                                            onPress={handlePayNow}
+                                            disabled={isPaymentProcessing}
+                                            style={[styles.payBtn, { opacity: isPaymentProcessing ? 0.5 : 1 }]}
+                                        >
+                                            <View style={styles.payBtnInner}>
+                                                <Text style={styles.payBtnText}>
+                                                    {isPaymentProcessing ? '...' : (pendingPayment ? 'Proceed' : 'Pay Now')}
+                                                </Text>
+                                            </View>
+                                        </Pressable>
+                                    </View>
+                                </View>
                                 </View>
                             ) : (
                                 <View style={{ gap: 16, minHeight: isShort ? 80 : 90, justifyContent: 'center' }}>
@@ -597,7 +746,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             <Text style={styles.paymentAmountValue}>{formatCurrency(payment.amount)}</Text>
                                             <View style={[styles.statusBadgeSmall, { backgroundColor: 'transparent' }]}>
                                                 <Text style={[
-                                                    styles.statusTextSmall,
+                                                    styles.statusTextSmall, 
                                                     { color: (payment.status === 'Completed' || payment.status === 'PAID' || payment.status === 'Success' || payment.status === 'Done') ? '#16a34a' : (payment.status === 'Failed' ? '#ef4444' : '#374151') }
                                                 ]}>
                                                     {(payment.status || 'Posted').toUpperCase()}
@@ -622,11 +771,11 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                         const adIdx = (actualActiveIndex + stackIdx) % ads.length;
                                         const ad = ads[adIdx];
                                         const adWidth = width - (isMobile ? 32 : 48);
-
-                                        const translateX = stackIdx === 0
+                                        
+                                        const translateX = stackIdx === 0 
                                             ? stackAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -width] })
                                             : 0;
-
+                                        
                                         const scale = stackAnim.interpolate({
                                             inputRange: [0, 1],
                                             outputRange: [1 - (stackIdx * 0.05), 1 - (Math.max(0, stackIdx - 1) * 0.05)]
@@ -641,7 +790,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             inputRange: [0, 1],
                                             outputRange: [1 - (stackIdx * 0.3), 1 - (Math.max(0, stackIdx - 1) * 0.3)]
                                         });
-
+                                        
                                         return (
                                             <Animated.View
                                                 key={ad.id}
@@ -669,7 +818,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                 {/* Design Elements */}
                                                 <View style={[styles.adCircle, { top: -20, right: -20, width: 100, height: 100, opacity: 0.2 }]} />
                                                 <View style={[styles.adCircle, { bottom: -50, left: -30, width: 150, height: 150, opacity: 0.1 }]} />
-
+                                                
                                                 <View style={styles.adContent}>
                                                     <Text style={styles.adTitle}>{ad.title}</Text>
                                                     <Text style={styles.adDesc}>{ad.desc}</Text>
@@ -726,8 +875,8 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 <View style={styles.verifyRowMb}>
                                     <Text style={styles.verifyLabel}>Account Name</Text>
                                     <View style={{ flex: 1, alignItems: 'flex-end', marginLeft: 16 }}>
-                                        <Text
-                                            numberOfLines={1}
+                                        <Text 
+                                            numberOfLines={1} 
                                             adjustsFontSizeToFit
                                             style={styles.verifyValue}
                                         >
@@ -749,10 +898,106 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                             )}
 
+                            {/* Prepaid only: pick the plan being paid for. The amount below follows
+                                this selection, so the two can never disagree. */}
+                            {isPrepaid && (
+                                <View style={styles.planWrap}>
+                                    <Text style={styles.inputLabel}>Plan</Text>
+
+                                    {isLoadingPlans ? (
+                                        <View style={styles.planLoading}>
+                                            <ActivityIndicator size="small" color={colorPalette?.primary || '#111827'} />
+                                            <Text style={styles.planLoadingText}>Loading plans…</Text>
+                                        </View>
+                                    ) : plans.length === 0 ? (
+                                        <Text style={styles.planEmptyText}>
+                                            No plans are available right now. Please contact support.
+                                        </Text>
+                                    ) : (
+                                        <>
+                                            <Pressable
+                                                onPress={() => setIsPlanListOpen(open => !open)}
+                                                style={[styles.planTrigger, isPlanListOpen && { borderColor: colorPalette?.primary || '#7c3aed' }]}
+                                            >
+                                                <Text style={styles.planTriggerText} numberOfLines={1}>
+                                                    {selectedPlan
+                                                        ? `${selectedPlan.name} — ${formatCurrency(Number(selectedPlan.price ?? 0))}`
+                                                        : 'Select a plan'}
+                                                </Text>
+                                                <Text style={styles.planChevron}>{isPlanListOpen ? '▲' : '▼'}</Text>
+                                            </Pressable>
+
+                                            {isPlanListOpen && (
+                                                <View style={styles.planList}>
+                                                    <ScrollView
+                                                        style={{ maxHeight: 200 }}
+                                                        nestedScrollEnabled
+                                                        keyboardShouldPersistTaps="handled"
+                                                    >
+                                                        {plans.map(plan => {
+                                                            const isSelected = plan.id === selectedPlanId;
+                                                            const isCurrent = plan.id === currentPlan?.id;
+                                                            return (
+                                                                <Pressable
+                                                                    key={plan.id}
+                                                                    onPress={() => handleSelectPlan(plan)}
+                                                                    style={[
+                                                                        styles.planOption,
+                                                                        isSelected && { backgroundColor: (colorPalette?.primary || '#7c3aed') + '12' },
+                                                                    ]}
+                                                                >
+                                                                    <View style={{ flex: 1, marginRight: 8 }}>
+                                                                        <Text style={styles.planOptionName} numberOfLines={1}>
+                                                                            {plan.name}{isCurrent ? '  (current)' : ''}
+                                                                        </Text>
+                                                                        {!!plan.description && (
+                                                                            <Text style={styles.planOptionDesc} numberOfLines={1}>{plan.description}</Text>
+                                                                        )}
+                                                                    </View>
+                                                                    <Text style={[styles.planOptionPrice, isSelected && { color: colorPalette?.primary || '#7c3aed' }]}>
+                                                                        {formatCurrency(Number(plan.price ?? 0))}
+                                                                    </Text>
+                                                                </Pressable>
+                                                            );
+                                                        })}
+                                                    </ScrollView>
+                                                </View>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {/* Explain what this payment will actually do. Three distinct
+                                        cases, because a plan bought mid-period does not take
+                                        effect until the paid-for period lapses. */}
+                                    {selectedPlan && pendingPlan && selectedPlan.id === pendingPlan.id ? (
+                                        <Text style={styles.planNoteText}>
+                                            {pendingPlanName || selectedPlan.name} is already scheduled
+                                            {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                            This payment extends your service period.
+                                        </Text>
+                                    ) : selectedPlan && currentPlan && selectedPlan.id === currentPlan.id && pendingPlan ? (
+                                        <Text style={styles.planNoteText}>
+                                            You have {pendingPlan.name} scheduled
+                                            {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                            Paying for {selectedPlan.name} instead will cancel that change.
+                                        </Text>
+                                    ) : selectedPlan && currentPlan && selectedPlan.id !== currentPlan.id ? (
+                                        <Text style={styles.planNoteText}>
+                                            {isPrepaidPeriodActive && prepaidExpiresAt
+                                                ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
+                                                : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
+                                        </Text>
+                                    ) : null}
+                                </View>
+                            )}
+
                             <View style={styles.inputWrap}>
                                 <Text style={styles.inputLabel}>Payment Amount</Text>
                                 <TextInput
                                     keyboardType="decimal-pad"
+                                    // Prepaid buys a period at the plan's price, so the amount is
+                                    // driven entirely by the picker above and is not hand-editable.
+                                    editable={!isPrepaid}
                                     value={paymentAmount !== undefined && paymentAmount !== null ? paymentAmount.toString() : ''}
                                     onChangeText={(value) => {
                                         if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
@@ -767,21 +1012,27 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                         }
                                     }}
                                     placeholder="0.00"
-                                    style={styles.inputField}
+                                    style={[styles.inputField, isPrepaid && styles.inputFieldLocked]}
                                 />
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
-                                        {balance > 0 ? `Outstanding: ${formatCurrency(balance)}` : 'Minimum: ₱1.00'}
+                                        {isPrepaid
+                                            ? (selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above')
+                                            : (balance > 0 ? `Outstanding: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>
                             </View>
 
                             <Pressable
                                 onPress={handleProceedToCheckout}
-                                disabled={isPaymentProcessing || paymentAmount < 1 || (balance > 0 && paymentAmount < balance)}
+                                disabled={
+                                    isPaymentProcessing
+                                    || paymentAmount < 1
+                                    || (isPrepaid ? !selectedPlan : (balance > 0 && paymentAmount < balance))
+                                }
                                 style={[styles.primaryBtn, {
                                     backgroundColor: colorPalette?.primary || '#ef4444',
-                                    opacity: (isPaymentProcessing || paymentAmount < 1) ? 0.5 : 1,
+                                    opacity: (isPaymentProcessing || paymentAmount < 1 || (isPrepaid && !selectedPlan)) ? 0.5 : 1,
                                 }]}
                             >
                                 <Text style={styles.primaryBtnText}>
@@ -885,15 +1136,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 >
                                     <Text style={styles.primaryBtnText}>{isPaymentProcessing ? 'Processing...' : 'Resume Payment'}</Text>
                                 </Pressable>
-                                <Pressable
-                                    onPress={handleDeletePendingPayment}
+                                <Pressable 
+                                    onPress={handleDeletePendingPayment} 
                                     style={[styles.cancelBtn, { backgroundColor: '#fee2e2' }]}
                                     disabled={isPaymentProcessing}
                                 >
                                     <Text style={[styles.cancelBtnText, { color: '#dc2626' }]}>Cancel Payment</Text>
                                 </Pressable>
-                                <Pressable
-                                    onPress={handleCancelPendingPayment}
+                                <Pressable 
+                                    onPress={handleCancelPendingPayment} 
                                     style={styles.cancelBtn}
                                     disabled={isPaymentProcessing}
                                 >
@@ -997,6 +1248,9 @@ const styles = StyleSheet.create({
     balanceAmountText: { fontWeight: 'bold', color: '#ffffff' },
     infoText: { color: '#e5e7eb', fontSize: 12 },
     infoValue: { color: '#ffffff', fontWeight: 'bold', fontSize: 12 },
+    // Prepaid remaining-days line under the expiry, on the dark billing card.
+    daysLeftText: { color: '#d1d5db', fontSize: 11, marginTop: 2 },
+    daysLeftUrgent: { color: '#fca5a5', fontWeight: 'bold' },
     payBtn: { borderWidth: 1, borderColor: '#ffffff', paddingHorizontal: 32, paddingVertical: 10, borderRadius: 12 },
     payBtnInner: { alignItems: 'center' },
     payBtnText: { color: '#ffffff', fontWeight: 'bold', textAlign: 'center' },
@@ -1005,12 +1259,12 @@ const styles = StyleSheet.create({
     sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
     referralScroll: { maxHeight: 270 },
     referralContent: { gap: 12, paddingBottom: 8 },
-    paymentItem: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 14,
-        backgroundColor: 'transparent',
+    paymentItem: { 
+        flexDirection: 'row', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        paddingVertical: 14, 
+        backgroundColor: 'transparent', 
         borderBottomWidth: 1,
         borderBottomColor: '#f1f5f9'
     },
@@ -1055,6 +1309,21 @@ const styles = StyleSheet.create({
     inputWrap: { marginBottom: 32 },
     inputLabel: { fontWeight: '500', marginBottom: 8, color: '#374151', fontSize: 14 },
     inputField: { width: '100%', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, fontSize: 16, borderWidth: 1, borderColor: '#d1d5db', color: '#111827', backgroundColor: '#ffffff' },
+    // Prepaid: the amount is derived from the selected plan, so it reads as locked.
+    inputFieldLocked: { backgroundColor: '#f3f4f6', color: '#374151' },
+    planWrap: { marginBottom: 20 },
+    planTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', backgroundColor: '#ffffff' },
+    planTriggerText: { flex: 1, fontSize: 15, color: '#111827', fontWeight: '500' },
+    planChevron: { fontSize: 10, color: '#6b7280', marginLeft: 8 },
+    planList: { marginTop: 6, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff', overflow: 'hidden' },
+    planOption: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+    planOptionName: { fontSize: 14, color: '#111827', fontWeight: '500' },
+    planOptionDesc: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+    planOptionPrice: { fontSize: 14, color: '#374151', fontWeight: '700' },
+    planLoading: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
+    planLoadingText: { marginLeft: 8, fontSize: 14, color: '#6b7280' },
+    planEmptyText: { fontSize: 13, color: '#b45309', paddingVertical: 8 },
+    planNoteText: { fontSize: 12, color: '#6b7280', marginTop: 8, lineHeight: 17 },
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
     primaryBtn: { paddingVertical: 12, borderRadius: 50, width: '50%', alignSelf: 'center', alignItems: 'center' },

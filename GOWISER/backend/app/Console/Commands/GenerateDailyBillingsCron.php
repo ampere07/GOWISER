@@ -94,7 +94,7 @@ class GenerateDailyBillingsCron extends Command
                 // prepaid period (handled separately by generatePrepaidRenewalInvoices below), not
                 // on the fixed billing day, so they are excluded from this billing-day count.
                 ->where(function ($q) {
-                    $q->where('generation_type', '!=', 'Pre Paid')
+                    $q->whereNotIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
                       ->orWhereNull('generation_type');
                 })
                 ->select('account_no')

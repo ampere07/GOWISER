@@ -2501,7 +2501,10 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   </div>
                                   <div className={`text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                                     }`}>
-                                    {record.status} | ₱ {record.balance.toFixed(2)}
+                                    {/* Prepaid expiry sits between the status and the balance.
+                                        Post Paid accounts have no expiry, so the segment (and its
+                                        separator) is omitted entirely rather than showing a blank. */}
+                                    {record.status} | {record.prepaidExpiration ? `${formatDate(record.prepaidExpiration)} | ` : ''}₱ {record.balance.toFixed(2)}
                                   </div>
                                 </div>
                                 <div className="flex items-center space-x-2 ml-4 flex-shrink-0">

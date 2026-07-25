@@ -99,6 +99,12 @@ class BillingController extends Controller
                     'Balance_Update_Date' => $billingAccount->balance_update_date ? $billingAccount->balance_update_date->format('Y-m-d H:i:s') : null,
                     'Generation_Type' => $billingAccount->generation_type,
                     'Prepaid_Expires_At' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                    // Prepaid plan change already paid for but not yet in effect. Surfaced so the
+                    // transaction form can preselect it and not charge the outgoing plan's price.
+                    'Pending_Plan_Id' => $billingAccount->pending_plan_id,
+                    'Pending_Plan_Effective_At' => $billingAccount->pending_plan_effective_at
+                        ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
+                        : null,
                     'Vat_Type' => $billingAccount->vat_type,
 
                     'First_Name' => $customer ? $customer->first_name : null,
@@ -239,6 +245,12 @@ class BillingController extends Controller
                 'Balance_Update_Date' => $billingAccount->balance_update_date ? $billingAccount->balance_update_date->format('Y-m-d H:i:s') : null,
                 'Generation_Type' => $billingAccount->generation_type,
                 'Prepaid_Expires_At' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                // Prepaid plan change already paid for but not yet in effect. Surfaced so the
+                // transaction form can preselect it and not charge the outgoing plan's price.
+                'Pending_Plan_Id' => $billingAccount->pending_plan_id,
+                'Pending_Plan_Effective_At' => $billingAccount->pending_plan_effective_at
+                    ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
+                    : null,
                 'Vat_Type' => $billingAccount->vat_type,
 
                 'First_Name' => $customer ? $customer->first_name : null,

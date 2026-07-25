@@ -40,6 +40,16 @@ export interface CustomerDetailData {
     billingStatusName?: string;
     accountBalance: number;
     balanceUpdateDate?: string;
+    // These come back snake_cased from CustomerDetailController, unlike the fields above.
+    // 'Pre Paid' | 'Post Paid' — drives the plan picker in the Pay Now modal.
+    generation_type?: string | null;
+    vat_type?: string | null;
+    // End of the current prepaid service period.
+    prepaid_expires_at?: string | null;
+    // A plan already paid for that takes effect when the current period lapses.
+    pending_plan_id?: number | null;
+    pending_plan_name?: string | null;
+    pending_plan_effective_at?: string | null;
   };
 
   technicalDetails?: {

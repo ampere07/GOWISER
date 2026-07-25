@@ -36,6 +36,41 @@ interface ModalConfig {
   onCancel?: () => void;
 }
 
+/** Canonical Billing Type values. Labels and stored values are the same. */
+const GENERATION_TYPES = ['Prepaid', 'Postpaid'] as const;
+
+/** Available VAT computation modes, matching what the billing generator understands. */
+const VAT_TYPES = ['Vat Included', 'Excluded Vat', 'No Vat'] as const;
+
+/**
+ * Map any stored generation_type onto a canonical value so the <select> can match it.
+ *
+ * Rows written before the rename hold 'Pre Paid' / 'Post Paid'; without this they would show as
+ * an unselected dropdown and a careless save would blank the field.
+ */
+const normalizeGenerationType = (raw?: string | null): string => {
+  const letters = String(raw ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (letters === 'prepaid') return 'Prepaid';
+  if (letters === 'postpaid') return 'Postpaid';
+  return '';
+};
+
+/**
+ * Format a stored datetime for a `datetime-local` input ('YYYY-MM-DDTHH:mm').
+ *
+ * prepaid_expires_at carries a time (periods commonly end at 23:59), so a plain date input would
+ * silently truncate it to 00:00 on save and cut the customer's period short by up to a day.
+ * Parsed by string rather than via `new Date()` to avoid a timezone shift moving the date.
+ */
+const formatDateTimeForInput = (raw?: string | null): string => {
+  if (!raw) return '';
+  const text = String(raw).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2})?:?(\d{2})?/);
+  if (!match) return '';
+  const [, y, mo, d, h, mi] = match;
+  return `${y}-${mo}-${d}T${h ?? '00'}:${mi ?? '00'}`;
+};
+
 const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   isOpen,
   onClose,
@@ -209,7 +244,17 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           billing_day: recordData.billing_day || recordData.billingDay || recordData.Billing_Day || recordData.billingAccount?.billing_day || '',
           date_installed: formatDateForInput(recordData.date_installed || recordData.dateInstalled || recordData.Date_Installed || recordData.billingAccount?.date_installed || ''),
           vip_expiration: formatDateForInput(recordData.vip_expiration || recordData.vipExpiration || ''),
-          vip_remarks: recordData.vip_remarks || recordData.vipRemarks || recordData.billingAccount?.vip_remarks || ''
+          vip_remarks: recordData.vip_remarks || recordData.vipRemarks || recordData.billingAccount?.vip_remarks || '',
+          // Normalise the stored value to the canonical spelling so the <select> matches an option
+          // even for rows still holding the older 'Pre Paid' / 'Post Paid'.
+          generation_type: normalizeGenerationType(
+            recordData.generation_type || recordData.generationType || recordData.billingAccount?.generation_type || ''
+          ),
+          vat_type: recordData.vat_type || recordData.vatType || recordData.billingAccount?.vat_type || '',
+          // Only meaningful for prepaid accounts; the field is hidden for postpaid.
+          prepaid_expires_at: formatDateTimeForInput(
+            recordData.prepaid_expires_at || recordData.prepaidExpiration || recordData.billingAccount?.prepaid_expires_at || ''
+          )
         });
       } else if (editType === 'technical_details') {
         let lcpnapValue = recordData.lcpnap || recordData.LCPNAP || '';
@@ -682,6 +727,14 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     }
   };
 
+  /**
+   * Prepaid accounts bill on a rolling 30-day period that starts when they pay, so they have no
+   * fixed billing day — the field is hidden and not required for them, and the prepaid expiry is
+   * shown in its place. Letters-only compare so a row still holding 'Pre Paid' also resolves.
+   */
+  const isPrepaidBillingType =
+    String(formData.generation_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -696,7 +749,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       if (!formData.barangay?.trim()) newErrors.barangay = 'Barangay is required';
     } else if (editType === 'billing_details') {
       if (!formData.billing_status_id?.toString().trim()) newErrors.billing_status_id = 'Billing Status is required';
-      if (!formData.billing_day) newErrors.billing_day = 'Billing Day is required';
+      // Not required for prepaid: the field is hidden, so requiring it would block the save with
+      // an error the user cannot see or fix.
+      if (!isPrepaidBillingType && !formData.billing_day) newErrors.billing_day = 'Billing Day is required';
 
       const isVipStatus = billingStatuses.find(s => s.id.toString() === formData.billing_status_id?.toString())?.status_name.toUpperCase() === 'VIP' || formData.billing_status_id?.toString() === '7';
       if (isVipStatus) {
@@ -1392,6 +1447,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                 )}
 
+                {/* Billing Day is hidden for prepaid accounts — they bill on a rolling period,
+                    not a fixed day — and the prepaid expiry takes its place below. */}
+                {!isPrepaidBillingType && (
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Billing Day (1-30)<span className="text-red-500">*</span>
@@ -1427,6 +1485,117 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
                   />
                   {errors.billing_day && <p className="text-red-500 text-xs mt-1">{errors.billing_day}</p>}
+                </div>
+                )}
+
+                {/* Billing Type — the generation_type column. Switching this moves the account
+                    between the fixed-billing-day flow and the rolling prepaid-period flow. */}
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Billing Type
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={formData.generation_type || ''}
+                      onChange={(e) => handleInputChange('generation_type', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                        }`}
+                    >
+                      <option value="">Select Billing Type</option>
+                      {GENERATION_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+                  </div>
+                  {isPrepaidBillingType && (
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Prepaid accounts are billed on a rolling 30-day period that starts when they
+                      pay, so they have no fixed billing day.
+                    </p>
+                  )}
+                </div>
+
+                {/* Prepaid Expiration — only meaningful for prepaid accounts, so it is shown only
+                    when Billing Type is Prepaid. This is the end of the paid-for service period:
+                    it gates access (AutoDisconnectService restricts once it lapses) and is what a
+                    queued plan change waits for. */}
+                {isPrepaidBillingType && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Prepaid Expiration
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={formData.prepaid_expires_at || ''}
+                      onChange={(e) => handleInputChange('prepaid_expires_at', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                        }`}
+                    />
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {formData.prepaid_expires_at
+                        ? 'End of the current paid period. Service is restricted once this passes; a payment extends it by 30 days.'
+                        : 'Empty means the prepaid clock has not started — it begins on their first payment.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* VAT Type — how VAT is computed on this account's bills. */}
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    VAT Type
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={formData.vat_type || ''}
+                      onChange={(e) => handleInputChange('vat_type', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                        }`}
+                    >
+                      <option value="">Select VAT Type</option>
+                      {VAT_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+                  </div>
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {formData.vat_type === 'Excluded Vat'
+                      ? 'VAT is added on top of the plan price.'
+                      : formData.vat_type === 'No Vat'
+                        ? 'No VAT is applied — the bill is exactly the plan price.'
+                        : 'Vat Included means the plan price already contains VAT.'}
+                  </p>
                 </div>
 
                 <div>

@@ -55,6 +55,94 @@ class EnhancedBillingGenerationServiceWithNotifications
         return $this->resolvedVatRate;
     }
 
+    /** VAT computation modes resolved from billing_accounts.vat_type. */
+    protected const VAT_TYPE_INCLUDED = 'included';
+    protected const VAT_TYPE_EXCLUDED = 'excluded';
+    protected const VAT_TYPE_NONE = 'none';
+
+    /**
+     * Normalise billing_accounts.vat_type into one of the three computation modes.
+     *
+     * The stored values originate from the Job Order form ('Vat Included' / 'Excluded Vat' /
+     * 'No Vat') and are copied onto the billing account at approval. Matching is done on a
+     * lower-cased, letters-only form so equivalent spellings ('VAT Included', 'VAT Excluded',
+     * 'No VAT', 'Non-VAT', 'VAT Exempt') all resolve to the right mode.
+     *
+     * Anything unrecognised — including NULL on accounts created before vat_type existed —
+     * falls back to VAT Included, which is the historical behaviour of this generator.
+     */
+    protected function resolveVatType(?string $vatType): string
+    {
+        $normalized = preg_replace('/[^a-z]/', '', strtolower((string) $vatType));
+
+        if ($normalized === '') {
+            return self::VAT_TYPE_INCLUDED;
+        }
+
+        if (str_contains($normalized, 'novat')
+            || str_contains($normalized, 'nonvat')
+            || str_contains($normalized, 'exempt')) {
+            return self::VAT_TYPE_NONE;
+        }
+
+        if (str_contains($normalized, 'exclu')) {
+            return self::VAT_TYPE_EXCLUDED;
+        }
+
+        return self::VAT_TYPE_INCLUDED;
+    }
+
+    /**
+     * Split a plan-derived amount (monthly fee + any prorate) into its net / VAT / billable-total
+     * components according to the account's VAT type.
+     *
+     *  - Vat Included : the plan price already contains VAT, so VAT is unwrapped out of it and the
+     *                   billable total stays equal to the plan price. This reproduces the previous
+     *                   computation exactly, so existing customers bill identically.
+     *                   e.g. 1,000 @ 12% -> net 892.86, VAT 107.14, total 1,000.00
+     *  - Excluded Vat : VAT is added ON TOP of the plan price.
+     *                   e.g. 1,000 @ 12% -> net 1,000.00, VAT 120.00, total 1,120.00
+     *  - No Vat       : no VAT is applied at all; the bill is exactly the plan price.
+     *                   e.g. 1,000        -> net 1,000.00, VAT 0.00, total 1,000.00
+     *
+     * The VAT percentage is the one already configured for the system ({@see getVatRate()}).
+     * Only the plan portion is VAT-bearing here, exactly as before — staggered installation fees,
+     * service charges and deductions are untouched line items.
+     *
+     * @return array{net: float, vat: float, total: float, vat_type: string, vat_rate: float}
+     */
+    protected function calculateVatBreakdown(float $planAmount, ?string $vatType): array
+    {
+        $vatRate = $this->getVatRate();
+        $mode = $this->resolveVatType($vatType);
+
+        switch ($mode) {
+            case self::VAT_TYPE_NONE:
+                $vat = 0.0;
+                $net = $planAmount;
+                break;
+
+            case self::VAT_TYPE_EXCLUDED:
+                $vat = $planAmount * $vatRate;
+                $net = $planAmount;
+                break;
+
+            case self::VAT_TYPE_INCLUDED:
+            default:
+                $vat = ($planAmount / (1 + $vatRate)) * $vatRate;
+                $net = $planAmount - $vat;
+                break;
+        }
+
+        return [
+            'net' => $net,
+            'vat' => $vat,
+            'total' => $net + $vat,
+            'vat_type' => $mode,
+            'vat_rate' => $vatRate,
+        ];
+    }
+
     protected const DAYS_IN_MONTH = 30;
     protected const DAYS_UNTIL_DUE = 7;
     protected const DAYS_UNTIL_DC_NOTICE = 4;
@@ -245,7 +333,10 @@ class EnhancedBillingGenerationServiceWithNotifications
             // path only — NOT from the service as a whole. Post Paid and legacy NULL-generation_type
             // accounts bill normally here.
             ->where(function ($q) {
-                $q->where('generation_type', '!=', 'Pre Paid')
+                // Alias list, not a single '!=': a row still spelled 'Pre Paid' must stay excluded
+                // from the billing-day path, otherwise it would be billed twice (here AND by
+                // generatePrepaidRenewalInvoices).
+                $q->whereNotIn('generation_type', BillingAccount::PREPAID_ALIASES)
                   ->orWhereNull('generation_type');
             });
 
@@ -379,10 +470,25 @@ class EnhancedBillingGenerationServiceWithNotifications
             $reconProrate = $this->calculateReconnectionProrate($account, $statementDate, $plan->price);
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
-            $vatRate = $this->getVatRate();
-            $monthlyFeeGross = $effectiveProrateAmount / (1 + $vatRate);
-            $vat = $monthlyFeeGross * $vatRate;
-            $monthlyServiceFee = $effectiveProrateAmount - $vat;
+
+            // Apply the account's VAT type to the plan portion of the bill. For 'Vat Included'
+            // accounts $billablePlanAmount === $effectiveProrateAmount, so the resulting amounts
+            // are identical to before this branch existed.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account->vat_type);
+            $monthlyServiceFee = $vatBreakdown['net'];
+            $vat = $vatBreakdown['vat'];
+            $billablePlanAmount = $vatBreakdown['total'];
+
+            $this->log('info', 'Applied VAT computation to SOA plan amount', [
+                'account_no' => $account->account_no,
+                'vat_type' => $account->vat_type,
+                'vat_mode' => $vatBreakdown['vat_type'],
+                'vat_rate' => $vatBreakdown['vat_rate'],
+                'plan_amount' => round($effectiveProrateAmount, 2),
+                'monthly_service_fee' => round($monthlyServiceFee, 2),
+                'vat' => round($vat, 2),
+                'billable_plan_amount' => round($billablePlanAmount, 2)
+            ]);
 
             // Use statement ID as the reference for charges
             $charges = $this->calculateChargesAndDeductions(
@@ -397,7 +503,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $othersAndBasicCharges = 0;
 
-            $amountDue = $monthlyServiceFee + $vat + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+            $amountDue = $billablePlanAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
             
             $previousBalance = $this->getPreviousBalance($account, $statementDate);
             $paymentReceived = $charges['payment_received_previous'];
@@ -531,19 +637,35 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
 
+            // Apply the account's VAT type to the plan portion of the bill. For 'Vat Included'
+            // accounts $billablePlanAmount === $effectiveProrateAmount, so the resulting invoice
+            // is identical to before this branch existed.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account->vat_type);
+            $billablePlanAmount = $vatBreakdown['total'];
+
+            $this->log('info', 'Applied VAT computation to invoice plan amount', [
+                'account_no' => $account->account_no,
+                'vat_type' => $account->vat_type,
+                'vat_mode' => $vatBreakdown['vat_type'],
+                'vat_rate' => $vatBreakdown['vat_rate'],
+                'plan_amount' => round($effectiveProrateAmount, 2),
+                'vat' => round($vatBreakdown['vat'], 2),
+                'billable_plan_amount' => round($billablePlanAmount, 2)
+            ]);
+
             $charges = $this->calculateChargesAndDeductions(
-                $account, 
-                $invoiceDate, 
-                $userId, 
+                $account,
+                $invoiceDate,
+                $userId,
                 (string)$invoice->id,
                 $plan->price,
                 true,
                 true
             );
-            
+
             $othersBasicCharges = 0;
 
-            $totalAmount = $effectiveProrateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+            $totalAmount = $billablePlanAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
             
             if ($account->account_balance < 0) {
                 $totalAmount += $account->account_balance;
@@ -562,7 +684,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             }
 
             $invoice->update([
-                'invoice_balance' => round($effectiveProrateAmount, 2),
+                'invoice_balance' => round($billablePlanAmount, 2),
                 'others_and_basic_charges' => round($othersBasicCharges, 2),
                 'service_charge' => round($charges['service_fees'], 2),
                 'rebate' => round($charges['rebates'], 2),
@@ -587,7 +709,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $this->log('info', 'Invoice updated with discount applied to balance', [
                 'account_no' => $account->account_no,
-                'invoice_balance' => $effectiveProrateAmount,
+                'invoice_balance' => $billablePlanAmount,
                 'total_amount' => $totalAmount,
                 'discounts_applied' => $appliedDiscounts,
                 'previous_balance' => $account->account_balance,
@@ -1155,7 +1277,7 @@ class EnhancedBillingGenerationServiceWithNotifications
         $now = $generationDate->copy();
 
         $accounts = BillingAccount::with(['customer', 'technicalDetails', 'plan'])
-            ->where('generation_type', 'Pre Paid')
+            ->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
             ->whereNotNull('prepaid_expires_at')
             ->where('prepaid_expires_at', '<=', $now)
             ->whereNotNull('account_no')

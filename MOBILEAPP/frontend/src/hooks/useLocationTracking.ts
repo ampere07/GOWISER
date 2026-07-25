@@ -29,7 +29,10 @@ export function useLocationTracking() {
         if (!isTechnician(user)) return;
 
         const fg = await Location.requestForegroundPermissionsAsync();
-        if (fg.status !== 'granted') return;
+        if (fg.status !== 'granted') {
+          console.warn('[location] foreground permission not granted:', fg.status);
+          return;
+        }
 
         // Background permission lets updates continue when the app is minimized.
         // If denied, tracking still works while the app is in the foreground.
@@ -37,8 +40,13 @@ export function useLocationTracking() {
 
         if (cancelled) return;
         await startTechLocationUpdates();
-      } catch {
-        // Setup failure -> tracking simply stays off.
+      } catch (e) {
+        // Tracking stays off. This is almost always a native-manifest problem —
+        // startLocationUpdatesAsync() needs FOREGROUND_SERVICE / FOREGROUND_SERVICE_LOCATION
+        // (Android 14+) and ACCESS_BACKGROUND_LOCATION, which only the expo-location config
+        // plugin in app.json adds. Never swallow this silently: without the log there is no
+        // signal at all that the technician is not reporting.
+        console.warn('[location] failed to start technician tracking:', e);
       }
     })();
 

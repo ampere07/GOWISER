@@ -280,7 +280,7 @@ class AutoDisconnectService
         // Prepaid accounts are governed by their rolling prepaid period, not by overdue
         // invoices — they are restricted exclusively by processPrepaidRestrictions(). Never
         // subject them to the postpaid overdue-based auto-disconnect.
-        if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+        if (\App\Models\BillingAccount::isPrepaidType($billingAccount->generation_type ?? null)) {
             $this->writeLog("  [SKIP] Prepaid account — handled by prepaid restriction flow, not postpaid auto-disconnect");
             return ['success' => false, 'reason' => 'Prepaid account (handled separately)'];
         }
@@ -537,7 +537,7 @@ class AutoDisconnectService
 
             // Active prepaid accounts whose current service period has already lapsed.
             $accounts = BillingAccount::with(['technicalDetails', 'billingStatus'])
-                ->where('generation_type', 'Pre Paid')
+                ->whereIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
                 ->where('billing_status_id', $activeStatusId)
                 ->whereNotNull('prepaid_expires_at')
                 ->where('prepaid_expires_at', '<=', $now)
@@ -789,7 +789,7 @@ class AutoDisconnectService
                     }
 
                     // Prepaid accounts are never pulled out by the postpaid overdue flow.
-                    if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+                    if (\App\Models\BillingAccount::isPrepaidType($billingAccount->generation_type ?? null)) {
                         $this->writeLog("  [SKIP] Prepaid account — not subject to postpaid pullout");
                         $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
                         $skippedCount++;
@@ -1500,7 +1500,7 @@ class AutoDisconnectService
             }
 
             // Prepaid accounts don't accrue postpaid grace/proration charges.
-            if (($billingAccount->generation_type ?? null) === 'Pre Paid') {
+            if (\App\Models\BillingAccount::isPrepaidType($billingAccount->generation_type ?? null)) {
                 $this->writeLog("  [SKIP] Prepaid account — not subject to postpaid grace charge");
                 $skipped++;
                 continue;

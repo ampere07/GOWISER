@@ -182,6 +182,35 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         }
     }
 
+    // ── Prepaid: the card shows the end of the paid period, not an invoice due date ──────────
+    // A prepaid customer's service is governed by prepaid_expires_at, so an invoice due date is
+    // meaningless to them. Plain consts rather than useMemo: this runs after the early return
+    // above, where a hook would break the rules of hooks.
+    // Letters-only compare so a row still holding the older 'Pre Paid' also resolves.
+    const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
+        .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+    const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
+
+    let prepaidDaysLeft: number | null = null;
+    let prepaidExpiryString: string | null = null;
+    if (isPrepaid && prepaidExpiresAt) {
+        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T'));
+        if (!isNaN(expiry.getTime())) {
+            prepaidExpiryString = expiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            // Rounded UP, so any remaining part of a day still reads as "1 day left", not 0.
+            prepaidDaysLeft = Math.ceil((expiry.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+        }
+    }
+
+    const dueDateLabel = isPrepaid ? 'Expires' : 'Due';
+    const dueDateValue = isPrepaid ? (prepaidExpiryString ?? 'Not started') : dueDateString;
+    // null when there is nothing meaningful to say (postpaid, or a prepaid clock not yet started).
+    const prepaidDaysLeftText = prepaidDaysLeft === null
+        ? null
+        : prepaidDaysLeft <= 0
+            ? 'Expired'
+            : `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'} left`;
+
     // Restriction logic removed as requested
 
     // Payment Handlers
@@ -368,9 +397,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                         <div className="text-5xl md:text-6xl font-bold mb-4">₱{balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
                         <div className="text-white text-sm mb-8 flex items-center justify-center space-x-2 opacity-90">
                             <span>Reference: <span className="text-white font-medium">{accountNo}</span></span>
-                            {/* Due date could come from SOA service ideally */}
                             <span>|</span>
-                            <span>Due: <span className="text-white">{dueDateString}</span></span>
+                            {/* Prepaid shows when the paid period ends; postpaid keeps the invoice due date. */}
+                            <span>{dueDateLabel}: <span className="text-white">{dueDateValue}</span></span>
+                            {prepaidDaysLeftText && (
+                                <>
+                                    <span>|</span>
+                                    <span className={prepaidDaysLeft !== null && prepaidDaysLeft <= 3 ? 'text-red-300 font-bold' : 'text-gray-300'}>
+                                        {prepaidDaysLeftText}
+                                    </span>
+                                </>
+                            )}
                         </div>
 
                         <div className="flex justify-center space-x-4">

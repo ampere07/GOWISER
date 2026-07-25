@@ -122,6 +122,15 @@ class CustomerDetailController extends Controller
                     'generation_type' => $billingAccount->generation_type,
                     'vat_type' => $billingAccount->vat_type,
                     'prepaid_expires_at' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                    // Prepaid plan change bought but not yet in effect — the customer app shows
+                    // this so they can see the switch they already paid for and when it lands.
+                    'pending_plan_id' => $billingAccount->pending_plan_id,
+                    'pending_plan_name' => $billingAccount->pending_plan_id
+                        ? \App\Models\AppPlan::where('id', $billingAccount->pending_plan_id)->value('plan_name')
+                        : null,
+                    'pending_plan_effective_at' => $billingAccount->pending_plan_effective_at
+                        ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
+                        : null,
                 ],
                 
                 'technicalDetails' => $technicalDetail ? [

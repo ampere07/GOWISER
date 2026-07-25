@@ -20,6 +20,9 @@ export interface BillingRecord {
   vip_remarks?: string;
   generationType?: string;
   prepaidExpiration?: string;
+  // Prepaid plan change already paid for, taking effect when the current period lapses.
+  pendingPlanId?: number | null;
+  pendingPlanEffectiveAt?: string;
   vatType?: string;
   dateInstalled?: string;
   contactNumber?: string;

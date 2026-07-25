@@ -6,6 +6,7 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
+import { planService, Plan } from '../services/planService';
 import { API_BASE_URL } from '../config/api';
 
 interface ModalConfig {
@@ -40,6 +41,9 @@ interface TransactionFormData {
   transactionType: string;
   remarks: string;
   image: File | null;
+  // Prepaid only: id of the plan this payment buys. Stays null for postpaid accounts, whose
+  // plan field remains read-only.
+  selectedPlanId: number | null;
 }
 
 const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
@@ -86,9 +90,29 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       orNo: '',
       transactionType: 'Recurring Fee',
       remarks: '',
-      image: null
+      image: null,
+      selectedPlanId: null
     };
   });
+
+  // ── Prepaid plan selection ────────────────────────────────────────────────
+  // Only a prepaid customer buys a plan with their payment, so only they get an editable plan
+  // field. Postpaid keeps the existing read-only display.
+  // Letters-only comparison so both the canonical 'Prepaid' and the older 'Pre Paid' resolve —
+  // an account that has not been through the rename must still get the plan picker.
+  const isPrepaid = String(billingRecord?.generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
+
+  // Mirrors the backend's extractPlanName(): first token, before any ' - ' or space. Used to
+  // work out which plan the account is currently on so it can be preselected.
+  const extractPlanName = (raw?: string | null): string => {
+    if (!raw) return '';
+    let value = String(raw);
+    if (value.includes(' - ')) value = value.split(' - ')[0].trim();
+    if (value.includes(' ')) return value.split(' ')[0].trim();
+    return value.trim();
+  };
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -164,6 +188,39 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       fetchPaymentMethods();
     }
   }, [isOpen]);
+
+  // Load plans and preselect the account's current one, but only for prepaid customers —
+  // postpaid never sees a picker so there is nothing to fetch.
+  useEffect(() => {
+    if (!isOpen || !isPrepaid) return;
+    let cancelled = false;
+
+    (async () => {
+      setIsLoadingPlans(true);
+      try {
+        const fetched = await planService.getAllPlans();
+        if (cancelled) return;
+        const usable = fetched.filter(p => Number(p.price) > 0);
+        setPlans(usable);
+
+        // Preselect the plan the customer will actually be on next. A queued switch wins over
+        // the plan currently in force — otherwise staff would be shown (and would charge) the
+        // outgoing plan's price for a period that will be served on the new one.
+        setFormData(prev => {
+          if (prev.selectedPlanId) return prev;
+          const queued = billingRecord?.pendingPlanId
+            ? usable.find(p => p.id === Number(billingRecord.pendingPlanId))
+            : undefined;
+          const preselect = queued ?? usable.find(p => p.name === extractPlanName(prev.plan));
+          return preselect ? { ...prev, selectedPlanId: preselect.id, plan: preselect.name } : prev;
+        });
+      } finally {
+        if (!cancelled) setIsLoadingPlans(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isOpen, isPrepaid]);
 
   useEffect(() => {
     const fetchImageSizeSettings = async () => {
@@ -338,6 +395,9 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     if (!formData.accountNo.trim()) newErrors.accountNo = 'Account No. is required';
     if (!formData.plan.trim()) newErrors.plan = 'Plan is required';
+    // Prepaid buys a plan with the payment, so the choice must be explicit — the field is
+    // preselected to the current plan, so this only fires if staff blank it out.
+    if (isPrepaid && !formData.selectedPlanId) newErrors.plan = 'Select the plan this payment is for';
     if (!formData.accountBalance.trim()) newErrors.accountBalance = 'Account Balance is required';
     if (!formData.paymentDate.trim()) newErrors.paymentDate = 'Payment Date is required';
     if (!formData.receivedPayment.trim()) newErrors.receivedPayment = 'Received Payment is required';
@@ -411,6 +471,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         status: 'Pending',
         image_url: imageUrl,
         created_by_user: formData.processedBy,
+        // Prepaid only. Never sent for postpaid, so their plan can't be changed by a payment.
+        ...(isPrepaid && formData.selectedPlanId ? { selected_plan_id: formData.selectedPlanId } : {}),
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
@@ -568,19 +630,72 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             />
           </div>
 
-          {/* Plan */}
+          {/* Plan — editable for PREPAID accounts (they are buying a plan with this payment),
+              read-only for postpaid, which is the existing behaviour. */}
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
               Plan<span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
-              value={formData.plan}
-              readOnly
-              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-300 text-gray-600'
-                }`}
-            />
+
+            {isPrepaid ? (
+              <>
+                <div className="relative">
+                  <select
+                    value={formData.selectedPlanId ?? ''}
+                    disabled={isLoadingPlans || plans.length === 0}
+                    onChange={(e) => {
+                      const planId = e.target.value ? Number(e.target.value) : null;
+                      const picked = plans.find(p => p.id === planId);
+                      setFormData(prev => ({
+                        ...prev,
+                        selectedPlanId: planId,
+                        // Keep `plan` in sync so the existing required-field validation passes
+                        // and the label shown elsewhere stays truthful.
+                        plan: picked ? picked.name : prev.plan
+                      }));
+                      if (errors.plan) setErrors(prev => ({ ...prev, plan: '' }));
+                    }}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.plan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                      } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                      } ${(isLoadingPlans || plans.length === 0) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  >
+                    <option value="">
+                      {isLoadingPlans ? 'Loading plans…' : (plans.length === 0 ? 'No plans available' : 'Select a plan')}
+                    </option>
+                    {plans.map(plan => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name} — ₱{Number(plan.price ?? 0).toFixed(2)}
+                        {plan.name === extractPlanName(billingRecord?.plan) ? '  (current)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+                </div>
+                {billingRecord?.pendingPlanId ? (
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`}>
+                    A plan change is already scheduled
+                    {billingRecord?.pendingPlanEffectiveAt ? ` for ${String(billingRecord.pendingPlanEffectiveAt).split(' ')[0]}` : ''}
+                    {' '}— it is preselected above, so this payment is charged at that plan's price.
+                    Choosing the plan currently in force instead will cancel the scheduled change.
+                  </p>
+                ) : (
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Prepaid account — selecting a different plan schedules the switch for when the
+                    current prepaid period ends. If the period has already lapsed it applies on approval.
+                  </p>
+                )}
+              </>
+            ) : (
+              <input
+                type="text"
+                value={formData.plan}
+                readOnly
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-300 text-gray-600'
+                  }`}
+              />
+            )}
+            {errors.plan && <p className="text-red-500 text-xs mt-1">{errors.plan}</p>}
           </div>
 
           {/* Account Balance */}

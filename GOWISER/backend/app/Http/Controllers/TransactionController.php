@@ -138,6 +138,8 @@ class TransactionController extends Controller
                 'status' => 'nullable|string|max:100',
                 'image_url' => 'nullable|string|max:255',
                 'auto_apply_payment' => 'nullable|boolean',
+                // Prepaid only: the plan this payment buys. Acted on at approval.
+                'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
             ]);
 
             \Log::info('Transaction validation passed', [
@@ -211,7 +213,7 @@ class TransactionController extends Controller
                         $this->sendApprovalEmail($billingAccount, $appliedData['invoices_updated']['invoices_paid'] ?? [], $transaction->received_payment, $transaction->payment_date);
 
                         // Attempt reconnection for auto-applied payments
-                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
+                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
                     }
 
                 }
@@ -479,7 +481,7 @@ class TransactionController extends Controller
 
 
             // Attempt reconnection after successful approval
-            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
+            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
 
             event(new TransactionUpdated(['action' => 'approved', 'transaction_id' => $transactionId, 'account_no' => $accountNo]));
 
@@ -874,6 +876,9 @@ class TransactionController extends Controller
                 'or_no' => 'nullable|string|max:255',
                 'remarks' => 'nullable|string',
                 'image_url' => 'nullable|string|max:255',
+                // Kept editable while the transaction is still Pending, so a mis-keyed plan can
+                // be corrected before approval acts on it.
+                'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
             ]);
 
             DB::beginTransaction();
@@ -1088,7 +1093,7 @@ class TransactionController extends Controller
                     $accountPayments[$accountNo]['total'] += $paymentReceived;
 
                     // Attempt reconnection after successful approval
-                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date);
+                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
 
                     $results['success'][] = [
                         'transaction_id' => $transactionId,
@@ -1200,7 +1205,7 @@ class TransactionController extends Controller
      * Attempt to reconnect user account after transaction approval
      * Only reconnects if billing_status_id is not 1 (Active) and balance is 0 or negative
      */
-    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null): string
+    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null, $selectedPlanId = null): string
     {
         try {
             // Reload billing account to get latest balance and status
@@ -1226,6 +1231,21 @@ class TransactionController extends Controller
                 $prepaidRenewal = app(\App\Services\PrepaidRenewalService::class)->renewByAccountNo($accountNo, $prepaidPayDate);
                 if (!empty($prepaidRenewal['prepaid'])) {
                     \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}");
+                }
+
+                // Prepaid plan change bought at the counter. Mirrors PaymentWorkerService: either
+                // queue the switch for when the current period lapses (customer is mid-period on a
+                // plan they already paid for) or apply it now (their period had expired). MUST run
+                // after the renewal above — it reads that call's `mode` / `previous_expiry`, since
+                // the renewal has already moved prepaid_expires_at forward.
+                //
+                // Deliberately inside this same transaction-type guard: a Security Deposit or
+                // Installation Fee must never switch a customer's plan.
+                $planChange = app(\App\Services\PrepaidPlanChangeService::class)
+                    ->handleSettledPayment($accountNo, $selectedPlanId, $prepaidRenewal);
+                if (($planChange['action'] ?? 'none') !== 'none') {
+                    \Log::info("[TRANSACTION RECONNECT] Prepaid plan {$planChange['action']} for {$accountNo} — plan: {$planChange['plan']}"
+                        . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
                 }
             }
 

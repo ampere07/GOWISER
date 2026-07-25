@@ -11,6 +11,40 @@ class BillingAccount extends Model
 
     protected $table = 'billing_accounts';
 
+    /**
+     * Canonical generation_type ("Billing Type") values.
+     *
+     * These replaced the older spellings 'Pre Paid' / 'Post Paid'. Because prepaid detection
+     * drives billing, renewal and auto-disconnect, every read must tolerate BOTH spellings —
+     * rows written before the rename, or by an older client, must keep working. Use
+     * {@see isPrepaidType()} for PHP comparisons and {@see PREPAID_ALIASES} for SQL.
+     */
+    public const GENERATION_PREPAID = 'Prepaid';
+    public const GENERATION_POSTPAID = 'Postpaid';
+
+    /**
+     * Accepted spellings for SQL `whereIn` / `whereNotIn`.
+     *
+     * Only WHITESPACE variants need enumerating: the column collation is utf8mb4_unicode_ci, so
+     * the comparison is already case-insensitive and 'Prepaid' matches 'PrePaid' and 'PREPAID'.
+     * It is NOT whitespace-insensitive, which is why 'Pre Paid' has to be listed separately.
+     * 'PrePaid' is listed too so these lists stay correct under a case-sensitive collation.
+     */
+    public const PREPAID_ALIASES = ['Prepaid', 'PrePaid', 'Pre Paid'];
+    public const POSTPAID_ALIASES = ['Postpaid', 'PostPaid', 'Post Paid'];
+
+    /**
+     * Is this generation_type value a prepaid one, in any accepted spelling?
+     *
+     * Compared on a lower-cased, letters-only basis so 'Prepaid', 'Pre Paid', 'PRE-PAID' and
+     * 'pre paid' all resolve the same way. NULL/unknown is treated as NOT prepaid, which matches
+     * the historical default (legacy accounts with no generation_type bill as postpaid).
+     */
+    public static function isPrepaidType(?string $generationType): bool
+    {
+        return preg_replace('/[^a-z]/', '', strtolower((string) $generationType)) === 'prepaid';
+    }
+
     protected $fillable = [
         'customer_id',
         'account_no',
@@ -23,6 +57,10 @@ class BillingAccount extends Model
         'generation_type',
         'vat_type',
         'prepaid_expires_at',
+        // Prepaid plan change queued by a payment while the current period was still running.
+        // Applied (and cleared) by the prepaid:apply-pending-plans command once it falls due.
+        'pending_plan_id',
+        'pending_plan_effective_at',
         'created_by',
         'updated_by',
         'vip_expiration',
@@ -34,6 +72,7 @@ class BillingAccount extends Model
         'balance_update_date' => 'datetime',
         'account_balance' => 'decimal:2',
         'prepaid_expires_at' => 'datetime',
+        'pending_plan_effective_at' => 'datetime',
     ];
 
     public function customer()

@@ -293,7 +293,11 @@ class JobOrderController extends Controller
                 'installation_fee' => 'nullable|numeric|min:0',
                 'billing_day' => 'nullable|integer|min:0|max:31',
                 'billing_status' => 'nullable|string|max:255',
-                'generation_type' => 'nullable|string|in:Pre Paid,Post Paid|max:100',
+                // 'Prepaid'/'Postpaid' are canonical. The other spellings are accepted because
+                // Laravel's `in` rule is case- AND whitespace-sensitive, and production data shows
+                // older builds posted 'PrePaid' and 'Pre Paid' — rejecting those would 422 a job
+                // order assignment rather than just storing a non-canonical value.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid|max:100',
                 'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat|max:100',
                 'onsite_status' => 'nullable|string|max:255',
                 'assigned_email' => 'nullable|email|max:255',
@@ -1136,7 +1140,7 @@ class JobOrderController extends Controller
             // bill before service is granted. Setting the status inside the committed transaction
             // (rather than a post-commit flip) guarantees a prepaid account is durably Inactive the
             // instant approval commits — no window where a crash leaves it Active/unrestricted.
-            $isPrepaidAccount = ($jobOrder->generation_type === 'Pre Paid');
+            $isPrepaidAccount = \App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type);
             $newAccountStatusId = $isPrepaidAccount
                 ? (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4)
                 : 1;
@@ -1295,7 +1299,7 @@ class JobOrderController extends Controller
             // Best-effort by design: the approval transaction is already committed, so a billing
             // or RADIUS hiccup must never undo the approval. The generator's own per-cycle
             // idempotency guards mean re-running will not create duplicate invoices.
-            if ($jobOrder->generation_type === 'Pre Paid') {
+            if (\App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type)) {
                 try {
                     $billingAccount->load(['customer', 'technicalDetails']);
                     $initialBilling = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class)

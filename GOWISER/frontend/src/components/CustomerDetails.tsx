@@ -1572,6 +1572,18 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     addRow(["Account Number", billingRecord.applicationId || billingRecord.accountNo || (billingRecord as any).account_no]);
     addRow(["Billing Status", billingRecord.billingStatus]);
     addRow(["Billing Day", billingRecord.billingDay]);
+    // Billing Type, VAT Type and Prepaid Expiration are each rendered conditionally in the
+    // Billing Details section, so the export guards them the same way — an account without a
+    // value produces no row instead of a blank one. Order matches the on-screen section.
+    if (billingRecord.generationType) {
+      addRow(["Billing Type", billingRecord.generationType]);
+    }
+    if (billingRecord.vatType) {
+      addRow(["VAT Type", billingRecord.vatType]);
+    }
+    if (billingRecord.prepaidExpiration) {
+      addRow(["Prepaid Expiration", formatDateTime(billingRecord.prepaidExpiration)]);
+    }
     addRow(["Plan", billingRecord.plan]);
     addRow(["Account Balance", billingRecord.accountBalance]);
     addRow(["Total Paid", billingRecord.totalPaid]);
