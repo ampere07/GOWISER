@@ -18,7 +18,17 @@ class JobOrder extends Model
         'billing_day',
         'billing_status',
         'generation_type',
+        // Legacy free-text VAT mode, still written alongside vat_enabled so older readers of the
+        // job order (details view, exports) keep working.
         'vat_type',
+        'vat_enabled',
+        'withholding_enabled',
+        'withholding_percentage',
+        // VIP captured up front on the JO Assign Form. Copied verbatim onto the billing account
+        // at approval, which is also created with the VIP billing status — same VIP mechanism as
+        // before, just no longer needing a manual edit after approval.
+        'vip_enabled',
+        'vip_expiration',
         'modem_router_sn',
         'router_model',
         'group_name',
@@ -76,6 +86,11 @@ class JobOrder extends Model
         'date_installed' => 'datetime',
         'organization_id' => 'integer',
         'technicians' => 'array',
+        'vat_enabled' => 'boolean',
+        'withholding_enabled' => 'boolean',
+        'withholding_percentage' => 'decimal:2',
+        'vip_enabled' => 'boolean',
+        'vip_expiration' => 'datetime',
     ];
 
     public function application()

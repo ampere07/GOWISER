@@ -279,6 +279,29 @@ class JobOrderController extends Controller
             ], 500);
         }
     }
+    /**
+     * VIP is comped — a VIP account is billed nothing at all, so VAT and withholding are
+     * meaningless on it. The JO Assign Form disables both checkboxes when VIP is ticked; this
+     * enforces the same rule for anything posting to the API directly, so a stored job order —
+     * and the billing account approval copies it to — can never hold a contradictory combination.
+     *
+     * Only touches the payload when VIP is explicitly being turned on, so a partial update that
+     * never mentions vip_enabled is left alone.
+     */
+    private function normalizeVipBillingFlags(array $data): array
+    {
+        if (empty($data['vip_enabled'])) {
+            return $data;
+        }
+
+        $data['vat_enabled'] = false;
+        $data['vat_type'] = 'No Vat';
+        $data['withholding_enabled'] = false;
+        $data['withholding_percentage'] = null;
+
+        return $data;
+    }
+
     public function store(Request $request): JsonResponse
     {
         try {
@@ -298,7 +321,19 @@ class JobOrderController extends Controller
                 // older builds posted 'PrePaid' and 'Pre Paid' — rejecting those would 422 a job
                 // order assignment rather than just storing a non-canonical value.
                 'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid|max:100',
+                // Legacy free-text VAT mode. Still accepted (and still written by the current
+                // form) so older clients and the detail/export screens keep working, but
+                // vat_enabled below is what billing generation actually reads.
                 'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat|max:100',
+                'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
+                // VIP is the existing billing status, captured here so approval can create the
+                // account as VIP directly. Mutually exclusive with VAT and withholding — see the
+                // normalisation below.
+                'vip_enabled' => 'nullable|boolean',
+                'vip_expiration' => 'nullable|date',
                 'onsite_status' => 'nullable|string|max:255',
                 'assigned_email' => 'nullable|email|max:255',
                 'onsite_remarks' => 'nullable|string',
@@ -361,7 +396,9 @@ class JobOrderController extends Controller
             if (!isset($data['onsite_status'])) {
                 $data['onsite_status'] = 'Pending';
             }
-            
+
+            $data = $this->normalizeVipBillingFlags($data);
+
             \Log::info('JobOrder Creating with data', [
                 'data' => $data
             ]);
@@ -633,6 +670,12 @@ class JobOrderController extends Controller
                 'billing_day' => 'nullable|integer|min:0',
                 'onsite_status' => 'nullable|string|max:100',
                 'billing_status' => 'nullable|string|max:255',
+                // Same billing flags as store(); VIP forces the other two off on write.
+                'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
+                'vip_enabled' => 'nullable|boolean',
+                'vip_expiration' => 'nullable|date',
                 'assigned_email' => 'nullable|email|max:255',
                 'onsite_remarks' => 'nullable|string',
                 'status_remarks' => 'nullable|string|max:255',
@@ -692,6 +735,8 @@ class JobOrderController extends Controller
                 $data['username'] = $data['pppoe_username'];
             }
             
+            $data = $this->normalizeVipBillingFlags($data);
+
             \Log::info('JobOrder Updating with data', [
                 'id' => $id,
                 'data' => $data,
@@ -1145,6 +1190,23 @@ class JobOrderController extends Controller
                 ? (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4)
                 : 1;
 
+            // A job order flagged VIP is approved straight into the VIP billing status rather than
+            // Active, so the account is comped from day one without anyone having to edit the
+            // customer afterwards. VIP wins over the prepaid pay-first Inactive rule above: a
+            // comped account has nothing to pay, so holding it Inactive would only block service.
+            // Everything downstream is the pre-existing VIP flow — billing generation loads Active
+            // accounts only, and vip:check-expiration moves the account off VIP once
+            // vip_expiration passes, at which point normal billing resumes.
+            if ($jobOrder->vip_enabled) {
+                $newAccountStatusId = DB::table('billing_status')->where('status_name', 'VIP')->value('id') ?? 7;
+
+                \Log::info('Job order approved as VIP', [
+                    'job_order_id' => $jobOrder->id,
+                    'vip_expiration' => $jobOrder->vip_expiration,
+                    'billing_status_id' => $newAccountStatusId,
+                ]);
+            }
+
             $billingAccount = BillingAccount::create([
                 'customer_id' => $customer->id,
                 'account_no' => $accountNumber,
@@ -1156,6 +1218,16 @@ class JobOrderController extends Controller
                 'billing_status_id' => $newAccountStatusId,
                 'generation_type' => $jobOrder->generation_type,
                 'vat_type' => $jobOrder->vat_type,
+                // Billing settings captured on the JO Assign Form are carried onto the account,
+                // which is where the billing generation service reads them from. Coalesced so a
+                // job order created before these columns existed lands as an explicit false
+                // rather than NULL.
+                'vat_enabled' => (bool) ($jobOrder->vat_enabled ?? false),
+                'withholding_enabled' => (bool) ($jobOrder->withholding_enabled ?? false),
+                'withholding_percentage' => $jobOrder->withholding_percentage,
+                // Existing VIP column — the expiry the vip:check-expiration command already
+                // watches. Only meaningful alongside the VIP status set above.
+                'vip_expiration' => $jobOrder->vip_enabled ? $jobOrder->vip_expiration : null,
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
                 'updated_by' => $actionUserEmail,

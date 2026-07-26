@@ -270,7 +270,10 @@ class CustomerDetailUpdateController extends Controller
                 // Canonical plus legacy spellings — `in` is case- and whitespace-sensitive, and the
                 // value is normalised to canonical on write below regardless of what arrives.
                 'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid',
+                // Legacy free-text VAT mode. Still editable, but billing generation reads the
+                // boolean vat_enabled, which is kept in sync on write below.
                 'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat',
+                'vat_enabled' => 'nullable|boolean',
                 // End of the prepaid service period. Only sent for prepaid accounts; nullable so
                 // an account whose clock has not started yet can be saved with it empty.
                 'prepaid_expires_at' => 'nullable|date',
@@ -289,6 +292,11 @@ class CustomerDetailUpdateController extends Controller
                 'vip_remarks' => $billingAccount->vip_remarks,
                 'generation_type' => $billingAccount->generation_type,
                 'vat_type' => $billingAccount->vat_type,
+                // vat_enabled is what billing generation reads and it moves whenever vat_type
+                // does, so the audit diff has to carry it too.
+                'vat_enabled' => $billingAccount->vat_enabled,
+                'withholding_enabled' => $billingAccount->withholding_enabled,
+                'withholding_percentage' => $billingAccount->withholding_percentage,
                 'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 
@@ -352,8 +360,24 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['generation_type'] = $generationType;
             }
 
+            // Keep vat_type and vat_enabled in lockstep. Billing generation reads vat_enabled, so
+            // editing only the legacy text here would otherwise silently change nothing.
+            // 'Excluded Vat' is the only mode that still adds VAT; 'Vat Included' is gone and both
+            // it and 'No Vat' bill exactly the plan price, i.e. vat_enabled = false.
             if ($request->has('vat_type')) {
-                $updateData['vat_type'] = $validated['vat_type'] ?? null;
+                $vatType = $validated['vat_type'] ?? null;
+                $updateData['vat_type'] = $vatType;
+                $updateData['vat_enabled'] = str_contains(
+                    preg_replace('/[^a-z]/', '', strtolower((string) $vatType)),
+                    'exclu'
+                );
+            }
+
+            // An explicit boolean from a newer client wins, and drags the legacy text along.
+            if ($request->has('vat_enabled')) {
+                $vatEnabled = (bool) ($validated['vat_enabled'] ?? false);
+                $updateData['vat_enabled'] = $vatEnabled;
+                $updateData['vat_type'] = $vatEnabled ? 'Excluded Vat' : 'No Vat';
             }
 
             if ($request->has('prepaid_expires_at')) {
@@ -375,6 +399,11 @@ class CustomerDetailUpdateController extends Controller
                 'vip_remarks' => $billingAccount->vip_remarks,
                 'generation_type' => $billingAccount->generation_type,
                 'vat_type' => $billingAccount->vat_type,
+                // vat_enabled is what billing generation reads and it moves whenever vat_type
+                // does, so the audit diff has to carry it too.
+                'vat_enabled' => $billingAccount->vat_enabled,
+                'withholding_enabled' => $billingAccount->withholding_enabled,
+                'withholding_percentage' => $billingAccount->withholding_percentage,
                 'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 

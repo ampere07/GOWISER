@@ -453,6 +453,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       'billingDay',
       'generationType',
       'vatType',
+      'withholding',
       'prepaidExpiration',
       'vip_expiration',
       'vip_remarks',
@@ -740,7 +741,8 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
       generationType: 'Billing Type',
-      vatType: 'VAT Type',
+      vatType: 'VAT',
+      withholding: 'Withholding',
       prepaidExpiration: 'Prepaid Expiration',
       plan: 'Plan',
       accountBalance: 'Account Balance',
@@ -1195,12 +1197,27 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.generationType}>{billingRecord.generationType}</span>
         </div>
       ) : null,
-      vatType: () => billingRecord.vatType ? (
+      vatType: () => {
+        // Prefers the boolean; falls back to the legacy free-text mode for accounts created
+        // before vat_enabled existed, so those still show something meaningful.
+        const vatLabel = typeof billingRecord.vatEnabled === 'boolean'
+          ? (billingRecord.vatEnabled ? 'VAT Excluded' : 'No VAT')
+          : billingRecord.vatType;
+        return vatLabel ? (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>VAT</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`} title={vatLabel}>{vatLabel}</span>
+          </div>
+        ) : null;
+      },
+      withholding: () => billingRecord.withholdingEnabled ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>VAT Type</span>
+            }`}>Withholding</span>
           <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`} title={billingRecord.vatType}>{billingRecord.vatType}</span>
+            }`}>{billingRecord.withholdingPercentage ?? 0}%</span>
         </div>
       ) : null,
       prepaidExpiration: () => billingRecord.prepaidExpiration ? (
@@ -1578,8 +1595,14 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     if (billingRecord.generationType) {
       addRow(["Billing Type", billingRecord.generationType]);
     }
-    if (billingRecord.vatType) {
-      addRow(["VAT Type", billingRecord.vatType]);
+    const vatExportLabel = typeof billingRecord.vatEnabled === 'boolean'
+      ? (billingRecord.vatEnabled ? 'VAT Excluded' : 'No VAT')
+      : billingRecord.vatType;
+    if (vatExportLabel) {
+      addRow(["VAT", vatExportLabel]);
+    }
+    if (billingRecord.withholdingEnabled) {
+      addRow(["Withholding", `${billingRecord.withholdingPercentage ?? 0}%`]);
     }
     if (billingRecord.prepaidExpiration) {
       addRow(["Prepaid Expiration", formatDateTime(billingRecord.prepaidExpiration)]);

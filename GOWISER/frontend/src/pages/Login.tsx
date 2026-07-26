@@ -598,8 +598,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   alt="Logo"
                   style={{
                     height: '120px',
+                    // Tailwind Preflight makes <img> display:block, so the parent's
+                    // text-align:center does not centre it — auto margins do. Without this the
+                    // logo hugs the left edge on mobile, where the media query forces
+                    // .logo-section to width:100% instead of letting it shrink-wrap.
+                    display: 'block',
+                    maxWidth: '100%',
                     objectFit: 'contain',
-                    marginBottom: '10px'
+                    margin: '0 auto 10px'
                   }}
                   crossOrigin="anonymous"
                   referrerPolicy="no-referrer"

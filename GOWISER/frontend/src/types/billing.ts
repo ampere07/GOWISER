@@ -23,7 +23,13 @@ export interface BillingRecord {
   // Prepaid plan change already paid for, taking effect when the current period lapses.
   pendingPlanId?: number | null;
   pendingPlanEffectiveAt?: string;
+  /** Legacy free-text VAT mode. vatEnabled below is what billing generation actually reads. */
   vatType?: string;
+  /** false = No VAT (plan price billed as-is). true = VAT Excluded (VAT added on top). */
+  vatEnabled?: boolean | null;
+  withholdingEnabled?: boolean | null;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */
+  withholdingPercentage?: number | null;
   dateInstalled?: string;
   contactNumber?: string;
   secondContactNumber?: string;

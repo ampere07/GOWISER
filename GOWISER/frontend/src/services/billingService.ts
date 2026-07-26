@@ -187,6 +187,11 @@ export const getBillingRecordDetails = async (id: string): Promise<BillingDetail
         pendingPlanId: item.Pending_Plan_Id ?? null,
         pendingPlanEffectiveAt: item.Pending_Plan_Effective_At || '',
         vatType: item.Vat_Type || '',
+        // Null when absent so the UI can fall back to the legacy vatType text for accounts
+        // predating the boolean column.
+        vatEnabled: item.Vat_Enabled ?? null,
+        withholdingEnabled: item.Withholding_Enabled ?? null,
+        withholdingPercentage: item.Withholding_Percentage != null ? Number(item.Withholding_Percentage) : null,
         lcpnapport: item.LCPNAPPORT || '',
         referredBy: item.Referred_By || '',
         referrersAccountNumber: '',

@@ -111,6 +111,13 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     generationType: customerData.billingAccount?.generation_type || '',
     prepaidExpiration: customerData.billingAccount?.prepaid_expires_at || '',
     vatType: customerData.billingAccount?.vat_type || '',
+    // Left as null when absent rather than coerced to false, so the UI can fall back to the
+    // legacy vatType text for accounts predating the boolean column.
+    vatEnabled: customerData.billingAccount?.vat_enabled ?? null,
+    withholdingEnabled: customerData.billingAccount?.withholding_enabled ?? null,
+    withholdingPercentage: customerData.billingAccount?.withholding_percentage != null
+      ? Number(customerData.billingAccount.withholding_percentage)
+      : null,
   };
 };
 

@@ -46,6 +46,9 @@ export interface CustomerDetailData {
     generation_type?: string;
     prepaid_expires_at?: string;
     vat_type?: string;
+    vat_enabled?: boolean | null;
+    withholding_enabled?: boolean | null;
+    withholding_percentage?: number | string | null;
   };
 
   technicalDetails?: {

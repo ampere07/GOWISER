@@ -55,7 +55,12 @@ class BillingAccount extends Model
         'billing_day',
         'billing_status_id',
         'generation_type',
+        // Legacy free-text VAT mode. Superseded by the boolean vat_enabled below and kept only so
+        // the customer-detail screens and older clients keep reading/writing it.
         'vat_type',
+        'vat_enabled',
+        'withholding_enabled',
+        'withholding_percentage',
         'prepaid_expires_at',
         // Prepaid plan change queued by a payment while the current period was still running.
         // Applied (and cleared) by the prepaid:apply-pending-plans command once it falls due.
@@ -73,6 +78,11 @@ class BillingAccount extends Model
         'account_balance' => 'decimal:2',
         'prepaid_expires_at' => 'datetime',
         'pending_plan_effective_at' => 'datetime',
+        // NULL is preserved by these casts, which is what lets the billing generator tell
+        // "never configured" (fall back to vat_type) apart from an explicit false.
+        'vat_enabled' => 'boolean',
+        'withholding_enabled' => 'boolean',
+        'withholding_percentage' => 'decimal:2',
     ];
 
     public function customer()

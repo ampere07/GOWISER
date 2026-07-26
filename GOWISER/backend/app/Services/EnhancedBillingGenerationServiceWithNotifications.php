@@ -55,92 +55,157 @@ class EnhancedBillingGenerationServiceWithNotifications
         return $this->resolvedVatRate;
     }
 
-    /** VAT computation modes resolved from billing_accounts.vat_type. */
-    protected const VAT_TYPE_INCLUDED = 'included';
-    protected const VAT_TYPE_EXCLUDED = 'excluded';
-    protected const VAT_TYPE_NONE = 'none';
-
     /**
-     * Normalise billing_accounts.vat_type into one of the three computation modes.
+     * Is VAT applied to this account's plan amount?
      *
-     * The stored values originate from the Job Order form ('Vat Included' / 'Excluded Vat' /
-     * 'No Vat') and are copied onto the billing account at approval. Matching is done on a
-     * lower-cased, letters-only form so equivalent spellings ('VAT Included', 'VAT Excluded',
-     * 'No VAT', 'Non-VAT', 'VAT Exempt') all resolve to the right mode.
+     * VAT is a plain boolean now — either the plan price is billed as-is, or VAT is added on top
+     * of it. The 'Vat Included' mode (VAT unwrapped out of the plan price) no longer exists.
      *
-     * Anything unrecognised — including NULL on accounts created before vat_type existed —
-     * falls back to VAT Included, which is the historical behaviour of this generator.
+     * Reads billing_accounts.vat_enabled. Accounts written before that column existed carry NULL,
+     * so the legacy free-text vat_type is used as the fallback:
+     *
+     *   'Excluded Vat' -> true   VAT is added on top, same as before.
+     *   'Vat Included' -> false  It already billed a total EQUAL to the plan price, and so does
+     *                            "no VAT" — the total is unchanged, only the VAT line becomes 0.
+     *   'No Vat'       -> false  Unchanged.
+     *   NULL / unknown -> false  Bill exactly the plan price; never invent a 12% surcharge for an
+     *                            account nobody configured.
+     *
+     * Matching is on a lower-cased, letters-only form so 'Excluded Vat', 'VAT Excluded' and
+     * 'vat-excluded' all resolve the same way.
      */
-    protected function resolveVatType(?string $vatType): string
+    protected function isVatEnabled(BillingAccount $account): bool
     {
-        $normalized = preg_replace('/[^a-z]/', '', strtolower((string) $vatType));
-
-        if ($normalized === '') {
-            return self::VAT_TYPE_INCLUDED;
+        if ($account->vat_enabled !== null) {
+            return (bool) $account->vat_enabled;
         }
 
-        if (str_contains($normalized, 'novat')
-            || str_contains($normalized, 'nonvat')
-            || str_contains($normalized, 'exempt')) {
-            return self::VAT_TYPE_NONE;
-        }
+        $normalized = preg_replace('/[^a-z]/', '', strtolower((string) $account->vat_type));
 
-        if (str_contains($normalized, 'exclu')) {
-            return self::VAT_TYPE_EXCLUDED;
-        }
-
-        return self::VAT_TYPE_INCLUDED;
+        return str_contains($normalized, 'exclu');
     }
 
     /**
      * Split a plan-derived amount (monthly fee + any prorate) into its net / VAT / billable-total
-     * components according to the account's VAT type.
+     * components according to whether VAT is enabled on the account.
      *
-     *  - Vat Included : the plan price already contains VAT, so VAT is unwrapped out of it and the
-     *                   billable total stays equal to the plan price. This reproduces the previous
-     *                   computation exactly, so existing customers bill identically.
-     *                   e.g. 1,000 @ 12% -> net 892.86, VAT 107.14, total 1,000.00
-     *  - Excluded Vat : VAT is added ON TOP of the plan price.
-     *                   e.g. 1,000 @ 12% -> net 1,000.00, VAT 120.00, total 1,120.00
-     *  - No Vat       : no VAT is applied at all; the bill is exactly the plan price.
-     *                   e.g. 1,000        -> net 1,000.00, VAT 0.00, total 1,000.00
+     *  - VAT off : no VAT is applied at all; the bill is exactly the plan price.
+     *              e.g. 1,000        -> net 1,000.00, VAT 0.00, total 1,000.00
+     *  - VAT on  : VAT is added ON TOP of the plan price ("VAT Excluded").
+     *              e.g. 1,000 @ 12% -> net 1,000.00, VAT 120.00, total 1,120.00
      *
      * The VAT percentage is the one already configured for the system ({@see getVatRate()}).
      * Only the plan portion is VAT-bearing here, exactly as before — staggered installation fees,
      * service charges and deductions are untouched line items.
      *
-     * @return array{net: float, vat: float, total: float, vat_type: string, vat_rate: float}
+     * @return array{net: float, vat: float, total: float, vat_enabled: bool, vat_rate: float}
      */
-    protected function calculateVatBreakdown(float $planAmount, ?string $vatType): array
+    protected function calculateVatBreakdown(float $planAmount, BillingAccount $account): array
     {
         $vatRate = $this->getVatRate();
-        $mode = $this->resolveVatType($vatType);
+        $vatEnabled = $this->isVatEnabled($account);
 
-        switch ($mode) {
-            case self::VAT_TYPE_NONE:
-                $vat = 0.0;
-                $net = $planAmount;
-                break;
-
-            case self::VAT_TYPE_EXCLUDED:
-                $vat = $planAmount * $vatRate;
-                $net = $planAmount;
-                break;
-
-            case self::VAT_TYPE_INCLUDED:
-            default:
-                $vat = ($planAmount / (1 + $vatRate)) * $vatRate;
-                $net = $planAmount - $vat;
-                break;
-        }
+        $net = $planAmount;
+        $vat = $vatEnabled ? $planAmount * $vatRate : 0.0;
 
         return [
             'net' => $net,
             'vat' => $vat,
             'total' => $net + $vat,
-            'vat_type' => $mode,
+            'vat_enabled' => $vatEnabled,
             'vat_rate' => $vatRate,
         ];
+    }
+
+    /**
+     * Withholding tax deducted from the bill AFTER VAT has been applied.
+     *
+     * The base is the VAT-inclusive plan subtotal ({@see calculateVatBreakdown()}'s 'total'), so:
+     *
+     *   plan 1,000 + VAT 120 = 1,120 subtotal, withholding 5% -> 56.00 -> final 1,064.00
+     *
+     * Disabled, NULL, zero or negative percentages all deduct nothing, so an account that was
+     * never configured for withholding bills exactly as it did before. The percentage is clamped
+     * to 100 so a bad value can never turn the bill negative on its own.
+     *
+     * @return array{enabled: bool, percentage: float, amount: float}
+     */
+    protected function calculateWithholding(float $baseAmount, BillingAccount $account): array
+    {
+        $enabled = (bool) $account->withholding_enabled;
+        $percentage = is_numeric($account->withholding_percentage)
+            ? (float) $account->withholding_percentage
+            : 0.0;
+
+        if (!$enabled || $percentage <= 0) {
+            return ['enabled' => $enabled, 'percentage' => $percentage, 'amount' => 0.0];
+        }
+
+        $percentage = min($percentage, 100.0);
+
+        return [
+            'enabled' => true,
+            'percentage' => $percentage,
+            'amount' => round($baseAmount * ($percentage / 100), 2),
+        ];
+    }
+
+    /** Fallback VIP status id, matching the hard-coded value in the vip:check-expiration command. */
+    protected const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id (billing_status lookup performed once). */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Looked up by name so a reordered status table cannot silently break the VIP skip, with the
+     * historical id as the fallback. Resolved once per instance to avoid a per-account query
+     * during a batch run.
+     */
+    protected function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
+        }
+
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
+     * Should this account be skipped entirely by billing generation because it is a VIP?
+     *
+     * VIP is the account's billing status — the same one the JO Assign Form now sets at approval
+     * and that vip:check-expiration flips off once vip_expiration passes. There is no separate
+     * VIP flag to keep in sync.
+     *
+     * A VIP produces NO invoice, NO statement, NO billing record and NO notification — it is
+     * simply passed over, and starts billing again as soon as its status is no longer VIP.
+     *
+     * Most paths never reach this: {@see getActiveAccountsForBillingDay()} already loads only
+     * Active accounts. It exists for the two flows that bypass that filter — prepaid renewal and
+     * the initial bill raised at approval.
+     */
+    protected function isVipBillingSuspended(BillingAccount $account): bool
+    {
+        if ((int) $account->billing_status_id !== $this->getVipBillingStatusId()) {
+            return false;
+        }
+
+        $this->log('info', 'Skipped billing generation — account is a VIP', [
+            'account_no' => $account->account_no,
+            'vip_expiration' => $account->vip_expiration,
+        ]);
+
+        return true;
     }
 
     protected const DAYS_IN_MONTH = 30;
@@ -323,6 +388,10 @@ class EnhancedBillingGenerationServiceWithNotifications
             'technicalDetails',
             'plan'
         ])
+            // Active only. This is also what keeps VIP accounts out of scheduled billing: VIP is
+            // a billing status of its own, so a VIP is never loaded here and receives no invoice,
+            // no statement and no notification. Once vip:check-expiration moves the account off
+            // VIP it is picked up again with no manual intervention.
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
             ->whereNotNull('account_no')
@@ -471,22 +540,27 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
 
-            // Apply the account's VAT type to the plan portion of the bill. For 'Vat Included'
-            // accounts $billablePlanAmount === $effectiveProrateAmount, so the resulting amounts
-            // are identical to before this branch existed.
-            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account->vat_type);
+            // Apply VAT to the plan portion of the bill, then deduct withholding from that
+            // VAT-inclusive subtotal. With VAT off and withholding off $billablePlanAmount ===
+            // $effectiveProrateAmount, i.e. the bill is exactly the plan price.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account);
             $monthlyServiceFee = $vatBreakdown['net'];
             $vat = $vatBreakdown['vat'];
-            $billablePlanAmount = $vatBreakdown['total'];
 
-            $this->log('info', 'Applied VAT computation to SOA plan amount', [
+            $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+            $billablePlanAmount = $vatBreakdown['total'] - $withholding['amount'];
+
+            $this->log('info', 'Applied VAT and withholding computation to SOA plan amount', [
                 'account_no' => $account->account_no,
-                'vat_type' => $account->vat_type,
-                'vat_mode' => $vatBreakdown['vat_type'],
+                'vat_enabled' => $vatBreakdown['vat_enabled'],
                 'vat_rate' => $vatBreakdown['vat_rate'],
                 'plan_amount' => round($effectiveProrateAmount, 2),
                 'monthly_service_fee' => round($monthlyServiceFee, 2),
                 'vat' => round($vat, 2),
+                'subtotal_with_vat' => round($vatBreakdown['total'], 2),
+                'withholding_enabled' => $withholding['enabled'],
+                'withholding_percentage' => $withholding['percentage'],
+                'withholding_amount' => $withholding['amount'],
                 'billable_plan_amount' => round($billablePlanAmount, 2)
             ]);
 
@@ -637,19 +711,24 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
 
-            // Apply the account's VAT type to the plan portion of the bill. For 'Vat Included'
-            // accounts $billablePlanAmount === $effectiveProrateAmount, so the resulting invoice
-            // is identical to before this branch existed.
-            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account->vat_type);
-            $billablePlanAmount = $vatBreakdown['total'];
+            // Apply VAT to the plan portion of the bill, then deduct withholding from that
+            // VAT-inclusive subtotal, so the invoice's total_amount below is the FINAL amount the
+            // customer owes. With VAT off and withholding off $billablePlanAmount ===
+            // $effectiveProrateAmount, i.e. the bill is exactly the plan price.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account);
+            $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+            $billablePlanAmount = $vatBreakdown['total'] - $withholding['amount'];
 
-            $this->log('info', 'Applied VAT computation to invoice plan amount', [
+            $this->log('info', 'Applied VAT and withholding computation to invoice plan amount', [
                 'account_no' => $account->account_no,
-                'vat_type' => $account->vat_type,
-                'vat_mode' => $vatBreakdown['vat_type'],
+                'vat_enabled' => $vatBreakdown['vat_enabled'],
                 'vat_rate' => $vatBreakdown['vat_rate'],
                 'plan_amount' => round($effectiveProrateAmount, 2),
                 'vat' => round($vatBreakdown['vat'], 2),
+                'subtotal_with_vat' => round($vatBreakdown['total'], 2),
+                'withholding_enabled' => $withholding['enabled'],
+                'withholding_percentage' => $withholding['percentage'],
+                'withholding_amount' => $withholding['amount'],
                 'billable_plan_amount' => round($billablePlanAmount, 2)
             ]);
 
@@ -1199,6 +1278,15 @@ class EnhancedBillingGenerationServiceWithNotifications
         $invoice = null;
 
         try {
+            // 0. VIP guard: a VIP account gets no initial bill at all. Unlike the scheduled
+            // paths this one runs on the account handed to it, so the Active-only filter in
+            // getActiveAccountsForBillingDay() does not apply and the check has to happen here.
+            if ($this->isVipBillingSuspended($account)) {
+                $result['success'] = true;
+                $result['skipped'] = true;
+                return $result;
+            }
+
             // 1. SOA — skip if one already exists for this billing cycle.
             if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
                 $this->log('info', 'Initial billing: SOA already exists for this cycle, skipping', [
@@ -1290,6 +1378,14 @@ class EnhancedBillingGenerationServiceWithNotifications
 
         foreach ($accounts as $account) {
             try {
+                // VIP guard: a VIP gets no renewal bill either. This scan deliberately ignores
+                // billing_status (an expired prepaid is usually already Inactive), so VIP has to
+                // be excluded explicitly here.
+                if ($this->isVipBillingSuspended($account)) {
+                    $results['skipped']++;
+                    continue;
+                }
+
                 // Never stack a new renewal on top of an existing outstanding bill: if the
                 // customer still owes an Unpaid/Partial invoice, that IS their renewal bill.
                 $hasOutstanding = Invoice::where('account_no', $account->account_no)

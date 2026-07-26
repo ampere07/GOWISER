@@ -106,6 +106,10 @@ class BillingController extends Controller
                         ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
                         : null,
                     'Vat_Type' => $billingAccount->vat_type,
+                    'Vat_Enabled' => $billingAccount->vat_enabled,
+                    'Withholding_Enabled' => $billingAccount->withholding_enabled,
+                    'Withholding_Percentage' => $billingAccount->withholding_percentage,
+                    'Vip_Expiration' => $billingAccount->vip_expiration,
 
                     'First_Name' => $customer ? $customer->first_name : null,
                     'Middle_Initial' => $customer ? $customer->middle_initial : null,
@@ -252,6 +256,10 @@ class BillingController extends Controller
                     ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
                     : null,
                 'Vat_Type' => $billingAccount->vat_type,
+                'Vat_Enabled' => $billingAccount->vat_enabled,
+                'Withholding_Enabled' => $billingAccount->withholding_enabled,
+                'Withholding_Percentage' => $billingAccount->withholding_percentage,
+                'Vip_Expiration' => $billingAccount->vip_expiration,
 
                 'First_Name' => $customer ? $customer->first_name : null,
                 'Middle_Initial' => $customer ? $customer->middle_initial : null,

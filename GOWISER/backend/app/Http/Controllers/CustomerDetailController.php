@@ -121,6 +121,11 @@ class CustomerDetailController extends Controller
                     'vip_remarks' => $billingAccount->vip_remarks,
                     'generation_type' => $billingAccount->generation_type,
                     'vat_type' => $billingAccount->vat_type,
+                    // Boolean VAT plus withholding, carried over from the job order at approval.
+                    // vat_type above is the legacy text kept in sync for older readers.
+                    'vat_enabled' => $billingAccount->vat_enabled,
+                    'withholding_enabled' => $billingAccount->withholding_enabled,
+                    'withholding_percentage' => $billingAccount->withholding_percentage,
                     'prepaid_expires_at' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
                     // Prepaid plan change bought but not yet in effect — the customer app shows
                     // this so they can see the switch they already paid for and when it lands.

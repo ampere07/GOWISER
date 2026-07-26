@@ -151,7 +151,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     'billingDay',
     'choosePlan',
     'generationType',
+    'vip',
     'vatType',
+    'withholding',
     'statusRemarks',
     'remarks',
     'installationLandmark',
@@ -1111,15 +1113,45 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         );
 
-      case 'vatType':
-        const vatType = jobOrder.vat_type || jobOrder.Vat_Type;
+      // A VIP job order is approved into the VIP billing status and is never billed, so VAT and
+      // withholding are suppressed on it — the same rule the JO Assign Form enforces.
+      case 'vip': {
+        if (!jobOrder.vip_enabled) return null;
+        const vipExpiration = jobOrder.vip_expiration;
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>VIP:</div>
+            <div className={valueClass}>
+              Yes{vipExpiration ? ` — expires ${formatDate(vipExpiration)}` : ''}
+            </div>
+          </div>
+        );
+      }
+
+      case 'vatType': {
+        if (jobOrder.vip_enabled) return null;
+        // Falls back to the legacy text for job orders created before vat_enabled existed.
+        const vatType = jobOrder.vat_enabled === true || jobOrder.vat_enabled === false
+          ? (jobOrder.vat_enabled ? 'VAT Excluded' : 'No VAT')
+          : (jobOrder.vat_type || jobOrder.Vat_Type);
         if (!vatType) return null;
         return (
           <div className={baseFieldClass}>
-            <div className={labelClass}>VAT Type:</div>
+            <div className={labelClass}>VAT:</div>
             <div className={valueClass}>{vatType}</div>
           </div>
         );
+      }
+
+      case 'withholding': {
+        if (jobOrder.vip_enabled || !jobOrder.withholding_enabled) return null;
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>Withholding:</div>
+            <div className={valueClass}>{jobOrder.withholding_percentage ?? 0}%</div>
+          </div>
+        );
+      }
 
       case 'statusRemarks':
         const statusRemarks = jobOrder.Status_Remarks || jobOrder.status_remarks;

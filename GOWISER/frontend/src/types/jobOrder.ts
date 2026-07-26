@@ -70,8 +70,19 @@ export interface JobOrder {
   billing_status?: string | null;
   Generation_Type?: string | null;
   generation_type?: string | null;
+  // Legacy free-text VAT mode. Kept in sync with vat_enabled for older readers; billing
+  // generation reads vat_enabled.
   Vat_Type?: string | null;
   vat_type?: string | null;
+  /** false = No VAT (bill the plan price). true = VAT Excluded (VAT added on top). */
+  vat_enabled?: boolean | null;
+  withholding_enabled?: boolean | null;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */
+  withholding_percentage?: number | null;
+  /** Approves the account into the VIP billing status. Excludes VAT and withholding. */
+  vip_enabled?: boolean | null;
+  /** Copied to billing_accounts.vip_expiration at approval — the existing VIP expiry. */
+  vip_expiration?: string | null;
 
   // Technical Information
   Modem_Router_SN?: string | null;

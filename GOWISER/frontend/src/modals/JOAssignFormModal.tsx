@@ -49,7 +49,15 @@ interface JOFormData {
   installationFee: number | string;
   billingDay: string;
   generationType: string;
-  vatType: string;
+  /** Unchecked = No VAT (bill the plan price). Checked = VAT Excluded (VAT added on top). */
+  vatEnabled: boolean;
+  withholdingEnabled: boolean;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. Only used when withholding is on. */
+  withholdingPercentage: number | string;
+  /** Approves the account straight into the VIP billing status. Excludes VAT and withholding. */
+  vipEnabled: boolean;
+  /** yyyy-MM-dd. Copied to billing_accounts.vip_expiration, the existing VIP expiry. */
+  vipExpiration: string;
 
   onsiteStatus: string;
   assignedEmail: string;
@@ -109,7 +117,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     installationFee: 0,
     billingDay: '',
     generationType: '',
-    vatType: '',
+    vatEnabled: false,
+    withholdingEnabled: false,
+    withholdingPercentage: '',
+    vipEnabled: false,
+    vipExpiration: '',
 
     onsiteStatus: 'In Progress',
     assignedEmail: '',
@@ -477,12 +489,34 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
         newData.barangay = '';
       } else if (field === 'city') {
         newData.barangay = '';
+      } else if (field === 'withholdingEnabled' && value === false) {
+        // Clear the hidden input so an unchecked box never submits a stale percentage.
+        newData.withholdingPercentage = '';
+      } else if (field === 'vipEnabled') {
+        if (value === true) {
+          // A VIP is comped — it is never billed, so VAT and withholding cannot apply. Clearing
+          // them here (on top of disabling the checkboxes) means ticking VIP after configuring
+          // VAT/withholding can't leave contradictory values behind.
+          newData.vatEnabled = false;
+          newData.withholdingEnabled = false;
+          newData.withholdingPercentage = '';
+        } else {
+          newData.vipExpiration = '';
+        }
       }
 
       return newData;
     });
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+    // A dependent field is hidden once its checkbox is cleared, so drop any error it left behind
+    // — otherwise submission is blocked by a message the user can no longer see or fix.
+    if ((field === 'withholdingEnabled' && value === false) || (field === 'vipEnabled' && value === true)) {
+      setErrors(prev => ({ ...prev, withholdingPercentage: '' }));
+    }
+    if (field === 'vipEnabled' && value === false) {
+      setErrors(prev => ({ ...prev, vipExpiration: '' }));
     }
   };
 
@@ -603,8 +637,22 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       newErrors.generationType = 'Billing Type is required';
     }
 
-    if (!formData.vatType.trim()) {
-      newErrors.vatType = 'VAT Type is required';
+    // Only validated when the checkbox is on: the inputs below are hidden otherwise, so
+    // requiring them would block submission with an error the user cannot see or fix.
+    // VIP suppresses withholding entirely, so its percentage is not validated in that case.
+    if (formData.withholdingEnabled && !formData.vipEnabled) {
+      const withholdingPercentage = parseFloat(String(formData.withholdingPercentage));
+      if (isNaN(withholdingPercentage)) {
+        newErrors.withholdingPercentage = 'Withholding Percentage is required';
+      } else if (withholdingPercentage <= 0) {
+        newErrors.withholdingPercentage = 'Withholding Percentage must be greater than 0';
+      } else if (withholdingPercentage > 100) {
+        newErrors.withholdingPercentage = 'Withholding Percentage cannot exceed 100';
+      }
+    }
+
+    if (formData.vipEnabled && !formData.vipExpiration.trim()) {
+      newErrors.vipExpiration = 'Expiration Date is required when VIP is enabled';
     }
 
     if (formData.status === 'Confirmed') {
@@ -647,7 +695,20 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       installation_fee: Number(data.installationFee) || 0,
       billing_day: parseInt(data.billingDay) || 30,
       generation_type: toNullIfEmpty(data.generationType),
-      vat_type: toNullIfEmpty(data.vatType),
+      // A VIP is comped and never billed, so VAT and withholding are forced off for it. The
+      // backend applies the same rule, so a direct API caller cannot bypass it either.
+      vat_enabled: !data.vipEnabled && Boolean(data.vatEnabled),
+      // Legacy text column, kept in sync with the boolean so the job order detail view, exports
+      // and any older client that still reads vat_type keep showing the right thing.
+      vat_type: !data.vipEnabled && data.vatEnabled ? 'Excluded Vat' : 'No Vat',
+      withholding_enabled: !data.vipEnabled && Boolean(data.withholdingEnabled),
+      withholding_percentage: !data.vipEnabled && data.withholdingEnabled
+        ? Number(data.withholdingPercentage) || 0
+        : null,
+      vip_enabled: Boolean(data.vipEnabled),
+      // Existing VIP expiry column. Approval copies it to the billing account and creates that
+      // account with the VIP billing status, so no post-approval edit is needed.
+      vip_expiration: data.vipEnabled ? toNullIfEmpty(data.vipExpiration) : null,
       billing_status: 'In Progress',
       modem_router_sn: null,
       onsite_status: data.onsiteStatus || 'In Progress',
@@ -1212,28 +1273,119 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
                   }`}>
-                  VAT Type<span className="text-red-500">*</span>
+                  <input
+                    type="checkbox"
+                    checked={formData.vatEnabled}
+                    onChange={(e) => handleInputChange('vatEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>VAT</span>
                 </label>
-                <div className="relative">
-                  <select
-                    value={formData.vatType}
-                    onChange={(e) => handleInputChange('vatType', e.target.value)}
-                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
-                      ? 'bg-gray-800 text-white border-gray-700'
-                      : 'bg-white text-gray-900 border-gray-300'
-                      } ${errors.vatType ? 'border-red-500' : ''}`}
-                  >
-                    <option value="" disabled>Select VAT Type</option>
-                    <option value="Vat Included">Vat Included</option>
-                    <option value="Excluded Vat">Excluded Vat</option>
-                    <option value="No Vat">No Vat</option>
-                  </select>
-                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
-                    }`} size={20} />
-                </div>
-                {errors.vatType && <p className="text-red-500 text-xs mt-1">{errors.vatType}</p>}
+                <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                  {formData.vipEnabled
+                    ? 'Not applicable to VIP accounts — they are not billed.'
+                    : formData.vatEnabled
+                      ? 'VAT Excluded — VAT is added on top of the plan price.'
+                      : 'No VAT — the customer is billed the plan price.'}
+                </p>
+              </div>
+
+              <div>
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                  }`}>
+                  <input
+                    type="checkbox"
+                    checked={formData.withholdingEnabled}
+                    onChange={(e) => handleInputChange('withholdingEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>Withholding</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                    }`}>
+                    Not applicable to VIP accounts — they are not billed.
+                  </p>
+                )}
+
+                {formData.withholdingEnabled && !formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Withholding Percentage<span className="text-red-500">*</span>
+                    </label>
+                    <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+                      } ${errors.withholdingPercentage ? 'border-red-500' : ''}`}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.withholdingPercentage}
+                        onChange={(e) => handleInputChange('withholdingPercentage', e.target.value)}
+                        placeholder="e.g. 5"
+                        className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'
+                          }`}
+                      />
+                      <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                        }`}>%</span>
+                    </div>
+                    {errors.withholdingPercentage && <p className="text-red-500 text-xs mt-1">{errors.withholdingPercentage}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.vipEnabled}
+                    onChange={(e) => handleInputChange('vipEnabled', e.target.checked)}
+                    className="w-4 h-4 rounded cursor-pointer"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>VIP</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Expiration Date<span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="date"
+                        value={formData.vipExpiration}
+                        onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
+                        className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
+                          ? 'bg-gray-800 text-white border-gray-700'
+                          : 'bg-white text-gray-900 border-gray-300'
+                          } ${errors.vipExpiration ? 'border-red-500' : ''}`}
+                      />
+                      <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                        }`} size={20} />
+                    </div>
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                      }`}>
+                      Approving this job order creates the account with the VIP billing status, so
+                      it is not billed. On this date the VIP check restricts the account, exactly
+                      as it does for a VIP set from Customer Details.
+                    </p>
+                    {errors.vipExpiration && <p className="text-red-500 text-xs mt-1">{errors.vipExpiration}</p>}
+                  </div>
+                )}
               </div>
 
               <div>
