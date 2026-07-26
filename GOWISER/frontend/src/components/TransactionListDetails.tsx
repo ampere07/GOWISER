@@ -2,13 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft, ArrowRight, Maximize2, X, Phone, MessageSquare, Info,
   ExternalLink, Mail, Edit, Trash2, Receipt, CheckCircle,
-  ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft
+  ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft, Printer
 } from 'lucide-react';
+import gowiserLogo from '../assets/gowiserlogo.png';
 import { transactionService } from '../services/transactionService';
 import { relatedDataService } from '../services/relatedDataService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import LoadingModal from './common/LoadingModalGlobal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { formUIService } from '../services/formUIService';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { useBillingStore } from '../store/billingStore';
@@ -17,6 +19,18 @@ import TransactionRevertModal from '../modals/TransactionRevertModal';
 import TransactionFormModal from '../modals/TransactionFormModal';
 import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
+
+// Company details printed in the Official Receipt header. These are static registration
+// details (not stored in settings), so edit them here if the company info ever changes.
+const RECEIPT_COMPANY = {
+  name: 'GO WISER CORPORATION',
+  address: 'Sta. Maria, Zamboanga City, Zamboanga del Sur, Zamboanga Peninsula (Region IX)',
+  tin: '654-854-244-00000',
+  sec: '2023100122771-00',
+  bpNo: 'BP-2024-13126-0',
+  tel: '09531354666',
+  email: 'admin@gowiser.ph',
+};
 
 interface Transaction {
   id: string;
@@ -183,6 +197,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
+  const [receiptLogoUrl, setReceiptLogoUrl] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const startXRef = useRef<number>(0);
   const startWidthRef = useRef<number>(0);
@@ -263,6 +278,27 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     };
 
     fetchColorPalette();
+  }, []);
+
+  // Receipt logo: use the same DB-configured logo shown in the Header (form_ui.logo_url),
+  // served through the image proxy exactly like Header does. Falls back to the bundled
+  // asset in handlePrintReceipt() when no logo is configured.
+  useEffect(() => {
+    const fetchReceiptLogo = async () => {
+      try {
+        const config = await formUIService.getConfig();
+        if (config && config.logo_url) {
+          setReceiptLogoUrl(`${API_BASE_URL}/proxy/image?url=${encodeURIComponent(config.logo_url)}`);
+        } else {
+          setReceiptLogoUrl(null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch receipt logo:', err);
+        setReceiptLogoUrl(null);
+      }
+    };
+
+    fetchReceiptLogo();
   }, []);
 
   // Fetch related invoices when account number changes
@@ -602,6 +638,191 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     setExpandedModalSection(null);
   };
 
+  // Resolve the human-readable payment method the same way the detail field does.
+  const getPaymentMethodName = (): string => {
+    return (
+      transaction.payment_method_info?.payment_method ||
+      paymentMethods?.find(m => String(m.id) === String(transaction.payment_method))?.payment_method ||
+      transaction.payment_method ||
+      '-'
+    );
+  };
+
+  // Build and print an Official Receipt (thermal-printer layout) for this transaction.
+  // Uses a hidden same-origin iframe so it is not blocked like window.open popups, and
+  // removes the iframe once printing is done (or the dialog is dismissed).
+  const handlePrintReceipt = () => {
+    const customer = transaction.account?.customer;
+    const location = [customer?.address, customer?.barangay, customer?.city, customer?.region]
+      .filter(Boolean).join(', ');
+
+    const receiptNo = transaction.or_no || transaction.reference_no || transaction.id || '-';
+    const dateStr = formatDate(transaction.date_processed || transaction.payment_date);
+    const timeStr = (() => {
+      const raw = transaction.date_processed || transaction.payment_date;
+      if (!raw) return '-';
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return '-';
+      let h = d.getHours();
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ampm}`;
+    })();
+
+    const planText = customer?.desired_plan ? ` (${customer.desired_plan})` : '';
+    const description = `${transaction.transaction_type || 'Payment'}${planText}`;
+    const amount = formatCurrency(transaction.received_payment || 0);
+
+    const esc = (v: any) => String(v ?? '-')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Prefer the DB-configured logo (same one the Header shows); fall back to the bundled asset.
+    const logoSrc = receiptLogoUrl || gowiserLogo;
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Official Receipt ${esc(receiptNo)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      color: #000; background: #fff;
+      font-size: 11px; line-height: 1.4;
+      width: 72mm; max-width: 72mm; margin: 0 auto; padding: 10px 8px;
+    }
+    .center { text-align: center; }
+    .logo { width: 54px; height: auto; margin: 0 auto 4px; display: block; }
+    .company { font-weight: bold; font-size: 13px; letter-spacing: .5px; }
+    .muted { font-size: 11px; }
+    .divider { border: none; border-top: 1px dashed #000; margin: 8px 0; }
+    .title { font-weight: bold; letter-spacing: 2px; font-size: 13px; }
+    .row { display: flex; justify-content: space-between; gap: 8px; }
+    .row .label { white-space: nowrap; }
+    .row .value { text-align: right; font-weight: bold; word-break: break-word; }
+    .section-head { display: flex; justify-content: space-between; font-weight: bold; }
+    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; }
+    .thanks { font-size: 11px; }
+    @page { margin: 0; }
+    @media print {
+      /* html spans the full sheet (Letter, A4 or thermal roll); the body is a fixed
+         narrow slip auto-centered within it, so the receipt is centered on ANY paper size. */
+      html { width: 100%; margin: 0; }
+      body { width: 72mm; max-width: 72mm; margin: 0 auto; padding: 8px 6px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <img class="logo" src="${esc(logoSrc)}" alt="logo" onerror="this.style.display='none'" />
+    <div class="company">${esc(RECEIPT_COMPANY.name)}</div>
+    <div class="muted">${esc(RECEIPT_COMPANY.address)}</div>
+    <div class="muted">TIN: ${esc(RECEIPT_COMPANY.tin)} | SEC: ${esc(RECEIPT_COMPANY.sec)}</div>
+    <div class="muted">BP No: ${esc(RECEIPT_COMPANY.bpNo)}</div>
+    <div class="muted">Tel: ${esc(RECEIPT_COMPANY.tel)}</div>
+    <div class="muted">${esc(RECEIPT_COMPANY.email)}</div>
+  </div>
+
+  <hr class="divider" />
+  <div class="center title">* OFFICIAL RECEIPT *</div>
+  <hr class="divider" />
+
+  <div class="row"><span class="label">Receipt #:</span><span class="value">${esc(receiptNo)}</span></div>
+  <div class="row"><span class="label">Date:</span><span class="value">${esc(dateStr)}</span></div>
+  <div class="row"><span class="label">Time:</span><span class="value">${esc(timeStr)}</span></div>
+
+  <hr class="divider" />
+  <div style="font-weight:bold;">Bill To:</div>
+  <div style="font-weight:bold;">${esc(customer?.full_name)}</div>
+  <div class="row"><span class="label">Account #:</span><span class="value">${esc(transaction.account?.account_no)}</span></div>
+  <div class="row"><span class="label">Contact:</span><span class="value">${esc(customer?.contact_number_primary)}</span></div>
+  <div class="muted">Address: ${esc(location || '-')}</div>
+
+  <hr class="divider" />
+  <div class="section-head"><span>DESCRIPTION</span><span>AMOUNT</span></div>
+  <hr class="divider" />
+  <div class="row"><span class="label">${esc(description)}</span><span class="value">${esc(amount)}</span></div>
+
+  <hr class="divider" />
+  <div class="total-row"><span>TOTAL AMOUNT:</span><span>${esc(amount)}</span></div>
+  <hr class="divider" />
+  <div class="row"><span class="label">Payment Method:</span><span class="value">${esc(getPaymentMethodName()).toUpperCase()}</span></div>
+
+  <hr class="divider" />
+  <div class="center thanks">THANK YOU FOR YOUR PAYMENT!</div>
+  <div class="center thanks">Keep this receipt for your records.</div>
+  <div class="center thanks">For inquiries, please contact us.</div>
+  <div class="center thanks" style="margin-top:6px; font-weight:bold;">${esc(RECEIPT_COMPANY.name)}</div>
+  <div class="center thanks">Tel: ${esc(RECEIPT_COMPANY.tel)}</div>
+  <div class="center thanks">${esc(RECEIPT_COMPANY.email)}</div>
+</body>
+</html>`;
+
+    // Primary path: print from a real top-level window. Chromium IGNORES the @page size
+    // (80mm receipt width) when printing from an <iframe>, forcing Letter/A4 — a standalone
+    // window honours it, so the paper actually becomes receipt-sized. The auto-print script
+    // waits for load (so the logo is included) then prints and closes the window.
+    const printScript =
+      '<' + 'script>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});' +
+      'window.addEventListener("afterprint",function(){window.close();});<' + '/script>';
+
+    const printWindow = window.open('', '_blank', 'width=420,height=640');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(html.replace('</body>', printScript + '</body>'));
+      printWindow.document.close();
+      return;
+    }
+
+    // Fallback (popup blocked): hidden iframe. Paper size may fall back to Letter here.
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      // Delay removal so the browser has finished the print job.
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 500);
+    };
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      cleanup();
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const triggerPrint = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (e) {
+        console.error('Failed to print receipt:', e);
+      }
+      cleanup();
+    };
+
+    // Wait for the logo image to load so it appears in the print; fall back on a timeout.
+    const img = doc.querySelector('img');
+    if (img && !img.complete) {
+      img.addEventListener('load', triggerPrint, { once: true });
+      img.addEventListener('error', triggerPrint, { once: true });
+      setTimeout(triggerPrint, 1500);
+    } else {
+      setTimeout(triggerPrint, 200);
+    }
+  };
+
   return (
     <>
       <LoadingModal
@@ -728,6 +949,21 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                   <Trash2 size={16} />
                 </button>
               )}
+
+            {/* Print Official Receipt — only for completed (Done) transactions */}
+            {(transaction.status || '').toLowerCase() === 'done' && (
+              <button
+                onClick={handlePrintReceipt}
+                disabled={loading}
+                className={`p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+                  }`}
+                title="Print Receipt"
+              >
+                <Printer size={16} />
+              </button>
+            )}
 
             {/* Navigation Chevrons */}
             {(onPrevious || onNext) && (

@@ -147,6 +147,7 @@ class PaymentWorkerService
                     'billing_accounts.id as account_id',
                     'billing_accounts.account_no',
                     'billing_accounts.account_balance',
+                    'billing_accounts.generation_type',
                     DB::raw("CONCAT(customers.first_name, ' ', IFNULL(customers.middle_initial, ''), ' ', customers.last_name) as full_name"),
                     'customers.contact_number_primary',
                     'customers.email_address',
@@ -311,10 +312,19 @@ class PaymentWorkerService
                 ->orderBy('id', 'asc')
                 ->get();
 
+            // Prepaid accounts never carry a credit (negative) balance: a settling payment
+            // renews the prepaid period (see PrepaidRenewalService) instead of banking credit,
+            // so any overpayment is floored to 0. Postpaid / blank generation_type keep the real
+            // (possibly negative) balance, which is the existing advance-payment behaviour.
+            $isPrepaid = \App\Models\BillingAccount::isPrepaidType($account->generation_type ?? null);
+
             if ($unpaidInvoices->isEmpty()) {
                 // No unpaid invoices - apply as credit/advance payment
                 $newBalance = floatval($account->account_balance) - $paymentAmount;
-                
+                if ($isPrepaid && $newBalance < 0) {
+                    $newBalance = 0;
+                }
+
                 DB::table('billing_accounts')
                     ->where('account_no', $accountNo)
                     ->update([
@@ -377,9 +387,12 @@ class PaymentWorkerService
                 $this->workerLog("Distributed ₱" . number_format($amountToApply, 2) . " to Invoice #{$invoiceId} - Status: {$newStatus}");
             }
 
-            // Update account balance
+            // Update account balance (prepaid floored to 0 — see $isPrepaid note above)
             $newAccountBalance = floatval($account->account_balance) - $paymentAmount;
-            
+            if ($isPrepaid && $newAccountBalance < 0) {
+                $newAccountBalance = 0;
+            }
+
             DB::table('billing_accounts')
                 ->where('account_no', $accountNo)
                 ->update([

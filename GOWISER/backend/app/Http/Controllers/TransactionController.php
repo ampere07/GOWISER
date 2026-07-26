@@ -399,6 +399,12 @@ class TransactionController extends Controller
 
             if ($transaction->transaction_type !== 'Security Deposit') {
                 $newBalance = $currentBalance - $paymentReceived;
+                // Prepaid accounts never carry a credit (negative) balance — a settling payment
+                // renews the prepaid period instead of banking credit, so overpayment floors to 0.
+                // Postpaid / blank generation_type keep the real (possibly negative) balance.
+                if (BillingAccount::isPrepaidType($billingAccount->generation_type) && $newBalance < 0) {
+                    $newBalance = 0;
+                }
 
                 $billingAccount->account_balance = round($newBalance, 2);
                 $billingAccount->balance_update_date = $currentTime;
@@ -688,6 +694,11 @@ class TransactionController extends Controller
 
         $currentBalance = floatval($billingAccount->account_balance ?? 0);
         $newBalance = $currentBalance - $paymentReceived;
+        // Prepaid accounts never carry a credit (negative) balance — overpayment floors to 0.
+        // Postpaid / blank generation_type keep the real (possibly negative) balance.
+        if (BillingAccount::isPrepaidType($billingAccount->generation_type) && $newBalance < 0) {
+            $newBalance = 0;
+        }
 
         $billingAccount->account_balance = round($newBalance, 2);
         $billingAccount->balance_update_date = $currentTime;
@@ -1042,6 +1053,11 @@ class TransactionController extends Controller
 
                     if ($transaction->transaction_type !== 'Security Deposit') {
                         $newBalance = $currentBalance - $paymentReceived;
+                        // Prepaid accounts never carry a credit (negative) balance — overpayment floors to 0.
+                        // Postpaid / blank generation_type keep the real (possibly negative) balance.
+                        if (BillingAccount::isPrepaidType($billingAccount->generation_type) && $newBalance < 0) {
+                            $newBalance = 0;
+                        }
 
                         $billingAccount->account_balance = round($newBalance, 2);
                         $billingAccount->balance_update_date = $currentTime;

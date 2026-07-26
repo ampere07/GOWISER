@@ -153,7 +153,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const planName = customerDetail?.desiredPlan || 'No Plan';
     const address = customerDetail?.address || 'No Address';
     const installationDate = customerDetail?.billingAccount?.dateInstalled || 'Pending';
-    const balance = Number(customerDetail?.billingAccount?.accountBalance || 0);
+    const rawBalance = Number(customerDetail?.billingAccount?.accountBalance || 0);
     const usageType = customerDetail?.technicalDetails?.usageType || 'N/A';
     const emailAddress = customerDetail?.emailAddress || user?.email || 'N/A';
 
@@ -162,6 +162,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // an account that has not been through the rename must still get the plan picker.
     const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
         .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+    // A prepaid customer never carries a negative (credit) balance: paying only extends the
+    // prepaid period, it does not bank a credit, so a fully-paid prepaid account reads as 0 —
+    // never a negative overpayment. Postpaid / blank generation_type keep the real balance
+    // (including any negative credit from overpayment), which is the existing behaviour.
+    const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
+
     const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
     const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
     const pendingPlanName = customerDetail?.billingAccount?.pending_plan_name || null;

@@ -2,8 +2,9 @@
   "expo": {
     "name": "GOWISER",
     "slug": "gowiser",
+    "owner": "gowiserphs-team",
     "scheme": "gowiser-app",
-    "version": "2.5.53",
+    "version": "2.5.54",
     "orientation": "portrait",
     "icon": "./assets/applogo.png",
     "userInterfaceStyle": "light",
@@ -16,7 +17,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.gowiser.sync",
+      "bundleIdentifier": "com.gowiserzc.sync",
       "entitlements": {
         "aps-environment": "production"
       },
@@ -34,7 +35,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.gowiser.sync",
+      "package": "com.gowiserzc.sync",
       "launchMode": "singleTask",
       "googleServicesFile": "./google-services.json",
       "config": {
@@ -53,12 +54,7 @@
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {

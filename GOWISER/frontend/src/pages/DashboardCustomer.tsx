@@ -167,7 +167,18 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const planName = customerDetail?.desiredPlan || 'No Plan';
     const address = customerDetail?.address || 'No Address';
     const installationDate = customerDetail?.billingAccount?.dateInstalled || 'Pending';
-    const balance = customerDetail?.billingAccount?.accountBalance || 0;
+
+    // Prepaid vs postpaid drives how the balance is treated (and, further down, the due-date card).
+    // Letters-only compare so a row still holding the older 'Pre Paid' also resolves.
+    const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
+        .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+    // A prepaid customer never carries a negative (credit) balance: paying only extends the
+    // prepaid period, it does not bank a credit, so a fully-paid prepaid account reads as 0 —
+    // never a negative overpayment. Postpaid / blank generation_type keep the real balance
+    // (including any negative credit from overpayment), which is the existing behaviour.
+    const rawBalance = customerDetail?.billingAccount?.accountBalance || 0;
+    const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
     let dueDateString = 'Upon Receipt';
@@ -186,9 +197,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // A prepaid customer's service is governed by prepaid_expires_at, so an invoice due date is
     // meaningless to them. Plain consts rather than useMemo: this runs after the early return
     // above, where a hook would break the rules of hooks.
-    // Letters-only compare so a row still holding the older 'Pre Paid' also resolves.
-    const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
-        .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+    // (isPrepaid is computed above, next to the balance.)
     const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
 
     let prepaidDaysLeft: number | null = null;

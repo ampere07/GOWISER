@@ -698,6 +698,7 @@ class EnhancedBillingGenerationServiceWithNotifications
                 'rebate' => 0,
                 'discounts' => 0,
                 'staggered' => 0,
+                'vat' => 0,
                 'total_amount' => 0,
                 'received_payment' => 0.00,
                 'due_date' => $dueDate,
@@ -716,6 +717,7 @@ class EnhancedBillingGenerationServiceWithNotifications
             // customer owes. With VAT off and withholding off $billablePlanAmount ===
             // $effectiveProrateAmount, i.e. the bill is exactly the plan price.
             $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account);
+            $vat = $vatBreakdown['vat'];
             $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
             $billablePlanAmount = $vatBreakdown['total'] - $withholding['amount'];
 
@@ -769,6 +771,7 @@ class EnhancedBillingGenerationServiceWithNotifications
                 'rebate' => round($charges['rebates'], 2),
                 'discounts' => round($charges['discounts'], 2),
                 'staggered' => round($charges['staggered_install_fees'], 2),
+                'vat' => round($vat, 2),
                 'total_amount' => round($totalAmount, 2),
                 'status' => $totalAmount <= 0 ? 'Paid' : 'Unpaid',
                 'pro_rate' => round($reconProrate['total_prorate'], 2),
