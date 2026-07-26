@@ -274,6 +274,9 @@ class CustomerDetailUpdateController extends Controller
                 // boolean vat_enabled, which is kept in sync on write below.
                 'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat',
                 'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
                 // End of the prepaid service period. Only sent for prepaid accounts; nullable so
                 // an account whose clock has not started yet can be saved with it empty.
                 'prepaid_expires_at' => 'nullable|date',
@@ -378,6 +381,18 @@ class CustomerDetailUpdateController extends Controller
                 $vatEnabled = (bool) ($validated['vat_enabled'] ?? false);
                 $updateData['vat_enabled'] = $vatEnabled;
                 $updateData['vat_type'] = $vatEnabled ? 'Excluded Vat' : 'No Vat';
+            }
+
+            // Withholding is stored as a pair; clearing the flag clears the percentage with it so a
+            // disabled account can never keep a stale rate that a later re-enable would apply.
+            if ($request->has('withholding_enabled')) {
+                $withholdingEnabled = (bool) ($validated['withholding_enabled'] ?? false);
+                $updateData['withholding_enabled'] = $withholdingEnabled;
+                $updateData['withholding_percentage'] = $withholdingEnabled
+                    ? ($validated['withholding_percentage'] ?? null)
+                    : null;
+            } elseif ($request->has('withholding_percentage')) {
+                $updateData['withholding_percentage'] = $validated['withholding_percentage'] ?? null;
             }
 
             if ($request->has('prepaid_expires_at')) {

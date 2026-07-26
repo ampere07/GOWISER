@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, Activity, Clock, Users, CreditCard, HelpCircle, FileText, CheckCircle, XCircle } from 'lucide-react';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { transactionService } from '../services/transactionService';
@@ -6,6 +6,7 @@ import { paymentPortalLogsService } from '../services/paymentPortalLogsService';
 import { paymentService, PendingPayment } from '../services/paymentService'; // Import paymentService
 import { useCustomerDashboardStore } from '../store/customerDashboardStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { planService, Plan } from '../services/planService';
 import pusher from '../services/pusherService';
 
 // Interfaces for data types
@@ -49,6 +50,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [showPaymentSuccessModal, setShowPaymentSuccessModal] = useState<boolean>(false);
+
+    // Prepaid plan selection. A prepaid customer buys a service period at a plan's price, so the
+    // plan and the amount are two views of one choice — postpaid never sees any of this.
+    const [plans, setPlans] = useState<Plan[]>([]);
+    const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
+    const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
+    const [isPlanListOpen, setIsPlanListOpen] = useState<boolean>(false);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -150,6 +158,32 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         };
     }, [fetchCustomerData, customerDetail?.billingAccount?.accountNo]);
 
+    // Load the plan list once, only for prepaid customers — postpaid never sees the picker.
+    // Lives above the early return because it is a hook; isPrepaid is re-derived from the store
+    // here rather than reusing the const further down, which is computed after that return.
+    // Gated on a ref, not on plans.length: an empty or all-zero-price response would otherwise
+    // leave the guard false and re-trigger this effect forever.
+    const plansRequestedRef = useRef(false);
+    useEffect(() => {
+        const prepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
+            .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+        if (!prepaid || plansRequestedRef.current) return;
+        plansRequestedRef.current = true;
+        let cancelled = false;
+        (async () => {
+            setIsLoadingPlans(true);
+            try {
+                const fetched = await planService.getAllPlans();
+                if (!cancelled) setPlans(fetched.filter(p => Number(p.price) > 0));
+            } catch (err) {
+                console.error('Failed to load plans:', err);
+            } finally {
+                if (!cancelled) setIsLoadingPlans(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [customerDetail?.billingAccount?.generation_type]);
+
     if (isLoading && !customerDetail) return <div className="p-8 flex justify-center bg-gray-50 min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div></div>;
 
     const getStatusColor = (status: string) => {
@@ -179,6 +213,54 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // (including any negative credit from overpayment), which is the existing behaviour.
     const rawBalance = customerDetail?.billingAccount?.accountBalance || 0;
     const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
+
+    // ── Prepaid plan selection ────────────────────────────────────────────────────────────────
+    // Plain consts and functions rather than useMemo/useCallback: this runs after the early
+    // return above, where a hook would break the rules of hooks. Mirrors the mobile app so both
+    // clients price a prepaid payment identically.
+    const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
+    const pendingPlanName = customerDetail?.billingAccount?.pending_plan_name || null;
+    const pendingPlanEffectiveAt = customerDetail?.billingAccount?.pending_plan_effective_at || null;
+
+    // Mirrors the backend's extractPlanName(): the plan name is the first token, before any
+    // ' - ' separator or space. Keeps "which plan am I on" consistent with what billing resolves.
+    const extractPlanName = (raw?: string | null): string => {
+        if (!raw) return '';
+        let value = String(raw);
+        if (value.includes(' - ')) value = value.split(' - ')[0].trim();
+        if (value.includes(' ')) return value.split(' ')[0].trim();
+        return value.trim();
+    };
+
+    const currentPlan = plans.find(p => p.name === extractPlanName(planName)) || null;
+    const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
+    // A switch already paid for and waiting. It takes priority when preselecting, so a top-up is
+    // priced at the plan the customer will actually be on rather than the one they are leaving.
+    const pendingPlan = pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null;
+
+    /**
+     * Partial payments are not accepted. An outstanding balance has to be cleared in full, so the
+     * amount is pinned rather than merely validated:
+     *
+     *  - Postpaid: the amount IS the balance, and the field is read-only.
+     *  - Prepaid : the amount comes from the plan picker (so a plan change is still a payment),
+     *              but the chosen plan's price has to cover the balance. A cheaper plan is
+     *              rejected; the same or a dearer one is fine.
+     *
+     * Neither applies while nothing is owed — a zero/credit balance keeps the ₱1 floor only.
+     */
+    const requiresExactPayment = !isPrepaid && balance > 0;
+    const requiresPlanCoversBalance = isPrepaid && balance > 0;
+
+    // Compared at 2 decimal places: the balance arrives as a decimal string, and float maths on
+    // centavos would otherwise make an exact-equality check fail on a legitimate amount.
+    const toCentavos = (value: number) => Math.round(value * 100);
+    const paymentCoversBalance = toCentavos(paymentAmount) >= toCentavos(balance);
+    const isPaymentAmountValid = requiresExactPayment
+        ? toCentavos(paymentAmount) === toCentavos(balance)
+        : requiresPlanCoversBalance
+            ? paymentCoversBalance
+            : paymentAmount >= 1;
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
     let dueDateString = 'Upon Receipt';
@@ -211,6 +293,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         }
     }
 
+    // Whether the paid-for period is still running. This is what makes a plan change QUEUE rather
+    // than apply immediately, so the confirm-payment modal can say which will happen.
+    const isPrepaidPeriodActive = prepaidDaysLeft !== null && prepaidDaysLeft > 0;
+
     const dueDateLabel = isPrepaid ? 'Expires' : 'Due';
     const dueDateValue = isPrepaid ? (prepaidExpiryString ?? 'Not started') : dueDateString;
     // null when there is nothing meaningful to say (postpaid, or a prepaid clock not yet started).
@@ -221,6 +307,35 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             : `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'} left`;
 
     // Restriction logic removed as requested
+
+    /** MM/DD/YYYY from a stored date string, read part-wise to avoid a timezone day-shift. */
+    const formatDbDate = (raw?: string | null): string => {
+        if (!raw) return '';
+        const match = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) return `${match[2]}/${match[3]}/${match[1]}`;
+        const parsed = new Date(String(raw));
+        return isNaN(parsed.getTime()) ? String(raw) : parsed.toLocaleDateString('en-US');
+    };
+
+    /**
+     * Open the confirm-payment modal with the right starting amount.
+     *
+     * Prepaid: preselect the plan they will actually be on and set the amount to that plan's price.
+     * A queued switch wins over the plan currently in force — the customer has already bought it,
+     * so a top-up must be priced at that plan, not the one being replaced.
+     * Postpaid: the amount starts at (and stays) the outstanding balance.
+     */
+    const openVerifyModal = () => {
+        if (isPrepaid) {
+            const preselected = pendingPlan ?? currentPlan ?? plans[0] ?? null;
+            setSelectedPlanId(preselected?.id ?? null);
+            setPaymentAmount(Number(preselected?.price ?? 0));
+        } else {
+            setPaymentAmount(Math.abs(balance));
+        }
+        setIsPlanListOpen(false);
+        setShowPaymentVerifyModal(true);
+    };
 
     // Payment Handlers
     const handlePayNow = async () => {
@@ -236,26 +351,53 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                 setPendingPayment(pending);
                 setShowPendingPaymentModal(true);
             } else {
-                setPaymentAmount(Math.abs(balance));
-                setShowPaymentVerifyModal(true);
+                openVerifyModal();
             }
         } catch (error: any) {
             console.error('Error checking pending payment:', error);
-            setPaymentAmount(Math.abs(balance));
-            setShowPaymentVerifyModal(true);
+            openVerifyModal();
         } finally {
             setIsPaymentProcessing(false);
         }
     };
 
+    /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
+    const handleSelectPlan = (plan: Plan) => {
+        const price = Number(plan.price ?? 0);
+        setSelectedPlanId(plan.id);
+        setPaymentAmount(price);
+        setIsPlanListOpen(false);
+        // Flag a plan too cheap to clear the balance straight away, rather than letting the
+        // customer discover it only when they press Proceed.
+        if (requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance)) {
+            setErrorMessage(`${plan.name} costs ₱${price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}, which does not cover your balance of ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Pick a plan priced at ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })} or more.`);
+        } else {
+            setErrorMessage('');
+        }
+    };
+
     const handleCloseVerifyModal = () => {
         setShowPaymentVerifyModal(false);
-        setPaymentAmount(balance);
+        setIsPlanListOpen(false);
+        setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
     const handleProceedToCheckout = async () => {
-        if (paymentAmount < balance) {
-            setErrorMessage(`Payment amount cannot be lower than your current balance of ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`);
+        // Prepaid pays the selected plan's price — that is how a plan change is bought — but the
+        // price has to cover what is already owed, so a cheaper plan cannot be used to underpay an
+        // outstanding balance. Postpaid must settle the balance exactly. These are backstops: the
+        // amount is never hand-typed in either case.
+        if (isPrepaid) {
+            if (!selectedPlan) {
+                setErrorMessage('Please select a plan to continue.');
+                return;
+            }
+            if (requiresPlanCoversBalance && !paymentCoversBalance) {
+                setErrorMessage(`${selectedPlan.name} costs ₱${paymentAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}, which does not cover your balance of ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}. Pick a plan priced at ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })} or more.`);
+                return;
+            }
+        } else if (requiresExactPayment && !isPaymentAmountValid) {
+            setErrorMessage(`Payment must be exactly your current balance of ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`);
             return;
         }
 
@@ -270,7 +412,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         setErrorMessage('');
 
         try {
-            const response = await paymentService.createPayment(accountNo, paymentAmount);
+            // plan_id only for prepaid: it is the plan being switched TO. Postpaid is settling a
+            // balance and never changes plan, so it sends nothing.
+            const response = await paymentService.createPayment(
+                accountNo,
+                paymentAmount,
+                isPrepaid ? selectedPlanId : null
+            );
 
             if (response.status === 'success' && response.payment_url) {
                 setShowPaymentVerifyModal(false);
@@ -529,21 +677,110 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                     </div>
                                 )}
 
+                                {/* Prepaid buys a service period at a plan's price, so the plan is
+                                    the choice and the amount simply follows it. Postpaid is settling
+                                    a balance and never sees this. */}
+                                {isPrepaid && (
+                                    <div className="mb-4">
+                                        <label className="block font-bold mb-2 text-gray-700">Plan</label>
+                                        {isLoadingPlans ? (
+                                            <p className="text-sm text-gray-500 px-4 py-3 border border-gray-300 rounded">Loading plans…</p>
+                                        ) : plans.length === 0 ? (
+                                            <p className="text-sm text-gray-500 px-4 py-3 border border-gray-300 rounded">
+                                                No plans are available right now. Please contact support.
+                                            </p>
+                                        ) : (
+                                            <div className="relative">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsPlanListOpen(open => !open)}
+                                                    className="w-full px-4 py-3 rounded border border-gray-300 text-left font-bold text-gray-900 flex justify-between items-center hover:bg-gray-50"
+                                                >
+                                                    <span>
+                                                        {selectedPlan
+                                                            ? `${selectedPlan.name} — ₱${Number(selectedPlan.price ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+                                                            : 'Select a plan'}
+                                                    </span>
+                                                    <span className="text-gray-400 text-xs ml-2">{isPlanListOpen ? '▲' : '▼'}</span>
+                                                </button>
+
+                                                {isPlanListOpen && (
+                                                    <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-gray-200 rounded shadow-lg">
+                                                        {plans.map(plan => {
+                                                            const price = Number(plan.price ?? 0);
+                                                            const isSelected = plan.id === selectedPlanId;
+                                                            const isCurrent = plan.id === currentPlan?.id;
+                                                            // Shown but not selectable: a plan that cannot clear the
+                                                            // outstanding balance would be an underpayment.
+                                                            const isUnderBalance = requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance);
+                                                            return (
+                                                                <button
+                                                                    key={plan.id}
+                                                                    type="button"
+                                                                    disabled={isUnderBalance}
+                                                                    onClick={() => handleSelectPlan(plan)}
+                                                                    className={`w-full px-4 py-3 text-left flex justify-between items-center border-b border-gray-100 last:border-b-0 ${isUnderBalance ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'
+                                                                        } ${isSelected ? 'bg-gray-100' : ''}`}
+                                                                >
+                                                                    <span className="text-gray-900 font-medium">
+                                                                        {plan.name}
+                                                                        {isCurrent && <span className="ml-2 text-xs text-gray-500">(current)</span>}
+                                                                    </span>
+                                                                    <span className="text-gray-700 text-sm">
+                                                                        ₱{price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                                                                        {isUnderBalance && <span className="ml-2 text-xs text-red-500">under balance</span>}
+                                                                    </span>
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Tell the customer whether the switch queues or applies now. */}
+                                        {selectedPlan && pendingPlan && selectedPlan.id === pendingPlan.id ? (
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                {pendingPlanName || selectedPlan.name} is already scheduled
+                                                {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                                This payment tops up that plan.
+                                            </p>
+                                        ) : selectedPlan && currentPlan && selectedPlan.id === currentPlan.id && pendingPlan ? (
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                You have {pendingPlan.name} scheduled
+                                                {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                                Paying for {selectedPlan.name} instead will cancel that change.
+                                            </p>
+                                        ) : selectedPlan && currentPlan && selectedPlan.id !== currentPlan.id ? (
+                                            <p className="text-xs text-gray-500 mt-2">
+                                                {isPrepaidPeriodActive && prepaidExpiresAt
+                                                    ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
+                                                    : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                )}
+
                                 <div className="mb-4">
                                     <label className="block font-bold mb-2 text-gray-700">Payment Amount</label>
                                     <input
                                         type="text"
                                         inputMode="decimal"
-                                        value={paymentAmount || ''}
+                                        // Not hand-editable when the amount is already determined:
+                                        // prepaid takes it from the plan picker above, and postpaid
+                                        // with a balance owed must settle that balance in full.
+                                        readOnly={isPrepaid || requiresExactPayment}
+                                        value={requiresExactPayment
+                                            ? balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })
+                                            : (paymentAmount || '')}
                                         onChange={(e) => {
+                                            if (isPrepaid || requiresExactPayment) return;
                                             const value = e.target.value;
                                             if (value === '' || /^\d*\.?\d*$/.test(value)) {
                                                 const newAmount = value === '' ? 0 : parseFloat(value) || 0;
                                                 setPaymentAmount(newAmount);
 
-                                                if (newAmount > 0 && newAmount < balance) {
-                                                    setErrorMessage(`Payment amount cannot be lower than your balance of ₱${balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`);
-                                                } else if (newAmount > 0 && newAmount < 1) {
+                                                if (newAmount > 0 && newAmount < 1) {
                                                     setErrorMessage('Payment amount must be at least ₱1.00');
                                                 } else {
                                                     setErrorMessage('');
@@ -551,13 +788,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                             }
                                         }}
                                         placeholder="0.00"
-                                        className={`w-full px-4 py-3 rounded text-lg font-bold border ${paymentAmount > 0 && (paymentAmount < balance || paymentAmount < 1) ? 'border-red-500 ring-red-500' : 'border-gray-300'
-                                            } text-gray-900 focus:outline-none focus:ring-2`}
-                                        style={{ '--tw-ring-color': paymentAmount > 0 && (paymentAmount < balance || paymentAmount < 1) ? '#ef4444' : (colorPalette?.primary || '#0f172a') } as React.CSSProperties}
+                                        className={`w-full px-4 py-3 rounded text-lg font-bold border ${!isPaymentAmountValid && paymentAmount > 0 ? 'border-red-500 ring-red-500' : 'border-gray-300'
+                                            } text-gray-900 focus:outline-none focus:ring-2 ${(isPrepaid || requiresExactPayment) ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                                        style={{ '--tw-ring-color': !isPaymentAmountValid && paymentAmount > 0 ? '#ef4444' : (colorPalette?.primary || '#0f172a') } as React.CSSProperties}
                                     />
                                     <div className="text-sm text-right mt-1 text-gray-500">
-                                        {balance > 0 ? (
-                                            <span>Outstanding: ₱{balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                                        {isPrepaid ? (
+                                            <span>{selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above'}</span>
+                                        ) : requiresExactPayment ? (
+                                            <span>Full settlement required: ₱{balance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
                                         ) : (
                                             <span>Minimum: ₱1.00</span>
                                         )}
@@ -574,7 +813,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                     </button>
                                     <button
                                         onClick={handleProceedToCheckout}
-                                        disabled={isPaymentProcessing || (paymentAmount > 0 && paymentAmount < balance) || paymentAmount < 1}
+                                        disabled={isPaymentProcessing || !isPaymentAmountValid || paymentAmount < 1 || (isPrepaid && !selectedPlan)}
                                         className="flex-1 px-4 py-3 rounded font-bold text-white transition-colors disabled:opacity-50"
                                         style={{ background: `linear-gradient(135deg, ${colorPalette?.primary || '#0f172a'} 0%, #000000 100%)` }}
                                     >

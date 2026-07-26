@@ -169,6 +169,30 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // (including any negative credit from overpayment), which is the existing behaviour.
     const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
 
+    /**
+     * Partial payments are not accepted. An outstanding balance has to be cleared in full, so the
+     * amount is pinned rather than merely validated:
+     *
+     *  - Postpaid: the amount IS the balance, and the field is read-only.
+     *  - Prepaid : the amount still comes from the plan picker (so a plan change is still a
+     *              payment), but the chosen plan's price has to cover the balance. A cheaper plan
+     *              is rejected; the same or a dearer one is fine.
+     *
+     * Neither applies while nothing is owed — a zero/credit balance keeps the ₱1 floor only.
+     */
+    const requiresExactPayment = !isPrepaid && balance > 0;
+    const requiresPlanCoversBalance = isPrepaid && balance > 0;
+
+    // Compared at 2 decimal places: the balance arrives as a decimal string, and float maths on
+    // centavos would otherwise make an exact-equality check fail on a legitimate amount.
+    const toCentavos = (value: number) => Math.round(value * 100);
+    const paymentCoversBalance = toCentavos(paymentAmount) >= toCentavos(balance);
+    const isPaymentAmountValid = requiresExactPayment
+        ? toCentavos(paymentAmount) === toCentavos(balance)
+        : requiresPlanCoversBalance
+            ? paymentCoversBalance
+            : paymentAmount >= 1;
+
     const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
     const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
     const pendingPlanName = customerDetail?.billingAccount?.pending_plan_name || null;
@@ -473,10 +497,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
     /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
     const handleSelectPlan = (plan: Plan) => {
+        const price = Number(plan.price ?? 0);
         setSelectedPlanId(plan.id);
-        setPaymentAmount(Number(plan.price ?? 0));
+        setPaymentAmount(price);
         setIsPlanListOpen(false);
-        setErrorMessage('');
+        // Flag a plan too cheap to clear the balance straight away, rather than letting the
+        // customer discover it only when they press Pay.
+        if (requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance)) {
+            setErrorMessage(`${plan.name} costs ${formatCurrency(price)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
+        } else {
+            setErrorMessage('');
+        }
     };
 
     function handleCloseVerifyModal() {
@@ -494,16 +525,20 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             return;
         }
 
-        // Prepaid pays the selected plan's price, which can legitimately be LESS than the
-        // outstanding balance (a downgrade). The postpaid "must cover your balance" rule is
-        // replaced by "must have picked a plan" rather than applied on top of it.
+        // Prepaid still pays the selected plan's price — that is how a plan change is bought — but
+        // the price has to cover what is already owed, so a cheaper plan cannot be used to underpay
+        // an outstanding balance. Postpaid must settle the balance exactly.
         if (isPrepaid) {
             if (!selectedPlan) {
                 setErrorMessage('Please select a plan to continue.');
                 return;
             }
-        } else if (paymentAmount < balance) {
-            setErrorMessage(`Payment amount must be at least your current balance of ₱${formatCurrency(balance)}`);
+            if (requiresPlanCoversBalance && !paymentCoversBalance) {
+                setErrorMessage(`${selectedPlan.name} costs ${formatCurrency(paymentAmount)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
+                return;
+            }
+        } else if (requiresExactPayment && !isPaymentAmountValid) {
+            setErrorMessage(`Payment must be exactly your current balance of ${formatCurrency(balance)}`);
             return;
         }
 
@@ -1002,30 +1037,26 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 <Text style={styles.inputLabel}>Payment Amount</Text>
                                 <TextInput
                                     keyboardType="decimal-pad"
-                                    // Prepaid buys a period at the plan's price, so the amount is
-                                    // driven entirely by the picker above and is not hand-editable.
-                                    editable={!isPrepaid}
+                                    // Not hand-editable when the amount is already determined:
+                                    // prepaid takes it from the plan picker above, and postpaid
+                                    // with a balance owed must settle that balance in full.
+                                    editable={!isPrepaid && !requiresExactPayment}
                                     value={paymentAmount !== undefined && paymentAmount !== null ? paymentAmount.toString() : ''}
                                     onChangeText={(value) => {
                                         if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
                                             const amount = value === '' || value === '-' ? 0 : parseFloat(value) || 0;
                                             setPaymentAmount(amount);
-
-                                            if (balance > 0 && amount < balance) {
-                                                setErrorMessage(`Payment amount must be at least your current balance of ${formatCurrency(balance)}`);
-                                            } else {
-                                                setErrorMessage('');
-                                            }
+                                            setErrorMessage('');
                                         }
                                     }}
                                     placeholder="0.00"
-                                    style={[styles.inputField, isPrepaid && styles.inputFieldLocked]}
+                                    style={[styles.inputField, (isPrepaid || requiresExactPayment) && styles.inputFieldLocked]}
                                 />
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
                                         {isPrepaid
                                             ? (selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above')
-                                            : (balance > 0 ? `Outstanding: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
+                                            : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>
                             </View>
@@ -1035,11 +1066,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 disabled={
                                     isPaymentProcessing
                                     || paymentAmount < 1
-                                    || (isPrepaid ? !selectedPlan : (balance > 0 && paymentAmount < balance))
+                                    || !isPaymentAmountValid
+                                    || (isPrepaid && !selectedPlan)
                                 }
                                 style={[styles.primaryBtn, {
                                     backgroundColor: colorPalette?.primary || '#ef4444',
-                                    opacity: (isPaymentProcessing || paymentAmount < 1 || (isPrepaid && !selectedPlan)) ? 0.5 : 1,
+                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isPaymentAmountValid || (isPrepaid && !selectedPlan)) ? 0.5 : 1,
                                 }]}
                             >
                                 <Text style={styles.primaryBtnText}>

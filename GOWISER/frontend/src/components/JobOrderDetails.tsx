@@ -1122,7 +1122,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           <div className={baseFieldClass}>
             <div className={labelClass}>VIP:</div>
             <div className={valueClass}>
-              Yes{vipExpiration ? ` — expires ${formatDate(vipExpiration)}` : ''}
+              {/* Date-only: the model casts vip_expiration to a datetime, so formatDate would
+                  tack a meaningless "12:00 AM" onto what the form captured as a plain date. */}
+              Yes{vipExpiration ? ` — expires ${formatOnlyDate(vipExpiration)}` : ''}
             </div>
           </div>
         );
@@ -1130,9 +1132,12 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
 
       case 'vatType': {
         if (jobOrder.vip_enabled) return null;
+        // Ticked reads as "VAT Included" — the bill the customer receives includes VAT, which is
+        // the wording used on the job order. The computation is unchanged: VAT is added on top of
+        // the plan price.
         // Falls back to the legacy text for job orders created before vat_enabled existed.
         const vatType = jobOrder.vat_enabled === true || jobOrder.vat_enabled === false
-          ? (jobOrder.vat_enabled ? 'VAT Excluded' : 'No VAT')
+          ? (jobOrder.vat_enabled ? 'VAT Included' : 'No VAT')
           : (jobOrder.vat_type || jobOrder.Vat_Type);
         if (!vatType) return null;
         return (

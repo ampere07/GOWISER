@@ -648,7 +648,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     );
   };
 
-  // Build and print an Official Receipt (thermal-printer layout) for this transaction.
+  // Build and print an acknowledgment receipt (thermal-printer layout) for this transaction.
+  // Deliberately NOT an Official Receipt: the slip carries a disclaimer stating it cannot be used
+  // to claim input tax, so it must not be described or presented as one.
   // Uses a hidden same-origin iframe so it is not blocked like window.open popups, and
   // removes the iframe once printing is done (or the dialog is dismissed).
   const handlePrintReceipt = () => {
@@ -683,7 +685,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Official Receipt ${esc(receiptNo)}</title>
+  <title>Receipt ${esc(receiptNo)}</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -705,6 +707,12 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     .section-head { display: flex; justify-content: space-between; font-weight: bold; }
     .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; }
     .thanks { font-size: 11px; }
+    /* Boxed and bold so the validity notice reads as a disclaimer rather than as part of the
+       sign-off. No colour — thermal printers are monochrome. */
+    .disclaimer {
+      font-size: 10px; line-height: 1.35; text-align: center; font-weight: bold;
+      border: 1px dashed #000; padding: 5px 4px; margin: 8px 0;
+    }
     @page { margin: 0; }
     @media print {
       /* html spans the full sheet (Letter, A4 or thermal roll); the body is a fixed
@@ -726,7 +734,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   </div>
 
   <hr class="divider" />
-  <div class="center title">* OFFICIAL RECEIPT *</div>
+  <div class="center title">*RECEIPT *</div>
   <hr class="divider" />
 
   <div class="row"><span class="label">Receipt #:</span><span class="value">${esc(receiptNo)}</span></div>
@@ -749,6 +757,12 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   <div class="total-row"><span>TOTAL AMOUNT:</span><span>${esc(amount)}</span></div>
   <hr class="divider" />
   <div class="row"><span class="label">Payment Method:</span><span class="value">${esc(getPaymentMethodName()).toUpperCase()}</span></div>
+
+  <hr class="divider" />
+  <div class="disclaimer">
+    This document is a temporary proof of payment/acknowledgment only and is not valid for
+    claiming input tax or official accounting purposes.
+  </div>
 
   <hr class="divider" />
   <div class="center thanks">THANK YOU FOR YOUR PAYMENT!</div>
@@ -835,11 +849,10 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
         colorPalette={colorPalette}
       />
 
-      <div className={`flex flex-col relative md:border-l overflow-hidden ${
-        isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
-      } ${isDarkMode
-        ? 'bg-gray-950 border-white border-opacity-30'
-        : 'bg-white border-gray-300'
+      <div className={`flex flex-col relative md:border-l overflow-hidden ${isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
+        } ${isDarkMode
+          ? 'bg-gray-950 border-white border-opacity-30'
+          : 'bg-white border-gray-300'
         }`} style={{ width: isMobile ? '100%' : `${detailsWidth}px` }}>
         {!isMobile && (
           <div

@@ -169,6 +169,16 @@ class JobOrderController extends Controller
                     'Timestamp' => $jobOrder->timestamp ? $jobOrder->timestamp->format('Y-m-d H:i:s') : null,
                     'Installation_Fee' => $jobOrder->installation_fee,
                     'Billing_Day' => $jobOrder->billing_day,
+                    // This response is a hand-built whitelist, not the model, so every billing
+                    // field the Job Order details panel renders has to be listed here explicitly
+                    // — anything omitted silently renders as blank.
+                    'generation_type' => $jobOrder->generation_type,
+                    'vat_type' => $jobOrder->vat_type,
+                    'vat_enabled' => $jobOrder->vat_enabled,
+                    'withholding_enabled' => $jobOrder->withholding_enabled,
+                    'withholding_percentage' => $jobOrder->withholding_percentage,
+                    'vip_enabled' => $jobOrder->vip_enabled,
+                    'vip_expiration' => $jobOrder->vip_expiration,
                     'Onsite_Status' => $jobOrder->onsite_status,
                     'Status' => $jobOrder->status,
                     'status' => $jobOrder->status,

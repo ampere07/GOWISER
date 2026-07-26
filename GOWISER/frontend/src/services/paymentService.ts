@@ -98,7 +98,12 @@ export const paymentService = {
     }
   },
 
-  createPayment: async (accountNo: string, amount: number): Promise<PaymentResponse> => {
+  /**
+   * @param planId Prepaid only — the plan the customer is paying to switch TO. The backend records
+   *   it as selected_plan_id and queues or applies the switch on confirmation. Omitted/null for
+   *   postpaid, which is just settling a balance and never changes plan.
+   */
+  createPayment: async (accountNo: string, amount: number, planId?: number | null): Promise<PaymentResponse> => {
     try {
       console.log('Payment Service - Creating payment:', { accountNo, amount });
       
@@ -119,10 +124,14 @@ export const paymentService = {
         });
       }
 
-      const payload = {
+      const payload: any = {
         account_no: accountNo,
         amount: amount
       };
+
+      if (planId) {
+        payload.plan_id = planId;
+      }
 
       console.log('Payment payload:', payload);
 

@@ -39,8 +39,6 @@ interface ModalConfig {
 /** Canonical Billing Type values. Labels and stored values are the same. */
 const GENERATION_TYPES = ['Prepaid', 'Postpaid'] as const;
 
-/** Available VAT computation modes, matching what the billing generator understands. */
-const VAT_TYPES = ['Vat Included', 'Excluded Vat', 'No Vat'] as const;
 
 /**
  * Map any stored generation_type onto a canonical value so the <select> can match it.
@@ -250,7 +248,25 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           generation_type: normalizeGenerationType(
             recordData.generation_type || recordData.generationType || recordData.billingAccount?.generation_type || ''
           ),
-          vat_type: recordData.vat_type || recordData.vatType || recordData.billingAccount?.vat_type || '',
+          // VAT is a boolean now: unchecked = No VAT, checked = VAT Excluded (added on top).
+          // Accounts written before vat_enabled existed only carry the legacy free-text mode, so
+          // fall back to it — 'Excluded Vat' is the only value that still adds VAT.
+          vat_enabled: (() => {
+            const stored = recordData.vat_enabled ?? recordData.vatEnabled ?? recordData.billingAccount?.vat_enabled;
+            if (stored !== undefined && stored !== null) return Boolean(stored);
+            const legacy = String(
+              recordData.vat_type || recordData.vatType || recordData.billingAccount?.vat_type || ''
+            ).toLowerCase().replace(/[^a-z]/g, '');
+            return legacy.includes('exclu');
+          })(),
+          withholding_enabled: Boolean(
+            recordData.withholding_enabled ?? recordData.withholdingEnabled ?? recordData.billingAccount?.withholding_enabled ?? false
+          ),
+          // Kept as a string for the text input; '' when nothing is configured.
+          withholding_percentage: (() => {
+            const stored = recordData.withholding_percentage ?? recordData.withholdingPercentage ?? recordData.billingAccount?.withholding_percentage;
+            return stored === undefined || stored === null || stored === '' ? '' : String(Number(stored));
+          })(),
           // Only meaningful for prepaid accounts; the field is hidden for postpaid.
           prepaid_expires_at: formatDateTimeForInput(
             recordData.prepaid_expires_at || recordData.prepaidExpiration || recordData.billingAccount?.prepaid_expires_at || ''
@@ -482,6 +498,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           newData.barangay = '';
         } else if (field === 'city') {
           newData.barangay = '';
+        }
+      } else if (editType === 'billing_details') {
+        // Clear the hidden input so an unchecked box never saves a stale percentage.
+        if (field === 'withholding_enabled' && value === false) {
+          newData.withholding_percentage = '';
         }
       } else if (editType === 'technical_details') {
         if (field === 'lcpnap') {
@@ -752,6 +773,19 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       // Not required for prepaid: the field is hidden, so requiring it would block the save with
       // an error the user cannot see or fix.
       if (!isPrepaidBillingType && !formData.billing_day) newErrors.billing_day = 'Billing Day is required';
+
+      // Only validated when the checkbox is on: the input is hidden otherwise, so requiring it
+      // would block the save with an error the user cannot see or fix.
+      if (formData.withholding_enabled) {
+        const withholdingPercentage = parseFloat(String(formData.withholding_percentage));
+        if (isNaN(withholdingPercentage)) {
+          newErrors.withholding_percentage = 'Withholding Percentage is required';
+        } else if (withholdingPercentage <= 0) {
+          newErrors.withholding_percentage = 'Withholding Percentage must be greater than 0';
+        } else if (withholdingPercentage > 100) {
+          newErrors.withholding_percentage = 'Withholding Percentage cannot exceed 100';
+        }
+      }
 
       const isVipStatus = billingStatuses.find(s => s.id.toString() === formData.billing_status_id?.toString())?.status_name.toUpperCase() === 'VIP' || formData.billing_status_id?.toString() === '7';
       if (isVipStatus) {
@@ -1560,42 +1594,64 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                 )}
 
-                {/* VAT Type — how VAT is computed on this account's bills. */}
+                {/* VAT — a boolean now, matching the JO Assign Form. 'Vat Included' is gone: the
+                    only two computations are "bill the plan price" and "add VAT on top". */}
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                    VAT Type
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.vat_enabled)}
+                      onChange={(e) => handleInputChange('vat_enabled', e.target.checked)}
+                      className="w-4 h-4 rounded cursor-pointer"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>VAT</span>
                   </label>
-                  <div className="relative">
-                    <select
-                      value={formData.vat_type || ''}
-                      onChange={(e) => handleInputChange('vat_type', e.target.value)}
-                      onFocus={(e) => {
-                        if (colorPalette?.primary) {
-                          e.currentTarget.style.borderColor = colorPalette.primary;
-                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
-                        }
-                      }}
-                      onBlur={(e) => {
-                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
-                        e.currentTarget.style.boxShadow = 'none';
-                      }}
-                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
-                        }`}
-                    >
-                      <option value="">Select VAT Type</option>
-                      {VAT_TYPES.map((type) => (
-                        <option key={type} value={type}>{type}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
-                  </div>
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                    {formData.vat_type === 'Excluded Vat'
-                      ? 'VAT is added on top of the plan price.'
-                      : formData.vat_type === 'No Vat'
-                        ? 'No VAT is applied — the bill is exactly the plan price.'
-                        : 'Vat Included means the plan price already contains VAT.'}
+                    {formData.vat_enabled
+                      ? 'VAT Excluded — VAT is added on top of the plan price.'
+                      : 'No VAT — the customer is billed the plan price.'}
                   </p>
+                </div>
+
+                <div>
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.withholding_enabled)}
+                      onChange={(e) => handleInputChange('withholding_enabled', e.target.checked)}
+                      className="w-4 h-4 rounded cursor-pointer"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Withholding</span>
+                  </label>
+
+                  {formData.withholding_enabled && (
+                    <div className="mt-3">
+                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Withholding Percentage<span className="text-red-500">*</span>
+                      </label>
+                      <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+                        } ${errors.withholding_percentage ? 'border-red-500' : ''}`}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={formData.withholding_percentage ?? ''}
+                          onChange={(e) => handleInputChange('withholding_percentage', e.target.value)}
+                          placeholder="e.g. 5"
+                          className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'
+                            }`}
+                        />
+                        <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>%</span>
+                      </div>
+                      {errors.withholding_percentage && <p className="text-red-500 text-xs mt-1">{errors.withholding_percentage}</p>}
+                      <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        Deducted from the VAT-inclusive subtotal when the bill is generated.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div>

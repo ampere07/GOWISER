@@ -45,6 +45,11 @@ export interface CustomerDetailData {
     vip_remarks?: string;
     generation_type?: string;
     prepaid_expires_at?: string;
+    // Prepaid plan change already paid for but not yet in effect. The dashboard prices a top-up at
+    // this plan rather than the one being replaced.
+    pending_plan_id?: number | null;
+    pending_plan_name?: string | null;
+    pending_plan_effective_at?: string | null;
     vat_type?: string;
     vat_enabled?: boolean | null;
     withholding_enabled?: boolean | null;
