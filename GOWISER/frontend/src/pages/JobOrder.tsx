@@ -1393,10 +1393,10 @@ const JobOrderPage: React.FC = () => {
         return formatPrice(jobOrder.Installation_Fee || jobOrder.installation_fee);
       case 'billingDay':
         const billingDay = jobOrder.Billing_Day ?? jobOrder.billing_day;
-        if (billingDay === null || billingDay === undefined) return '-';
+        if (billingDay === null || billingDay === undefined || billingDay === '') return '-';
         const dayValue = Number(billingDay);
         if (isNaN(dayValue)) return '-';
-        return dayValue === 0 ? String(getLastDayOfMonth()) : String(dayValue);
+        return dayValue === 0 ? 'Every end of month' : String(dayValue);
       case 'billingStatus':
         return <StatusText status={jobOrder.billing_status || jobOrder.Billing_Status} type="billing" />;
       case 'modemRouterSN':

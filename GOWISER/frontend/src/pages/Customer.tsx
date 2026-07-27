@@ -67,7 +67,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lcpnap: customerData.technicalDetails?.lcpnap || '',
     port: customerData.technicalDetails?.port || '',
     vlan: customerData.technicalDetails?.vlan || '',
-    billingDay: customerData.billingAccount?.billingDay || 0,
+    // Keep a missing billing day as undefined (not 0) so it renders as "-" — 0 is a real
+    // value meaning "Every end of month" and must stay distinct from "no value".
+    billingDay: customerData.billingAccount?.billingDay ?? undefined,
     totalPaid: (customerData as any).totalPaid || (customerData as any).total_paid || 0,
     provider: customerData.groupName || '',
     lcp: customerData.technicalDetails?.lcp || '',

@@ -41,6 +41,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
     const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
     const [isPlanListOpen, setIsPlanListOpen] = useState<boolean>(false);
+    // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
+    // instead of buying a plan/plan-change (no plan_id is sent when this is on).
+    const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -491,6 +494,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         } else {
             setPaymentAmount(balance);
         }
+        setPayCurrentBalance(false);
         setIsPlanListOpen(false);
         setShowPaymentVerifyModal(true);
     }
@@ -498,6 +502,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
     const handleSelectPlan = (plan: Plan) => {
         const price = Number(plan.price ?? 0);
+        setPayCurrentBalance(false);
         setSelectedPlanId(plan.id);
         setPaymentAmount(price);
         setIsPlanListOpen(false);
@@ -510,9 +515,19 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         }
     };
 
+    /** "Pay Current Balance": settle the outstanding balance directly — no plan change. */
+    const handleSelectPayCurrentBalance = () => {
+        setPayCurrentBalance(true);
+        setSelectedPlanId(null);
+        setPaymentAmount(balance);
+        setIsPlanListOpen(false);
+        setErrorMessage('');
+    };
+
     function handleCloseVerifyModal() {
         setShowPaymentVerifyModal(false);
         setIsPlanListOpen(false);
+        setPayCurrentBalance(false);
         setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
@@ -528,7 +543,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         // Prepaid still pays the selected plan's price — that is how a plan change is bought — but
         // the price has to cover what is already owed, so a cheaper plan cannot be used to underpay
         // an outstanding balance. Postpaid must settle the balance exactly.
-        if (isPrepaid) {
+        if (isPrepaid && payCurrentBalance) {
+            // Paying the outstanding balance directly (no plan change). Amount is pinned to the
+            // balance; only guard against a nothing-to-pay case.
+            if (balance < 1) {
+                setErrorMessage('There is no balance to pay.');
+                return;
+            }
+        } else if (isPrepaid) {
             if (!selectedPlan) {
                 setErrorMessage('Please select a plan to continue.');
                 return;
@@ -553,7 +575,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 accountNo,
                 paymentAmount,
                 redirectUrl,
-                isPrepaid ? selectedPlanId : null
+                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null
             );
 
             if (response.status === 'success' && response.payment_url) {
@@ -962,9 +984,11 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                 style={[styles.planTrigger, isPlanListOpen && { borderColor: colorPalette?.primary || '#7c3aed' }]}
                                             >
                                                 <Text style={styles.planTriggerText} numberOfLines={1}>
-                                                    {selectedPlan
-                                                        ? `${selectedPlan.name} — ${formatCurrency(Number(selectedPlan.price ?? 0))}`
-                                                        : 'Select a plan'}
+                                                    {payCurrentBalance
+                                                        ? `Pay Current Balance — ${formatCurrency(balance)}`
+                                                        : selectedPlan
+                                                            ? `${selectedPlan.name} — ${formatCurrency(Number(selectedPlan.price ?? 0))}`
+                                                            : 'Select a plan'}
                                                 </Text>
                                                 <Text style={styles.planChevron}>{isPlanListOpen ? '▲' : '▼'}</Text>
                                             </Pressable>
@@ -976,6 +1000,24 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                         nestedScrollEnabled
                                                         keyboardShouldPersistTaps="handled"
                                                     >
+                                                        {/* Static option: pay the outstanding balance directly, no plan
+                                                            change. Only offered when there is actually a balance to settle. */}
+                                                        {balance > 0 && (
+                                                            <Pressable
+                                                                onPress={handleSelectPayCurrentBalance}
+                                                                style={[
+                                                                    styles.planOption,
+                                                                    payCurrentBalance && { backgroundColor: (colorPalette?.primary || '#7c3aed') + '12' },
+                                                                ]}
+                                                            >
+                                                                <View style={{ flex: 1, marginRight: 8 }}>
+                                                                    <Text style={styles.planOptionName} numberOfLines={1}>Pay Current Balance</Text>
+                                                                </View>
+                                                                <Text style={[styles.planOptionPrice, payCurrentBalance && { color: colorPalette?.primary || '#7c3aed' }]}>
+                                                                    {formatCurrency(balance)}
+                                                                </Text>
+                                                            </Pressable>
+                                                        )}
                                                         {plans.map(plan => {
                                                             const isSelected = plan.id === selectedPlanId;
                                                             const isCurrent = plan.id === currentPlan?.id;
@@ -1055,7 +1097,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
                                         {isPrepaid
-                                            ? (selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above')
+                                            ? (payCurrentBalance ? 'Paying your current balance' : selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above')
                                             : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>
@@ -1067,11 +1109,11 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     isPaymentProcessing
                                     || paymentAmount < 1
                                     || !isPaymentAmountValid
-                                    || (isPrepaid && !selectedPlan)
+                                    || (isPrepaid && !selectedPlan && !payCurrentBalance)
                                 }
                                 style={[styles.primaryBtn, {
                                     backgroundColor: colorPalette?.primary || '#ef4444',
-                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isPaymentAmountValid || (isPrepaid && !selectedPlan)) ? 0.5 : 1,
+                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isPaymentAmountValid || (isPrepaid && !selectedPlan && !payCurrentBalance)) ? 0.5 : 1,
                                 }]}
                             >
                                 <Text style={styles.primaryBtnText}>
