@@ -36,6 +36,9 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+/** Placeholder for always-rendered fields that hold no value. */
+const NOT_SET = 'Not Set';
+
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
   try {
@@ -1189,37 +1192,47 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.billingStatus}>{billingRecord.billingStatus}</span>
         </div>
       ) : null,
-      generationType: () => billingRecord.generationType ? (
+      // Billing Type / VAT / Withholding / VIP are ALWAYS rendered, even with no value, so the
+      // Billing Details section keeps a stable shape and a missing setting is visibly missing
+      // rather than silently absent. NOT_SET is the placeholder for "no value stored".
+      generationType: () => (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>Billing Type</span>
           <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`} title={billingRecord.generationType}>{billingRecord.generationType}</span>
+            }`} title={billingRecord.generationType || NOT_SET}>{billingRecord.generationType || NOT_SET}</span>
         </div>
-      ) : null,
+      ),
       vatType: () => {
         // Prefers the boolean; falls back to the legacy free-text mode for accounts created
-        // before vat_enabled existed, so those still show something meaningful.
+        // before vat_enabled existed. Only when neither is present is it genuinely unset.
         const vatLabel = typeof billingRecord.vatEnabled === 'boolean'
-          ? (billingRecord.vatEnabled ? 'VAT Excluded' : 'No VAT')
-          : billingRecord.vatType;
-        return vatLabel ? (
+          ? (billingRecord.vatEnabled ? 'VAT Included' : 'No VAT')
+          : (billingRecord.vatType || NOT_SET);
+        return (
           <div className="flex justify-between items-center gap-4">
             <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>VAT</span>
             <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`} title={vatLabel}>{vatLabel}</span>
           </div>
-        ) : null;
+        );
       },
-      withholding: () => billingRecord.withholdingEnabled ? (
-        <div className="flex justify-between items-center gap-4">
-          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>Withholding</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>{billingRecord.withholdingPercentage ?? 0}%</span>
-        </div>
-      ) : null,
+      withholding: () => {
+        // Explicit false is a real answer ("No"), not a missing value — only null/undefined,
+        // meaning an account predating the column, reads as unset.
+        const withholdingLabel = billingRecord.withholdingEnabled
+          ? `${billingRecord.withholdingPercentage ?? 0}%`
+          : (billingRecord.withholdingEnabled === false ? 'No' : NOT_SET);
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>Withholding</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>{withholdingLabel}</span>
+          </div>
+        );
+      },
       prepaidExpiration: () => billingRecord.prepaidExpiration ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -1228,14 +1241,14 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`}>{formatDateTime(billingRecord.prepaidExpiration)}</span>
         </div>
       ) : null,
-      vip_expiration: () => billingRecord.vip_expiration ? (
+      vip_expiration: () => (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>VIP Expiration Date</span>
           <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>{formatDate(billingRecord.vip_expiration)}</span>
+            }`}>{billingRecord.vip_expiration ? formatDate(billingRecord.vip_expiration) : NOT_SET}</span>
         </div>
-      ) : null,
+      ),
       vip_remarks: () => billingRecord.vip_remarks ? (
         <div className="flex justify-between items-start gap-4 flex-col sm:flex-row sm:items-center">
           <span className={`text-xs sm:text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>VIP Remarks</span>
@@ -1596,7 +1609,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       addRow(["Billing Type", billingRecord.generationType]);
     }
     const vatExportLabel = typeof billingRecord.vatEnabled === 'boolean'
-      ? (billingRecord.vatEnabled ? 'VAT Excluded' : 'No VAT')
+      ? (billingRecord.vatEnabled ? 'VAT Included' : 'No VAT')
       : billingRecord.vatType;
     if (vatExportLabel) {
       addRow(["VAT", vatExportLabel]);

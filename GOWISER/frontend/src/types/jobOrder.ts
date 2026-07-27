@@ -74,7 +74,7 @@ export interface JobOrder {
   // generation reads vat_enabled.
   Vat_Type?: string | null;
   vat_type?: string | null;
-  /** false = No VAT (bill the plan price). true = VAT Excluded (VAT added on top). */
+  /** false = No VAT (bill the plan price). true = VAT Included (VAT added on top). */
   vat_enabled?: boolean | null;
   withholding_enabled?: boolean | null;
   /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */

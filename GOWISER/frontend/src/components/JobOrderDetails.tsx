@@ -30,6 +30,9 @@ const CustomerDetails = React.lazy(() => import('./CustomerDetails'));
 const InventoryDetails = React.lazy(() => import('./InventoryDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
 
+/** Placeholder for always-rendered fields that hold no value. */
+const NOT_SET = 'Not Set';
+
 const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, onRefresh, isMobile = false, onPrevious, onNext, onExpandSection }) => {
   const [localIsMobile, setLocalIsMobile] = useState<boolean>(window.innerWidth < 768);
   useEffect(() => {
@@ -1103,43 +1106,45 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         );
 
+      // Billing Type / VIP / VAT / Withholding are ALWAYS rendered, even with no value, so the
+      // details panel keeps a stable shape and a missing setting is visibly missing rather than
+      // silently absent. NOT_SET is the placeholder for "no value stored".
       case 'generationType':
         const generationType = jobOrder.generation_type || jobOrder.Generation_Type;
-        if (!generationType) return null;
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Billing Type:</div>
-            <div className={valueClass}>{generationType}</div>
+            <div className={valueClass}>{generationType || NOT_SET}</div>
           </div>
         );
 
       // A VIP job order is approved into the VIP billing status and is never billed, so VAT and
       // withholding are suppressed on it — the same rule the JO Assign Form enforces.
       case 'vip': {
-        if (!jobOrder.vip_enabled) return null;
+        // Explicit false is a real answer ("No"), not a missing value — only null/undefined,
+        // meaning a job order predating the column, reads as unset.
         const vipExpiration = jobOrder.vip_expiration;
+        const vipLabel = jobOrder.vip_enabled
+          // Date-only: the model casts vip_expiration to a datetime, so formatDate would tack a
+          // meaningless "12:00 AM" onto what the form captured as a plain date.
+          ? `Yes${vipExpiration ? ` — expires ${formatOnlyDate(vipExpiration)}` : ''}`
+          : (jobOrder.vip_enabled === false ? 'No' : NOT_SET);
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>VIP:</div>
-            <div className={valueClass}>
-              {/* Date-only: the model casts vip_expiration to a datetime, so formatDate would
-                  tack a meaningless "12:00 AM" onto what the form captured as a plain date. */}
-              Yes{vipExpiration ? ` — expires ${formatOnlyDate(vipExpiration)}` : ''}
-            </div>
+            <div className={valueClass}>{vipLabel}</div>
           </div>
         );
       }
 
       case 'vatType': {
-        if (jobOrder.vip_enabled) return null;
         // Ticked reads as "VAT Included" — the bill the customer receives includes VAT, which is
         // the wording used on the job order. The computation is unchanged: VAT is added on top of
         // the plan price.
         // Falls back to the legacy text for job orders created before vat_enabled existed.
         const vatType = jobOrder.vat_enabled === true || jobOrder.vat_enabled === false
           ? (jobOrder.vat_enabled ? 'VAT Included' : 'No VAT')
-          : (jobOrder.vat_type || jobOrder.Vat_Type);
-        if (!vatType) return null;
+          : (jobOrder.vat_type || jobOrder.Vat_Type || NOT_SET);
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>VAT:</div>
@@ -1149,11 +1154,13 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       }
 
       case 'withholding': {
-        if (jobOrder.vip_enabled || !jobOrder.withholding_enabled) return null;
+        const withholdingLabel = jobOrder.withholding_enabled
+          ? `${jobOrder.withholding_percentage ?? 0}%`
+          : (jobOrder.withholding_enabled === false ? 'No' : NOT_SET);
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Withholding:</div>
-            <div className={valueClass}>{jobOrder.withholding_percentage ?? 0}%</div>
+            <div className={valueClass}>{withholdingLabel}</div>
           </div>
         );
       }

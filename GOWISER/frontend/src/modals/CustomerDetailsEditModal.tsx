@@ -248,9 +248,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           generation_type: normalizeGenerationType(
             recordData.generation_type || recordData.generationType || recordData.billingAccount?.generation_type || ''
           ),
-          // VAT is a boolean now: unchecked = No VAT, checked = VAT Excluded (added on top).
+          // VAT is a boolean now: unchecked = No VAT, checked = VAT Included (added on top).
           // Accounts written before vat_enabled existed only carry the legacy free-text mode, so
-          // fall back to it — 'Excluded Vat' is the only value that still adds VAT.
+          // fall back to it. Note the legacy DB value for "VAT is added" is the string
+          // 'Excluded Vat' — the old three-mode vocabulary, unrelated to today's label.
           vat_enabled: (() => {
             const stored = recordData.vat_enabled ?? recordData.vatEnabled ?? recordData.billingAccount?.vat_enabled;
             if (stored !== undefined && stored !== null) return Boolean(stored);
@@ -1609,7 +1610,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                     {formData.vat_enabled
-                      ? 'VAT Excluded — VAT is added on top of the plan price.'
+                      ? 'VAT Included — VAT is added on top of the plan price.'
                       : 'No VAT — the customer is billed the plan price.'}
                   </p>
                 </div>

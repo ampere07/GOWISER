@@ -365,8 +365,9 @@ class CustomerDetailUpdateController extends Controller
 
             // Keep vat_type and vat_enabled in lockstep. Billing generation reads vat_enabled, so
             // editing only the legacy text here would otherwise silently change nothing.
-            // 'Excluded Vat' is the only mode that still adds VAT; 'Vat Included' is gone and both
-            // it and 'No Vat' bill exactly the plan price, i.e. vat_enabled = false.
+            // 'Excluded Vat' is the only LEGACY value that still adds VAT — old vocabulary, not the
+            // current label (the UI says "VAT Included"). The old 'Vat Included' mode is gone; both
+            // it and 'No Vat' billed exactly the plan price, i.e. vat_enabled = false.
             if ($request->has('vat_type')) {
                 $vatType = $validated['vat_type'] ?? null;
                 $updateData['vat_type'] = $vatType;

@@ -681,6 +681,9 @@ class JobOrderController extends Controller
                 'onsite_status' => 'nullable|string|max:100',
                 'billing_status' => 'nullable|string|max:255',
                 // Same billing flags as store(); VIP forces the other two off on write.
+                // generation_type is editable here too — the Done form sets it, and it decides
+                // whether the account bills on a fixed day or a rolling prepaid period.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid|max:100',
                 'vat_enabled' => 'nullable|boolean',
                 'withholding_enabled' => 'nullable|boolean',
                 'withholding_percentage' => 'nullable|numeric|min:0|max:100',

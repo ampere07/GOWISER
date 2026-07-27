@@ -91,7 +91,7 @@ class EnhancedBillingGenerationServiceWithNotifications
      *
      *  - VAT off : no VAT is applied at all; the bill is exactly the plan price.
      *              e.g. 1,000        -> net 1,000.00, VAT 0.00, total 1,000.00
-     *  - VAT on  : VAT is added ON TOP of the plan price ("VAT Excluded").
+     *  - VAT on  : VAT is added ON TOP of the plan price (labelled "VAT Included" in the UI).
      *              e.g. 1,000 @ 12% -> net 1,000.00, VAT 120.00, total 1,120.00
      *
      * The VAT percentage is the one already configured for the system ({@see getVatRate()}).
@@ -826,7 +826,15 @@ class EnhancedBillingGenerationServiceWithNotifications
         if ($account->billing_day === self::END_OF_MONTH_BILLING) {
             return $baseDate->copy()->endOfMonth();
         }
-        
+
+        // No billing day at all — a prepaid account, which bills on a rolling period rather than a
+        // fixed day. The bill is dated the day it is generated, so the due date lands the usual
+        // offset after that. Guarding here is essential: Carbon's ->day(null) silently resolves to
+        // the LAST DAY OF THE PREVIOUS MONTH, which would back-date the bill.
+        if ($account->billing_day === null || $account->billing_day === '') {
+            return $baseDate->copy()->startOfDay();
+        }
+
         // Normalize time to start of day to avoid time propagation issues
         $baseDate = $baseDate->copy()->startOfDay();
         $adjustedDate = $baseDate->copy()->day($account->billing_day);

@@ -62,8 +62,10 @@ interface JOFormData {
   remarks: string;
   installationFee: number | string;
   billingDay: string;
+  /** 'Prepaid' | 'Postpaid'. Prepaid bills on a rolling period, so it has no billing day. */
+  generationType: string;
   isLastDayOfMonth: boolean;
-  /** Unchecked = No VAT (bill the plan price). Checked = VAT Excluded (VAT added on top). */
+  /** Unchecked = No VAT (bill the plan price). Checked = VAT Included (VAT added on top). */
   vatEnabled: boolean;
   withholdingEnabled: boolean;
   /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. Only used when withholding is on. */
@@ -121,6 +123,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     remarks: '',
     installationFee: 0,
     billingDay: '',
+    generationType: '',
     isLastDayOfMonth: false,
     vatEnabled: false,
     withholdingEnabled: false,
@@ -349,6 +352,15 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         installationFee: jobOrderData.installation_fee || jobOrderData.Installation_Fee || 0,
         billingDay: (jobOrderData.billing_day !== undefined && jobOrderData.billing_day !== null) ? String(jobOrderData.billing_day) : (jobOrderData.Billing_Day !== undefined && jobOrderData.Billing_Day !== null) ? String(jobOrderData.Billing_Day) : '',
         isLastDayOfMonth: jobOrderData.billing_day === 0 || jobOrderData.Billing_Day === 0,
+        // Billing Type set at assignment. Normalised to the canonical spelling so the <select>
+        // still matches for rows written by older builds as 'Pre Paid' / 'Post Paid'.
+        generationType: (() => {
+          const raw = String(jobOrderData.generation_type ?? jobOrderData.Generation_Type ?? '');
+          const letters = raw.toLowerCase().replace(/[^a-z]/g, '');
+          if (letters === 'prepaid') return 'Prepaid';
+          if (letters === 'postpaid') return 'Postpaid';
+          return '';
+        })(),
         // Preserve the VAT / withholding / VIP configuration set when the job order was assigned.
         vatEnabled: Boolean(jobOrderData.vat_enabled ?? jobOrderData.Vat_Enabled ?? false),
         withholdingEnabled: Boolean(jobOrderData.withholding_enabled ?? jobOrderData.Withholding_Enabled ?? false),
@@ -391,6 +403,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         remarks: '',
         installationFee: 0,
         billingDay: '',
+        generationType: '',
         isLastDayOfMonth: false,
         vatEnabled: false,
         withholdingEnabled: false,
@@ -507,6 +520,18 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     });
   };
 
+  /**
+   * Prepaid accounts have no billing day: they bill on a rolling 30-day period that starts when
+   * they pay, and are excluded from the fixed-billing-day generator entirely. So the Billing Day
+   * field is hidden and not required for them — same rule as the JO Assign Form.
+   *
+   * Letters-only compare so a job order still holding the older 'Pre Paid' also resolves.
+   */
+  const isPrepaidGenerationType = (generationType?: string | null): boolean =>
+    String(generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+  const isPrepaidBillingType = isPrepaidGenerationType(formData.generationType);
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -534,8 +559,12 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     if (!formData.choosePlan.trim()) newErrors.choosePlan = 'Choose Plan is required';
     if (Number(formData.installationFee) < 0) newErrors.installationFee = 'Installation fee cannot be negative';
 
+    if (!formData.generationType.trim()) newErrors.generationType = 'Billing Type is required';
+
+    // Skipped for prepaid: the field is hidden, so requiring it would block submission with an
+    // error the user cannot see or fix.
     const billingDayNum = parseInt(formData.billingDay);
-    if (!formData.isLastDayOfMonth) {
+    if (!isPrepaidBillingType && !formData.isLastDayOfMonth) {
       if (isNaN(billingDayNum) || billingDayNum < 1) {
         newErrors.billingDay = 'Billing Day must be at least 1';
       } else if (billingDayNum > 30) {
@@ -731,12 +760,19 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         assigned_email: updatedFormData.assignedEmail,
         onsite_remarks: updatedFormData.remarks,
         installation_fee: Number(updatedFormData.installationFee) || 0,
-        billing_day: updatedFormData.isLastDayOfMonth ? 0 : (parseInt(updatedFormData.billingDay) || 30),
+        generation_type: updatedFormData.generationType || null,
+        // NULL for prepaid: the field is hidden for them, so `parseInt('') || 30` would store a
+        // fictional billing day of 30. Prepaid bills on a rolling period from the payment date.
+        billing_day: isPrepaidGenerationType(updatedFormData.generationType)
+          ? null
+          : (updatedFormData.isLastDayOfMonth ? 0 : (parseInt(updatedFormData.billingDay) || 30)),
         // A VIP is comped and never billed, so VAT and withholding are forced off for it. The
         // backend applies the same rule, so a direct API caller cannot bypass it either.
         vat_enabled: !updatedFormData.vipEnabled && Boolean(updatedFormData.vatEnabled),
-        // Legacy text column, kept in sync with the boolean so the job order detail view, exports
-        // and any older client that still reads vat_type keep showing the right thing.
+        // Legacy text column, kept in sync with the boolean for older readers of vat_type.
+        // 'Excluded Vat' is the OLD three-mode vocabulary for "VAT is added on top" — not a label
+        // any more (the UI says "VAT Included"), written only so existing consumers of this column
+        // keep resolving the right computation.
         vat_type: !updatedFormData.vipEnabled && updatedFormData.vatEnabled ? 'Excluded Vat' : 'No Vat',
         withholding_enabled: !updatedFormData.vipEnabled && Boolean(updatedFormData.withholdingEnabled),
         withholding_percentage: !updatedFormData.vipEnabled && updatedFormData.withholdingEnabled
@@ -1343,6 +1379,37 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  Billing Type<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={formData.generationType}
+                    onChange={(e) => handleInputChange('generationType', e.target.value)}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.generationType ? 'border-red-500' : ''}`}
+                  >
+                    <option value="" disabled>Select Billing Type</option>
+                    <option value="Prepaid">Prepaid</option>
+                    <option value="Postpaid">Postpaid</option>
+                  </select>
+                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} size={20} />
+                </div>
+                {errors.generationType && <p className="text-red-500 text-xs mt-1">{errors.generationType}</p>}
+              </div>
+
+              {/* Hidden for prepaid — they bill on a rolling period, not a fixed day. */}
+              {isPrepaidBillingType ? (
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Billing Day
+                  </label>
+                  <p className={`text-xs px-3 py-2 rounded border ${isDarkMode ? 'text-gray-400 border-gray-700 bg-gray-800' : 'text-gray-500 border-gray-300 bg-gray-50'}`}>
+                    Not applicable to prepaid accounts — billing runs on a rolling 30-day period
+                    that starts when the customer pays.
+                  </p>
+                </div>
+              ) : (
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   Billing Day<span className="text-red-500">*</span>
                 </label>
                 <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
@@ -1395,6 +1462,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 )}
                 {errors.billingDay && <p className="text-red-500 text-xs mt-1">{errors.billingDay}</p>}
               </div>
+              )}
 
               <div>
                 <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
@@ -1412,7 +1480,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   {formData.vipEnabled
                     ? 'Not applicable to VIP accounts — they are not billed.'
                     : formData.vatEnabled
-                      ? 'VAT Excluded — VAT is added on top of the plan price.'
+                      ? 'VAT Included — VAT is added on top of the plan price.'
                       : 'No VAT — the customer is billed the plan price.'}
                 </p>
               </div>

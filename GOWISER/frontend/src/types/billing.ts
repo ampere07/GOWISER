@@ -25,7 +25,7 @@ export interface BillingRecord {
   pendingPlanEffectiveAt?: string;
   /** Legacy free-text VAT mode. vatEnabled below is what billing generation actually reads. */
   vatType?: string;
-  /** false = No VAT (plan price billed as-is). true = VAT Excluded (VAT added on top). */
+  /** false = No VAT (plan price billed as-is). true = VAT Included (VAT added on top). */
   vatEnabled?: boolean | null;
   withholdingEnabled?: boolean | null;
   /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */

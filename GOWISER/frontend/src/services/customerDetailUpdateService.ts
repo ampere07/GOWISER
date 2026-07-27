@@ -29,7 +29,7 @@ export interface BillingDetailsUpdate {
   accountBalance?: number | string;
   vip_expiration?: string;
   vip_remarks?: string;
-  /** false = No VAT (bill the plan price). true = VAT Excluded (VAT added on top). */
+  /** false = No VAT (bill the plan price). true = VAT Included (VAT added on top). */
   vat_enabled?: boolean;
   withholding_enabled?: boolean;
   /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */

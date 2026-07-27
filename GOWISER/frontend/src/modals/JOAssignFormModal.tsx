@@ -49,7 +49,7 @@ interface JOFormData {
   installationFee: number | string;
   billingDay: string;
   generationType: string;
-  /** Unchecked = No VAT (bill the plan price). Checked = VAT Excluded (VAT added on top). */
+  /** Unchecked = No VAT (bill the plan price). Checked = VAT Included (VAT added on top). */
   vatEnabled: boolean;
   withholdingEnabled: boolean;
   /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. Only used when withholding is on. */
@@ -560,8 +560,10 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
    *
    * Letters-only compare so a job order still holding the older 'Pre Paid' also resolves.
    */
-  const isPrepaidBillingType =
-    String(formData.generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+  const isPrepaidGenerationType = (generationType?: string | null): boolean =>
+    String(generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+  const isPrepaidBillingType = isPrepaidGenerationType(formData.generationType);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -693,13 +695,20 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       application_id: applicationId,
       timestamp: formattedTimestamp,
       installation_fee: Number(data.installationFee) || 0,
-      billing_day: parseInt(data.billingDay) || 30,
+      // NULL for prepaid: the field is hidden for them, and `parseInt('') || 30` was quietly
+      // storing a billing day of 30 on every prepaid job order. Prepaid bills on a rolling 30-day
+      // period from the payment date, so any fixed day here is fiction — and it would become a
+      // real billing day the moment someone switched the account to postpaid.
+      billing_day: isPrepaidGenerationType(data.generationType) ? null : (parseInt(data.billingDay) || 30),
       generation_type: toNullIfEmpty(data.generationType),
       // A VIP is comped and never billed, so VAT and withholding are forced off for it. The
       // backend applies the same rule, so a direct API caller cannot bypass it either.
       vat_enabled: !data.vipEnabled && Boolean(data.vatEnabled),
-      // Legacy text column, kept in sync with the boolean so the job order detail view, exports
-      // and any older client that still reads vat_type keep showing the right thing.
+      // Legacy text column, kept in sync with the boolean for older readers of vat_type.
+      // 'Excluded Vat' is the OLD three-mode vocabulary for "VAT is added on top" — it is not a
+      // label any more (the UI says "VAT Included") and is written only so existing consumers of
+      // this column keep resolving the right computation. Renaming it would invert the meaning of
+      // every historical row, where 'Vat Included' meant the price already contained VAT.
       vat_type: !data.vipEnabled && data.vatEnabled ? 'Excluded Vat' : 'No Vat',
       withholding_enabled: !data.vipEnabled && Boolean(data.withholdingEnabled),
       withholding_percentage: !data.vipEnabled && data.withholdingEnabled
@@ -1291,7 +1300,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                   {formData.vipEnabled
                     ? 'Not applicable to VIP accounts — they are not billed.'
                     : formData.vatEnabled
-                      ? 'VAT Excluded — VAT is added on top of the plan price.'
+                      ? 'VAT Included — VAT is added on top of the plan price.'
                       : 'No VAT — the customer is billed the plan price.'}
                 </p>
               </div>
