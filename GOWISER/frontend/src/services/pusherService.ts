@@ -3,7 +3,10 @@ import apiClient, { API_BASE_URL } from '../config/api';
 
 const SOKETI_HOST = process.env.REACT_APP_SOKETI_HOST || 'ws.gowiser.ph';
 const SOKETI_PORT = 443;
-const SOKETI_KEY = process.env.REACT_APP_SOKETI_KEY || '8ctWR5PdV1dgM5h6RTGioI8k1hPbl8ImM3P6K3cne5v';
+// Fallback must be an app that actually exists on the Soketi server, otherwise a missing env var
+// silently kills every realtime feature with "App key does not exist". Verified by handshake
+// against ws.gowiser.ph; keep in step with the backend's PUSHER_APP_KEY.
+const SOKETI_KEY = process.env.REACT_APP_SOKETI_KEY || '8a84OUseLCGQAtaEeANi04muzz1HYsjfaYsz3d6KMAK';
 const SOKETI_FORCE_TLS = true;
 // Enable Pusher logging (disabled for production clean-up)
 Pusher.logToConsole = false;
