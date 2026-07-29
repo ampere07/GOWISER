@@ -4,6 +4,20 @@ import { API_BASE_URL } from '../config/api';
 
 // No need to redeclare API_BASE_URL or getApiBaseUrl
 
+export interface PlanChangeQuote {
+  status: string;
+  /** false when the account is outside the never-paid prepaid onboarding window. */
+  eligible: boolean;
+  reason?: string | null;
+  plan?: string;
+  plan_amount?: number;
+  vat?: number;
+  withholding?: number;
+  /** The re-priced total the customer would actually be charged. */
+  amount?: number;
+  previous_amount?: number;
+}
+
 export interface PendingPayment {
   reference_no: string;
   payment_url: string;
@@ -61,6 +75,40 @@ export const paymentService = {
     } catch (error: any) {
       console.error('Get account balance error:', error.response?.data || error.message);
       return 0;
+    }
+  },
+
+  /**
+   * Read-only: what an unpaid prepaid ONBOARDING bill would come to under a different plan.
+   *
+   * Returns eligible:false for any account outside that never-paid window — callers should then
+   * keep their existing amount behaviour. The VAT/withholding maths stays server-side so the
+   * client never reimplements it.
+   */
+  quotePlanChange: async (accountNo: string, planId: number): Promise<PlanChangeQuote | null> => {
+    try {
+      const authData = await AsyncStorage.getItem('authData');
+      let token = '';
+      if (authData) {
+        token = JSON.parse(authData).token || '';
+      }
+
+      const response = await axios.post<PlanChangeQuote>(
+        `${API_BASE_URL}/payments/quote-plan-change`,
+        { account_no: accountNo, plan_id: planId },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          }
+        }
+      );
+
+      return response.data;
+    } catch (error: any) {
+      // Non-fatal: the caller falls back to the plan price.
+      console.error('Quote plan change error:', error.response?.data || error.message);
+      return null;
     }
   },
 

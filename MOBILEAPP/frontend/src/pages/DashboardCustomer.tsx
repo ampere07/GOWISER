@@ -44,6 +44,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
     // instead of buying a plan/plan-change (no plan_id is sent when this is on).
     const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
+    // Prepaid onboarding re-price: a customer who has not paid their first bill yet may still swap
+    // plan, which re-prices that unpaid bill. The server quotes the real amount (plan + VAT minus
+    // withholding) so the tax maths is never duplicated here.
+    const [onboardingQuoteAmount, setOnboardingQuoteAmount] = useState<number | null>(null);
+    const [isQuotingPlan, setIsQuotingPlan] = useState<boolean>(false);
+    // Whether this account is in that window at all. Resolved when the modal opens, BEFORE any
+    // plan is picked - the cheaper plans must be selectable for a quote to ever happen.
+    const [canRepriceOnboarding, setCanRepriceOnboarding] = useState<boolean>(false);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -184,7 +192,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
      * Neither applies while nothing is owed — a zero/credit balance keeps the ₱1 floor only.
      */
     const requiresExactPayment = !isPrepaid && balance > 0;
-    const requiresPlanCoversBalance = isPrepaid && balance > 0;
+    // A quoted onboarding re-price REPLACES the outstanding balance rather than paying it off, so
+    // the "plan must cover the balance" floor does not apply - that is what lets a first-time
+    // customer move to a cheaper plan before they have paid anything.
+    const requiresPlanCoversBalance = isPrepaid && balance > 0 && !canRepriceOnboarding;
 
     // Compared at 2 decimal places: the balance arrives as a decimal string, and float maths on
     // centavos would otherwise make an exact-equality check fail on a legitimate amount.
@@ -484,28 +495,67 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
      * they are buying a service period, so the amount always tracks the selected plan.
      * Postpaid: unchanged, the amount starts at the outstanding balance.
      */
-    function openVerifyModal() {
+    async function openVerifyModal() {
+        setOnboardingQuoteAmount(null);
+        setCanRepriceOnboarding(false);
+        let preselectedPlan: Plan | null = null;
         if (isPrepaid) {
             // A queued switch wins over the plan currently in force: the customer has already
             // bought it, so a top-up must be priced at that plan, not the one being replaced.
-            const preselected = pendingPlan ?? currentPlan ?? plans[0] ?? null;
-            setSelectedPlanId(preselected?.id ?? null);
-            setPaymentAmount(Number(preselected?.price ?? 0));
+            preselectedPlan = pendingPlan ?? currentPlan ?? plans[0] ?? null;
+            setSelectedPlanId(preselectedPlan?.id ?? null);
+            setPaymentAmount(Number(preselectedPlan?.price ?? 0));
         } else {
             setPaymentAmount(balance);
         }
         setPayCurrentBalance(false);
         setIsPlanListOpen(false);
         setShowPaymentVerifyModal(true);
+
+        // Resolve up front whether this is an unpaid first bill that can be re-priced. Without
+        // this, every plan cheaper than the balance renders as under-balance and the customer
+        // could never pick one to find out.
+        if (isPrepaid && preselectedPlan) {
+            setIsQuotingPlan(true);
+            try {
+                const quote = await paymentService.quotePlanChange(accountNo, preselectedPlan.id);
+                if (quote?.eligible && typeof quote.amount === 'number') {
+                    setCanRepriceOnboarding(true);
+                    setOnboardingQuoteAmount(quote.amount);
+                    setPaymentAmount(quote.amount);
+                }
+            } finally {
+                setIsQuotingPlan(false);
+            }
+        }
     }
 
     /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
-    const handleSelectPlan = (plan: Plan) => {
+    const handleSelectPlan = async (plan: Plan) => {
         const price = Number(plan.price ?? 0);
         setPayCurrentBalance(false);
         setSelectedPlanId(plan.id);
         setPaymentAmount(price);
         setIsPlanListOpen(false);
+        setErrorMessage('');
+
+        // A customer still on their unpaid FIRST bill may swap plan freely: the server re-prices
+        // that bill, so the amount becomes the new plan's total rather than the old balance.
+        setIsQuotingPlan(true);
+        try {
+            const quote = await paymentService.quotePlanChange(accountNo, plan.id);
+            if (quote?.eligible && typeof quote.amount === 'number') {
+                setCanRepriceOnboarding(true);
+                setOnboardingQuoteAmount(quote.amount);
+                setPaymentAmount(quote.amount);
+                return;
+            }
+            setCanRepriceOnboarding(false);
+            setOnboardingQuoteAmount(null);
+        } finally {
+            setIsQuotingPlan(false);
+        }
+
         // Flag a plan too cheap to clear the balance straight away, rather than letting the
         // customer discover it only when they press Pay.
         if (requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance)) {
@@ -522,6 +572,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         setPaymentAmount(balance);
         setIsPlanListOpen(false);
         setErrorMessage('');
+        // Drop any onboarding re-price quote - this mode pays the balance as it stands and sends
+        // no plan, so nothing gets re-priced.
+        setOnboardingQuoteAmount(null);
+        setCanRepriceOnboarding(false);
     };
 
     function handleCloseVerifyModal() {
@@ -789,8 +843,52 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                         </LinearGradient>
                     </Animated.View>
 
+                    {/* Prepaid plan summary. Prepaid buys a service period, so the plan only means
+                        something next to the date it runs out — and a plan change already paid for
+                        is listed separately, because it is NOT what they are on today. Shown here
+                        rather than on the flipped card so it needs no interaction to find. */}
+                    {isPrepaid && (
+                        <View style={styles.sectionGap}>
+                            <View style={styles.sectionHeader}>
+                                <Text style={styles.sectionTitle}>Plan</Text>
+                            </View>
 
+                            <View style={styles.referralContent}>
+                                <View style={styles.verifyRow}>
+                                    <Text style={styles.verifyLabel}>Current Plan</Text>
+                                    <Text style={styles.verifyValue}>{planName}</Text>
+                                </View>
+                                <View style={styles.verifyRow}>
+                                    <Text style={styles.verifyLabel}>Expires</Text>
+                                    <Text style={styles.verifyValue}>
+                                        {formatDbDate(prepaidExpiresAt) ?? 'Not started'}
+                                    </Text>
+                                </View>
 
+                                {pendingPlanName && (
+                                    <>
+                                        <View style={styles.verifyRow}>
+                                            <Text style={styles.verifyLabel}>Upcoming Plan</Text>
+                                            <Text style={[styles.verifyValue, { color: colorPalette?.primary || '#ef4444' }]}>
+                                                {pendingPlanName}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.verifyRow}>
+                                            <Text style={styles.verifyLabel}>Starts</Text>
+                                            <Text style={styles.verifyValue}>
+                                                {/* No effective date stored means the switch lands as soon as
+                                                    the current period lapses, not on a fixed day. */}
+                                                {formatDbDate(pendingPlanEffectiveAt)
+                                                    ?? (formatDbDate(prepaidExpiresAt)
+                                                        ? `After ${formatDbDate(prepaidExpiresAt)}`
+                                                        : 'After current period')}
+                                            </Text>
+                                        </View>
+                                    </>
+                                )}
+                            </View>
+                        </View>
+                    )}
 
                     {/* Payment History Section */}
                     <View style={styles.sectionGap}>
@@ -1097,7 +1195,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
                                         {isPrepaid
-                                            ? (payCurrentBalance ? 'Paying your current balance' : selectedPlan ? `Set by your ${selectedPlan.name} plan` : 'Select a plan above')
+                                            ? (isQuotingPlan
+                                                ? 'Computing amount…'
+                                                : payCurrentBalance
+                                                    ? 'Paying your current balance'
+                                                    : selectedPlan
+                                                        ? (onboardingQuoteAmount !== null
+                                                            ? `${selectedPlan.name} — first bill re-priced (incl. VAT/withholding)`
+                                                            : `Set by your ${selectedPlan.name} plan`)
+                                                        : 'Select a plan above')
                                             : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>

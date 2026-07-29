@@ -103,6 +103,48 @@ class XenditPaymentController extends Controller
                 }
             }
 
+            // A prepaid customer who has not paid their first bill yet may still change plan. Their
+            // bill was raised at approval for the plan on the job order, so re-price that same bill
+            // now and charge the re-priced total — otherwise they would pay one plan's price
+            // against an invoice for another, leaving it Unpaid forever.
+            //
+            // Deliberately NOT changing plan_id here: PrepaidPlanChangeService applies the plan on
+            // settlement (and pushes it to RADIUS). Applying it early would make that step see
+            // "same plan" and skip the RADIUS push.
+            if ($selectedPlan) {
+                $billingAccount = \App\Models\BillingAccount::where('account_no', $accountNo)->first();
+                $billingService = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class);
+
+                if ($billingAccount
+                    && $billingService->isUnpaidPrepaidOnboarding($billingAccount)
+                    && (int) $billingAccount->plan_id !== (int) $selectedPlan->id) {
+
+                    $planModel = \App\Models\AppPlan::find($selectedPlan->id);
+                    $reprice = $planModel
+                        ? $billingService->repricePrepaidInitialBillForPlan($billingAccount, $planModel, 0)
+                        : ['revised' => false, 'reason' => 'plan not resolvable as AppPlan'];
+
+                    if (!empty($reprice['revised'])) {
+                        // The re-priced total is authoritative — the client's amount was derived
+                        // from a quote and must never override what the invoice now says.
+                        $amount = (float) $reprice['new_total'];
+                        $account->account_balance = $reprice['new_balance'];
+
+                        Log::info('Prepaid onboarding bill re-priced for newly selected plan', [
+                            'account_no' => $accountNo,
+                            'plan' => $reprice['plan'] ?? null,
+                            'previous_total' => $reprice['previous_total'],
+                            'charged_amount' => $amount,
+                        ]);
+                    } else {
+                        Log::info('Prepaid onboarding re-price skipped', [
+                            'account_no' => $accountNo,
+                            'reason' => $reprice['reason'] ?? 'unknown',
+                        ]);
+                    }
+                }
+            }
+
             // Note: Duplicate check now handled by frontend via check-pending endpoint
             // This allows better UX with resume option
 
@@ -404,6 +446,71 @@ class XenditPaymentController extends Controller
             ]);
 
             return response()->json(['message' => 'OK'], 200);
+        }
+    }
+
+    /**
+     * Read-only: what would the unpaid prepaid onboarding bill come to under a different plan?
+     *
+     * Lets the payment screen show the real amount as the customer browses plans without writing
+     * anything — the actual re-price happens once they commit, in createPayment(). The tax maths
+     * stays server-side so the client never has to reimplement VAT/withholding.
+     *
+     * `eligible: false` simply means this account is not in the never-paid onboarding window, and
+     * the caller should keep its existing amount behaviour.
+     */
+    public function quotePlanChange(Request $request)
+    {
+        try {
+            $accountNo = $request->input('account_no');
+            $planId = $request->input('plan_id');
+
+            if (!$accountNo || !$planId) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'account_no and plan_id are required',
+                ], 422);
+            }
+
+            $account = \App\Models\BillingAccount::where('account_no', $accountNo)->first();
+            $plan = \App\Models\AppPlan::find($planId);
+
+            if (!$account || !$plan) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => !$account ? 'Account not found' : 'Plan not found',
+                ], 404);
+            }
+
+            $billingService = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class);
+
+            if (!$billingService->isUnpaidPrepaidOnboarding($account)) {
+                return response()->json([
+                    'status' => 'success',
+                    'eligible' => false,
+                    'reason' => 'account is not an unpaid prepaid onboarding account',
+                ]);
+            }
+
+            $quote = $billingService->repricePrepaidInitialBillForPlan($account, $plan, 0, false);
+
+            return response()->json([
+                'status' => 'success',
+                'eligible' => (bool) ($quote['revised'] ?? false),
+                'reason' => $quote['reason'] ?? null,
+                'plan' => $quote['plan'] ?? $plan->plan_name,
+                'plan_amount' => $quote['plan_amount'],
+                'vat' => $quote['vat'],
+                'withholding' => $quote['withholding'],
+                'amount' => $quote['new_total'],
+                'previous_amount' => $quote['previous_total'],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Prepaid plan-change quote failed: ' . $e->getMessage());
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Could not compute the amount for that plan.',
+            ], 500);
         }
     }
 

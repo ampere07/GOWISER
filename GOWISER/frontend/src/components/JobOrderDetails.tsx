@@ -665,19 +665,40 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           message += `\n\nCustomer Login Credentials:\nUsername: ${accountNumber}\nPassword: ${contactNumber}`;
         }
 
-        // Update the ONU name in SmartOLT using the PPPoE username (best-effort).
+        // Update the ONU's location details in SmartOLT — name, address and contact (best-effort).
         const sn = jobOrder.Modem_Router_SN || jobOrder.modem_router_sn || jobOrder.Modem_SN || jobOrder.modem_sn;
         const pppoeUsername = jobOrder.Username || jobOrder.username || jobOrder.pppoe_username;
+
+        // SmartOLT's "Address or comment" is one free-text field, so the installation address is
+        // composed into a single readable line. Empty parts are dropped rather than leaving
+        // stray commas.
+        const smartOltAddress = [
+          jobOrder.Installation_Address || jobOrder.installation_address || jobOrder.Address,
+          jobOrder.Barangay,
+          jobOrder.City,
+          jobOrder.Region,
+        ].filter(Boolean).join(', ');
+
+        const smartOltContact = jobOrder.Mobile_Number || jobOrder.Contact_Number || '';
 
         if (sn && pppoeUsername) {
           try {
             const smartOltResponse = await apiClient.post('/smart-olt/update-name', {
               sn,
               pppoe_username: pppoeUsername,
+              // Omitted when blank so a missing value never blanks out what is already in SmartOLT.
+              ...(smartOltAddress ? { address_or_comment: smartOltAddress } : {}),
+              ...(smartOltContact ? { contact: smartOltContact } : {}),
             });
 
             if ((smartOltResponse.data as any)?.success) {
-              message += `\n\nSmartOLT ONU name updated to: ${pppoeUsername}`;
+              const updated = (smartOltResponse.data as any)?.updated || {};
+              const extras = [
+                updated.address ? 'address' : null,
+                updated.contact ? 'contact' : null,
+              ].filter(Boolean).join(' and ');
+              message += `\n\nSmartOLT ONU updated — name: ${pppoeUsername}`;
+              if (extras) message += ` (also ${extras})`;
             } else {
               const smartOltMsg = (smartOltResponse.data as any)?.message || 'Unknown error';
               message += `\n\nNote: Could not update SmartOLT ONU name (${smartOltMsg}).`;

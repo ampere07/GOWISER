@@ -1275,6 +1275,152 @@ class EnhancedBillingGenerationServiceWithNotifications
      *
      * @return array{success:bool, statement_created:bool, invoice_created:bool, skipped:bool, error?:string}
      */
+    /**
+     * Is this a prepaid account still sitting on its very first, never-paid bill?
+     *
+     * That is the only window in which the initial bill may be re-priced for a different plan:
+     * no service period has started (prepaid_expires_at is NULL, it only gets set on payment) and
+     * no money has been taken. Once either is true the bill is history and must not be rewritten.
+     */
+    public function isUnpaidPrepaidOnboarding(BillingAccount $account): bool
+    {
+        if (!BillingAccount::isPrepaidType($account->generation_type)) {
+            return false;
+        }
+
+        if (!empty($account->prepaid_expires_at)) {
+            return false;
+        }
+
+        return !DB::table('transactions')
+            ->where('account_no', $account->account_no)
+            ->where('status', 'Done')
+            ->exists();
+    }
+
+    /**
+     * Re-price the unpaid initial prepaid bill for a different plan.
+     *
+     * A customer who is onboarding but has not paid yet may still change their mind about the
+     * plan. Their bill was raised at approval for the plan on the job order, so picking another
+     * one has to re-price that same bill — otherwise they would be charged one plan's price
+     * against an invoice for another, and the invoice would sit Unpaid forever.
+     *
+     * Only the PLAN portion is recomputed. Everything else on the invoice (staggered installation
+     * fees, service charges, rebates, discounts, advanced payments) is carried across untouched as
+     * a single figure derived from `total_amount - invoice_balance`. That is deliberate: re-running
+     * calculateChargesAndDeductions() would consume those discounts and advanced payments a second
+     * time, since creating the invoice already marked them Used.
+     *
+     * @param bool $persist false performs the identical calculation without writing anything,
+     *                      so a caller can quote the amount before the customer commits.
+     * @return array{revised: bool, reason?: string, plan?: string, previous_total: float,
+     *               new_total: float, plan_amount: float, vat: float, withholding: float,
+     *               previous_balance: float, new_balance: float, invoice_id?: int}
+     */
+    public function repricePrepaidInitialBillForPlan(
+        BillingAccount $account,
+        AppPlan $newPlan,
+        int $userId,
+        bool $persist = true
+    ): array {
+        $result = [
+            'revised' => false,
+            'previous_total' => 0.0,
+            'new_total' => 0.0,
+            'plan_amount' => 0.0,
+            'vat' => 0.0,
+            'withholding' => 0.0,
+            'previous_balance' => (float) $account->account_balance,
+            'new_balance' => (float) $account->account_balance,
+        ];
+
+        if (!$this->isUnpaidPrepaidOnboarding($account)) {
+            $result['reason'] = 'not an unpaid prepaid onboarding account';
+            return $result;
+        }
+
+        $planPrice = (float) ($newPlan->price ?? 0);
+        if ($planPrice <= 0) {
+            $result['reason'] = 'selected plan has no price';
+            return $result;
+        }
+
+        // The bill to re-price: the outstanding initial invoice.
+        $invoice = Invoice::where('account_no', $account->account_no)
+            ->whereIn('status', ['Unpaid', 'Partial'])
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$invoice) {
+            $result['reason'] = 'no outstanding invoice to reprice';
+            return $result;
+        }
+
+        $vatBreakdown = $this->calculateVatBreakdown($planPrice, $account);
+        $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+        $billablePlanAmount = round($vatBreakdown['total'] - $withholding['amount'], 2);
+
+        $previousTotal = round((float) $invoice->total_amount, 2);
+        // Everything on the invoice that is not the plan — preserved exactly, sign included.
+        $nonPlanPortion = round($previousTotal - (float) $invoice->invoice_balance, 2);
+        $newTotal = round($billablePlanAmount + $nonPlanPortion, 2);
+
+        $previousBalance = round((float) $account->account_balance, 2);
+        // Move the balance by the delta rather than assigning the new total, so any unrelated
+        // amount already sitting on the account is preserved.
+        $newBalance = round($previousBalance + ($newTotal - $previousTotal), 2);
+
+        $result = array_merge($result, [
+            'plan' => $newPlan->plan_name,
+            'previous_total' => $previousTotal,
+            'new_total' => $newTotal,
+            'plan_amount' => round($planPrice, 2),
+            'vat' => round($vatBreakdown['vat'], 2),
+            'withholding' => $withholding['amount'],
+            'previous_balance' => $previousBalance,
+            'new_balance' => $newBalance,
+            'invoice_id' => $invoice->id,
+        ]);
+
+        if (!$persist) {
+            $result['revised'] = true;
+            return $result;
+        }
+
+        DB::transaction(function () use ($invoice, $account, $billablePlanAmount, $newTotal, $newBalance, $userId) {
+            $invoice->update([
+                'invoice_balance' => $billablePlanAmount,
+                'total_amount' => $newTotal,
+                'status' => $newTotal <= 0 ? 'Paid' : 'Unpaid',
+                'updated_by' => (string) $userId,
+            ]);
+
+            $account->update([
+                'account_balance' => $newBalance,
+                'balance_update_date' => Carbon::now('Asia/Manila')->format('Y-m-d'),
+            ]);
+        });
+
+        $result['revised'] = true;
+
+        $this->log('info', 'Repriced unpaid prepaid initial bill for a newly selected plan', [
+            'account_no' => $account->account_no,
+            'plan' => $newPlan->plan_name,
+            'invoice_id' => $invoice->id,
+            'plan_amount' => $result['plan_amount'],
+            'vat' => $result['vat'],
+            'withholding' => $result['withholding'],
+            'non_plan_portion' => $nonPlanPortion,
+            'previous_total' => $previousTotal,
+            'new_total' => $newTotal,
+            'previous_balance' => $previousBalance,
+            'new_balance' => $newBalance,
+        ]);
+
+        return $result;
+    }
+
     public function generateInitialBillingForAccount(BillingAccount $account, int $userId): array
     {
         $generationDate = Carbon::now('Asia/Manila');

@@ -3313,6 +3313,8 @@ Route::prefix('payments')->group(function () {
     Route::post('/webhook', [\App\Http\Controllers\Api\XenditPaymentController::class , 'handleWebhook']);
     Route::post('/status', [\App\Http\Controllers\Api\XenditPaymentController::class , 'checkPaymentStatus']);
     Route::post('/check-pending', [\App\Http\Controllers\Api\XenditPaymentController::class , 'checkPendingPayment']);
+    // Read-only: amount a prepaid onboarding bill would come to under a different plan.
+    Route::post('/quote-plan-change', [\App\Http\Controllers\Api\XenditPaymentController::class , 'quotePlanChange']);
     Route::post('/account-balance', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAccountBalance']);
     Route::post('/cancel', [\App\Http\Controllers\Api\XenditPaymentController::class , 'cancelPayment']);
 
