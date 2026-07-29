@@ -69,6 +69,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
     // instead of buying a plan/plan-change (no plan_id is sent when this is on).
     const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
+    // Convenience fee rate the ISP adds on top of an online payment (2.5 = 2.5%). Disclosed under
+    // the amount field so the customer is not surprised by a higher total at the gateway. 0 = none.
+    const [convenienceFeePercentage, setConvenienceFeePercentage] = useState<number>(0);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -109,8 +112,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             }
         };
 
+        const fetchConvenienceFee = async () => {
+            const percentage = await paymentService.getConvenienceFeePercentage();
+            setConvenienceFeePercentage(percentage);
+        };
+
         fetchData();
         fetchColorPalette();
+        fetchConvenienceFee();
     }, [fetchCustomerData]);
 
     // Handle auto-opening the pay modal (e.g., from Bills page)
@@ -276,6 +285,20 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         : requiresPlanCoversBalance
             ? paymentCoversBalance
             : paymentAmount >= 1;
+
+    // Convenience fee preview. Mirrors the server's maths (fee on top of the bill, 2 dp) purely so
+    // the customer can see the real total before leaving for the gateway — the charge is still
+    // computed server-side at checkout, so this is disclosure only and never sent anywhere.
+    const feeBaseAmount = requiresExactPayment ? balance : paymentAmount;
+    const convenienceFeeAmount = convenienceFeePercentage > 0
+        ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
+        : 0;
+    const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
+    // No padding to 2 dp: 922.5 stays 922.5. Capped at 2 dp only because the fee above is already
+    // rounded to centavos, so nothing here is ever actually rounded away.
+    const formatPeso = (value: number) => value.toLocaleString('en-PH', { maximumFractionDigits: 2 });
+    // Trailing zeros trimmed so 2.50 reads as "2.5%".
+    const convenienceFeeLabel = String(Number(convenienceFeePercentage));
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
     let dueDateString = 'Upon Receipt';
@@ -500,7 +523,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                 setShowPaymentVerifyModal(false);
                 setPaymentLinkData({
                     referenceNo: response.reference_no || '',
-                    amount: response.amount || paymentAmount,
+                    // total_charged, not amount: this modal is telling the customer what they are
+                    // about to pay at the gateway, which includes the convenience fee.
+                    amount: response.total_charged ?? response.amount ?? paymentAmount,
                     paymentUrl: response.payment_url
                 });
                 setShowPaymentLinkModal(true);
@@ -939,6 +964,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                             <span>Minimum: ₱1.00</span>
                                         )}
                                     </div>
+
+                                    {/* Convenience fee disclosure. The field above is the amount that
+                                        settles the bill; the gateway collects this total instead. */}
+                                    {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
+                                        <p className="text-xs text-gray-500 mt-2">
+                                            + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div className="flex gap-3">

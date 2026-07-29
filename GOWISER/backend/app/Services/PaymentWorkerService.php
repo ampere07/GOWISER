@@ -108,7 +108,6 @@ class PaymentWorkerService
             $id = $payment->id;
             $ref = $payment->reference_no;
             $accountNo = $payment->account_no;
-            $amount = floatval($payment->amount);
             $rawPayload = $payment->callback_payload;
 
             // Validate payment status from callback
@@ -128,6 +127,36 @@ class PaymentWorkerService
                     DB::commit();
                     return;
                 }
+            }
+
+            // pending_payments.amount is the GROSS the gateway collected — the bill plus the
+            // convenience fee added at checkout. The fee is the ISP's charge for taking the payment
+            // online, not money owed on the invoices, so it comes back off before anything touches
+            // billing: a ₱922.50 charge at 2.5% settles ₱900.00 of invoices.
+            //
+            // convenience_fee NULL (or column absent) means the row predates the fee change and its
+            // amount is already net — subtract nothing, or the customer loses money.
+            $grossAmount = floatval($payment->amount);
+            $convenienceFee = isset($payment->convenience_fee) ? floatval($payment->convenience_fee) : 0.0;
+
+            // A stored fee that is negative, or that would swallow the whole payment, is corrupt.
+            // Apply the full amount rather than short-changing the customer's invoices.
+            if ($convenienceFee < 0 || $convenienceFee >= $grossAmount) {
+                if ($convenienceFee != 0.0) {
+                    $this->workerLog("WARNING: Ref $ref has an unusable convenience fee of ₱"
+                        . number_format($convenienceFee, 2) . " against ₱" . number_format($grossAmount, 2)
+                        . " — applying the full amount to billing instead.");
+                }
+                $convenienceFee = 0.0;
+            }
+
+            // $amount is what settles the customer's invoices from here on.
+            $amount = round($grossAmount - $convenienceFee, 2);
+
+            if ($convenienceFee > 0) {
+                $this->workerLog("Ref $ref: charged ₱" . number_format($grossAmount, 2)
+                    . " less convenience fee ₱" . number_format($convenienceFee, 2)
+                    . " = ₱" . number_format($amount, 2) . " to billing");
             }
 
             // Lock record for processing
@@ -188,6 +217,9 @@ class PaymentWorkerService
                 DB::table('payment_portal_logs')->insert([
                     'reference_no' => $ref,
                     'account_id' => $account->account_id,
+                    // Net of the convenience fee, so this log reconciles against the invoices it
+                    // settled. The gross charged stays on pending_payments.amount and in
+                    // callback_payload below for audit.
                     'total_amount' => $amount,
                     'account_balance_before' => $account->account_balance,
                     'date_time' => now(),
@@ -203,7 +235,9 @@ class PaymentWorkerService
                     'updated_at' => now()
                 ]);
 
-                $this->workerLog("Success: Logged Ref $ref - Amount: ₱" . number_format($amount, 2) . " - {$result['distribution_summary']}");
+                $this->workerLog("Success: Logged Ref $ref - Amount: ₱" . number_format($amount, 2)
+                    . ($convenienceFee > 0 ? " (charged ₱" . number_format($grossAmount, 2) . ")" : '')
+                    . " - {$result['distribution_summary']}");
 
                 // Read settlement conditions before committing (still within transaction for consistency)
                 $latestBillingAccount = DB::table('billing_accounts')

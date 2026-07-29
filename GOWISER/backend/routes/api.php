@@ -3317,6 +3317,8 @@ Route::prefix('payments')->group(function () {
     Route::post('/quote-plan-change', [\App\Http\Controllers\Api\XenditPaymentController::class , 'quotePlanChange']);
     Route::post('/account-balance', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAccountBalance']);
     Route::post('/cancel', [\App\Http\Controllers\Api\XenditPaymentController::class , 'cancelPayment']);
+    // Read-only: the convenience fee rate, so a payment screen can disclose it before checkout.
+    Route::get('/convenience-fee', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getConvenienceFee']);
 
     // Test endpoint to verify webhook configuration
     Route::get('/webhook-info', function () {

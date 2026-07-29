@@ -52,6 +52,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // Whether this account is in that window at all. Resolved when the modal opens, BEFORE any
     // plan is picked - the cheaper plans must be selectable for a quote to ever happen.
     const [canRepriceOnboarding, setCanRepriceOnboarding] = useState<boolean>(false);
+    // Convenience fee rate the ISP adds on top of an online payment (2.5 = 2.5%). Disclosed under
+    // the amount field so the customer is not surprised by a higher total at the gateway. 0 = none.
+    const [convenienceFeePercentage, setConvenienceFeePercentage] = useState<number>(0);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -206,6 +209,22 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         : requiresPlanCoversBalance
             ? paymentCoversBalance
             : paymentAmount >= 1;
+
+    // Convenience fee preview. Mirrors the server's maths (fee on top of the bill, 2 dp) purely so
+    // the customer can see the real total before leaving for the gateway — the charge is still
+    // computed server-side at checkout, so this is disclosure only and never sent anywhere.
+    const feeBaseAmount = requiresExactPayment ? balance : paymentAmount;
+    const convenienceFeeAmount = convenienceFeePercentage > 0
+        ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
+        : 0;
+    const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
+    // formatCurrency() rounds to whole pesos, which would hide the centavos a percentage fee almost
+    // always produces. No padding either: 922.5 stays 922.5. Capped at 2 dp only because the fee
+    // above is already rounded to centavos, so nothing here is ever actually rounded away.
+    const formatPeso = (value: number) =>
+        `₱${value.toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
+    // Trailing zeros trimmed so 2.50 reads as "2.5%".
+    const convenienceFeeLabel = String(Number(convenienceFeePercentage));
 
     const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
     const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
@@ -378,6 +397,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             }
         };
         fetchColorPalette();
+
+        const fetchConvenienceFee = async () => {
+            const percentage = await paymentService.getConvenienceFeePercentage();
+            setConvenienceFeePercentage(percentage);
+        };
+        fetchConvenienceFee();
 
         const paletteSub = DeviceEventEmitter.addListener('colorPaletteChanged', (newPalette) => {
             setColorPalette(newPalette);
@@ -636,7 +661,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 setShowPaymentVerifyModal(false);
                 setPaymentLinkData({
                     referenceNo: response.reference_no || '',
-                    amount: response.amount || paymentAmount,
+                    // total_charged, not amount: this modal is telling the customer what they are
+                    // about to pay at the gateway, which includes the convenience fee.
+                    amount: response.total_charged ?? response.amount ?? paymentAmount,
                     paymentUrl: response.payment_url
                 });
                 setShowPaymentLinkModal(true);
@@ -1207,6 +1234,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>
+
+                                {/* Convenience fee disclosure. The field above is the amount that
+                                    settles the bill; the gateway collects this total instead. */}
+                                {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
+                                    <Text style={styles.feeNoteText}>
+                                        + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
+                                    </Text>
+                                )}
                             </View>
 
                             <Pressable
@@ -1260,8 +1295,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                                 <View style={styles.verifyRow}>
                                     <Text style={styles.verifyLabel}>Payment Amount</Text>
+                                    {/* Exact centavos, not formatCurrency's rounded pesos: this is the
+                                        figure the gateway will charge, so it has to match to the cent. */}
                                     <Text style={[styles.verifyValue, { fontWeight: 'bold', color: colorPalette?.primary || '#ef4444' }]}>
-                                        {formatCurrency(paymentLinkData?.amount || 0)}
+                                        {formatPeso(paymentLinkData?.amount || 0)}
                                     </Text>
                                 </View>
                             </View>
@@ -1305,8 +1342,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                             <View style={styles.pendingBox}>
                                 <View style={styles.verifyRow}>
                                     <Text style={styles.pendingLabel}>Amount Due</Text>
+                                    {/* Gross, to the cent — a resumed payment is charged the same
+                                        total (convenience fee included) that was quoted at checkout. */}
                                     <Text style={styles.pendingAmount}>
-                                        {formatCurrency(pendingPayment?.amount || 0)}
+                                        {formatPeso(pendingPayment?.amount || 0)}
                                     </Text>
                                 </View>
                             </View>
@@ -1513,6 +1552,7 @@ const styles = StyleSheet.create({
     planNoteText: { fontSize: 12, color: '#6b7280', marginTop: 8, lineHeight: 17 },
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
+    feeNoteText: { fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 16 },
     primaryBtn: { paddingVertical: 12, borderRadius: 50, width: '50%', alignSelf: 'center', alignItems: 'center' },
     primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
     spacer: { height: 24 },

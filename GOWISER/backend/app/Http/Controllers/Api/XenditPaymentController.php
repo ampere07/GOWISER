@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Exception;
 use App\Events\PaymentUpdated;
 
@@ -20,25 +21,74 @@ class XenditPaymentController extends Controller
     {
         $this->xenditApiKey = (string) (config('services.xendit.api_key') ?: env('XENDIT_API_KEY', ''));
         $this->xenditCallbackToken = (string) (config('services.xendit.callback_token') ?: env('XENDIT_CALLBACK_TOKEN', ''));
-        
+
         // Fallback for production environments where config cache might be returning null
         // and we cannot easily run `php artisan config:clear`
         if (empty($this->xenditApiKey) || empty($this->xenditCallbackToken)) {
             $envPath = base_path('.env');
             if (file_exists($envPath)) {
                 $envContent = file_get_contents($envPath);
-                
+
                 if (empty($this->xenditApiKey) && preg_match('/^XENDIT_API_KEY=(.*)$/m', $envContent, $matches)) {
                     $this->xenditApiKey = trim($matches[1], "\"' \t\n\r\0\x0B");
                 }
-                
+
                 if (empty($this->xenditCallbackToken) && preg_match('/^XENDIT_CALLBACK_TOKEN=(.*)$/m', $envContent, $matches)) {
                     $this->xenditCallbackToken = trim($matches[1], "\"' \t\n\r\0\x0B");
                 }
             }
         }
 
-        $this->portalLink = (string) (config('app.url') ?: env('APP_URL', 'https://sync.gowiser.ph'));
+        $this->portalLink = (string) (config('app.url') ?: env('APP_URL', 'https://sync.atssfiber.ph'));
+    }
+
+    /**
+     * Convenience fee percentage from the billing configuration.
+     *
+     * Returns 0 when the fee is unset, null, zero or negative, so no charge is added.
+     * The column is checked for existence first: a deployment that has not yet had the
+     * column added must keep taking payments rather than failing at the payload step.
+     */
+    private function getConvenienceFeePercentage(): float
+    {
+        try {
+            if (!Schema::hasTable('billing_config')
+                || !Schema::hasColumn('billing_config', 'convenience_fee_percentage')) {
+                return 0.0;
+            }
+
+            $percentage = DB::table('billing_config')->value('convenience_fee_percentage');
+            if ($percentage === null) {
+                return 0.0;
+            }
+
+            $percentage = floatval($percentage);
+            if ($percentage <= 0) {
+                return 0.0;
+            }
+
+            // Guard against a bad stored value producing an absurd charge.
+            return min($percentage, 100.0);
+        } catch (Exception $e) {
+            Log::warning('Could not read convenience fee percentage; charging without it', [
+                'error' => $e->getMessage()
+            ]);
+            return 0.0;
+        }
+    }
+
+    /**
+     * Read-only: the convenience fee rate, for disclosing it on a payment screen.
+     *
+     * Exposes only this one figure rather than the whole billing config — a customer-facing
+     * screen has no business reading disconnection fees or cut-off days.
+     */
+    public function getConvenienceFee()
+    {
+        return response()->json([
+            'status' => 'success',
+            'convenience_fee_percentage' => $this->getConvenienceFeePercentage(),
+        ]);
     }
 
     public function createPayment(Request $request)
@@ -48,9 +98,6 @@ class XenditPaymentController extends Controller
             $accountNo = $request->input('account_no');
             $amount = $request->input('amount');
             $frontendRedirectUrl = $request->input('redirect_url');
-            // Optional: a prepaid customer can pick the plan they are paying for. Held on the
-            // pending payment and acted on once the payment settles (see PrepaidPlanChangeService).
-            $selectedPlanId = $request->input('plan_id');
 
             if (!$accountNo) {
                 return response()->json([
@@ -67,6 +114,12 @@ class XenditPaymentController extends Controller
             }
 
             $amount = floatval($amount);
+
+            // Convenience fee is charged on top of the bill. $amount stays the amount that
+            // settles the customer's invoices; $chargeAmount is what Xendit collects.
+            $convenienceFeePercentage = $this->getConvenienceFeePercentage();
+            $convenienceFee = round($amount * ($convenienceFeePercentage / 100), 2);
+            $chargeAmount = round($amount + $convenienceFee, 2);
 
             // Get account details from billing_accounts table using username (account_no)
             $account = DB::table('billing_accounts')
@@ -88,61 +141,6 @@ class XenditPaymentController extends Controller
                     'status' => 'error',
                     'message' => 'Account not found'
                 ], 404);
-            }
-
-            // Validate the selected plan up front rather than discovering it is bogus at
-            // settlement time, when the customer has already been charged.
-            $selectedPlan = null;
-            if (!empty($selectedPlanId)) {
-                $selectedPlan = DB::table('plan_list')->where('id', $selectedPlanId)->first();
-                if (!$selectedPlan) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'The selected plan is no longer available. Please reopen the payment screen and try again.'
-                    ], 422);
-                }
-            }
-
-            // A prepaid customer who has not paid their first bill yet may still change plan. Their
-            // bill was raised at approval for the plan on the job order, so re-price that same bill
-            // now and charge the re-priced total — otherwise they would pay one plan's price
-            // against an invoice for another, leaving it Unpaid forever.
-            //
-            // Deliberately NOT changing plan_id here: PrepaidPlanChangeService applies the plan on
-            // settlement (and pushes it to RADIUS). Applying it early would make that step see
-            // "same plan" and skip the RADIUS push.
-            if ($selectedPlan) {
-                $billingAccount = \App\Models\BillingAccount::where('account_no', $accountNo)->first();
-                $billingService = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class);
-
-                if ($billingAccount
-                    && $billingService->isUnpaidPrepaidOnboarding($billingAccount)
-                    && (int) $billingAccount->plan_id !== (int) $selectedPlan->id) {
-
-                    $planModel = \App\Models\AppPlan::find($selectedPlan->id);
-                    $reprice = $planModel
-                        ? $billingService->repricePrepaidInitialBillForPlan($billingAccount, $planModel, 0)
-                        : ['revised' => false, 'reason' => 'plan not resolvable as AppPlan'];
-
-                    if (!empty($reprice['revised'])) {
-                        // The re-priced total is authoritative — the client's amount was derived
-                        // from a quote and must never override what the invoice now says.
-                        $amount = (float) $reprice['new_total'];
-                        $account->account_balance = $reprice['new_balance'];
-
-                        Log::info('Prepaid onboarding bill re-priced for newly selected plan', [
-                            'account_no' => $accountNo,
-                            'plan' => $reprice['plan'] ?? null,
-                            'previous_total' => $reprice['previous_total'],
-                            'charged_amount' => $amount,
-                        ]);
-                    } else {
-                        Log::info('Prepaid onboarding re-price skipped', [
-                            'account_no' => $accountNo,
-                            'reason' => $reprice['reason'] ?? 'unknown',
-                        ]);
-                    }
-                }
             }
 
             // Note: Duplicate check now handled by frontend via check-pending endpoint
@@ -170,7 +168,7 @@ class XenditPaymentController extends Controller
                     'raw_email' => $account->email_address,
                     'reason' => $rawEmail === '' ? 'empty' : 'malformed'
                 ]);
-                $payerEmail = 'noreply@gowiser.ph';
+                $payerEmail = 'noreply@atssfiber.ph';
             }
 
             // Parse customer name. The SQL CONCAT leaves a double space when the
@@ -210,25 +208,36 @@ class XenditPaymentController extends Controller
                 ]);
             }
 
-            // Prepare Xendit payload
+            // Prepare Xendit payload. The gateway collects the bill plus the convenience fee.
+            $items = [
+                [
+                    'name' => "Account $accountNo - " . ($account->desired_plan ?? 'Internet Service'),
+                    'quantity' => 1,
+                    'price' => $amount,
+                    'category' => 'Internet Service'
+                ]
+            ];
+
+            // Itemise the fee so the customer sees why the total is above their bill, and so
+            // the item prices still add up to the invoice amount.
+            if ($convenienceFee > 0) {
+                $items[] = [
+                    'name' => 'Convenience Fee (' . rtrim(rtrim(number_format($convenienceFeePercentage, 2), '0'), '.') . '%)',
+                    'quantity' => 1,
+                    'price' => $convenienceFee,
+                    'category' => 'Service Fee'
+                ];
+            }
+
             $payload = [
                 'external_id' => $referenceNo,
-                'amount' => $amount,
+                'amount' => $chargeAmount,
                 'payer_email' => $payerEmail,
                 'description' => "Bill Payment - Account $accountNo",
                 'invoice_duration' => 86400,
                 'currency' => 'PHP',
                 'customer' => $customer,
-                'items' => [
-                    [
-                        // Name the plan being purchased, so the Xendit invoice the customer sees
-                        // matches what they picked rather than the plan they are leaving.
-                        'name' => "Account $accountNo - " . ($selectedPlan->plan_name ?? $account->desired_plan ?? 'Internet Service'),
-                        'quantity' => 1,
-                        'price' => $amount,
-                        'category' => 'Internet Service'
-                    ]
-                ]
+                'items' => $items
             ];
 
             // Call Xendit API
@@ -276,18 +285,20 @@ class XenditPaymentController extends Controller
                 ], 500);
             }
 
-            // Store payment in pending_payments table
-            DB::table('pending_payments')->insert([
+            // Store payment in pending_payments table.
+            //
+            // `amount` is the GROSS the gateway collects (bill + fee) so the row reflects what the
+            // customer actually pays. PaymentWorkerService subtracts `convenience_fee` again to get
+            // back to the amount that settles invoices. The rate is frozen here rather than re-read
+            // at settlement, so changing the config later never re-writes an old payment.
+            $paymentRow = [
                 'account_no' => $accountNo,
                 'reference_no' => $referenceNo,
-                'amount' => $amount,
+                'amount' => $chargeAmount,
                 'status' => 'PENDING',
                 'payment_date' => now(),
                 'provider' => 'XENDIT',
-                // `plan` stays the plan the account was ON at checkout (unchanged historical
-                // meaning); `selected_plan_id` is the plan the customer is paying to switch TO.
                 'plan' => $account->desired_plan ?? '',
-                'selected_plan_id' => $selectedPlan->id ?? null,
                 'payment_id' => $paymentId,
                 'payment_method_id' => null,
                 'json_payload' => json_encode($payload),
@@ -296,12 +307,27 @@ class XenditPaymentController extends Controller
                 'reconnect_status' => null,
                 'last_attempt_at' => null,
                 'updated_at' => now()
-            ]);
+            ];
+
+            // Same reasoning as getConvenienceFeePercentage(): a deployment that has not run the
+            // migration yet must still be able to take payments. Without the columns the row keeps
+            // the historical net-amount meaning, which is exactly how the worker reads a NULL fee.
+            if (Schema::hasColumn('pending_payments', 'convenience_fee')) {
+                $paymentRow['convenience_fee'] = $convenienceFee;
+                $paymentRow['convenience_fee_percentage'] = $convenienceFeePercentage;
+            } else {
+                $paymentRow['amount'] = $amount;
+            }
+
+            DB::table('pending_payments')->insert($paymentRow);
 
             Log::info('Payment created successfully', [
                 'reference_no' => $referenceNo,
                 'account_no' => $accountNo,
                 'amount' => $amount,
+                'convenience_fee_percentage' => $convenienceFeePercentage,
+                'convenience_fee' => $convenienceFee,
+                'charged_amount' => $chargeAmount,
                 'payment_id' => $paymentId
             ]);
 
@@ -312,7 +338,12 @@ class XenditPaymentController extends Controller
                 'reference_no' => $referenceNo,
                 'payment_url' => $paymentUrl,
                 'payment_id' => $paymentId,
+                // Unchanged: the amount that will be applied to the customer's invoices.
                 'amount' => $amount,
+                // Additive breakdown so a caller can show what is actually being charged.
+                'convenience_fee_percentage' => $convenienceFeePercentage,
+                'convenience_fee' => $convenienceFee,
+                'total_charged' => $chargeAmount,
                 'account_balance' => floatval($account->account_balance)
             ]);
 
@@ -333,14 +364,14 @@ class XenditPaymentController extends Controller
     {
         // Get callback token from request
         $incomingToken = '';
-        
+
         // Try multiple methods to get the token
         $incomingToken = $request->header('X-Callback-Token');
-        
+
         if (empty($incomingToken) && isset($_SERVER['HTTP_X_CALLBACK_TOKEN'])) {
             $incomingToken = $_SERVER['HTTP_X_CALLBACK_TOKEN'];
         }
-        
+
         if (empty($incomingToken)) {
             $headers = array_change_key_case($request->headers->all(), CASE_LOWER);
             $incomingToken = $headers['x-callback-token'][0] ?? '';
@@ -377,7 +408,7 @@ class XenditPaymentController extends Controller
         try {
             $payload = $request->all();
             $rawPayload = json_encode($payload);
-            
+
             $ref = $payload['external_id'] ?? $payload['requestReferenceNumber'] ?? '';
             $status = strtoupper($payload['status'] ?? '');
 
@@ -449,71 +480,6 @@ class XenditPaymentController extends Controller
         }
     }
 
-    /**
-     * Read-only: what would the unpaid prepaid onboarding bill come to under a different plan?
-     *
-     * Lets the payment screen show the real amount as the customer browses plans without writing
-     * anything — the actual re-price happens once they commit, in createPayment(). The tax maths
-     * stays server-side so the client never has to reimplement VAT/withholding.
-     *
-     * `eligible: false` simply means this account is not in the never-paid onboarding window, and
-     * the caller should keep its existing amount behaviour.
-     */
-    public function quotePlanChange(Request $request)
-    {
-        try {
-            $accountNo = $request->input('account_no');
-            $planId = $request->input('plan_id');
-
-            if (!$accountNo || !$planId) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'account_no and plan_id are required',
-                ], 422);
-            }
-
-            $account = \App\Models\BillingAccount::where('account_no', $accountNo)->first();
-            $plan = \App\Models\AppPlan::find($planId);
-
-            if (!$account || !$plan) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => !$account ? 'Account not found' : 'Plan not found',
-                ], 404);
-            }
-
-            $billingService = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class);
-
-            if (!$billingService->isUnpaidPrepaidOnboarding($account)) {
-                return response()->json([
-                    'status' => 'success',
-                    'eligible' => false,
-                    'reason' => 'account is not an unpaid prepaid onboarding account',
-                ]);
-            }
-
-            $quote = $billingService->repricePrepaidInitialBillForPlan($account, $plan, 0, false);
-
-            return response()->json([
-                'status' => 'success',
-                'eligible' => (bool) ($quote['revised'] ?? false),
-                'reason' => $quote['reason'] ?? null,
-                'plan' => $quote['plan'] ?? $plan->plan_name,
-                'plan_amount' => $quote['plan_amount'],
-                'vat' => $quote['vat'],
-                'withholding' => $quote['withholding'],
-                'amount' => $quote['new_total'],
-                'previous_amount' => $quote['previous_total'],
-            ]);
-        } catch (\Exception $e) {
-            Log::error('Prepaid plan-change quote failed: ' . $e->getMessage());
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Could not compute the amount for that plan.',
-            ], 500);
-        }
-    }
-
     public function checkPendingPayment(Request $request)
     {
         try {
@@ -551,7 +517,12 @@ class XenditPaymentController extends Controller
                     'status' => 'success',
                     'pending_payment' => [
                         'reference_no' => $pendingPayment->reference_no,
+                        // Gross: what the gateway will collect, convenience fee included. This is
+                        // the figure to show on a "resume this payment" prompt.
                         'amount' => floatval($pendingPayment->amount),
+                        'convenience_fee' => isset($pendingPayment->convenience_fee)
+                            ? floatval($pendingPayment->convenience_fee)
+                            : 0.0,
                         'status' => $pendingPayment->status,
                         'payment_date' => $pendingPayment->payment_date,
                         'payment_url' => $pendingPayment->payment_url

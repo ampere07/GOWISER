@@ -27,7 +27,10 @@ export interface PlanChangeQuote {
 export interface PendingPayment {
   reference_no: string;
   payment_url: string;
+  /** Gross — the bill plus the convenience fee, i.e. what the gateway will collect. */
   amount: number;
+  /** Part of `amount` that is the convenience fee. 0 when none was charged. */
+  convenience_fee?: number;
   status: string;
   payment_date: string;
 }
@@ -37,7 +40,12 @@ export interface PaymentResponse {
   reference_no?: string;
   payment_url?: string;
   payment_id?: string;
+  /** The amount applied to the customer's invoices — fee NOT included. */
   amount?: number;
+  convenience_fee_percentage?: number;
+  convenience_fee?: number;
+  /** What the gateway actually collects: `amount` + `convenience_fee`. */
+  total_charged?: number;
   account_balance?: number;
   message?: string;
   pending_payment?: PendingPayment;
@@ -115,6 +123,37 @@ export const paymentService = {
       // Non-fatal: the caller falls back to the plan price.
       console.error('Quote plan change error:', error.response?.data || error.message);
       return null;
+    }
+  },
+
+  /**
+   * The convenience fee rate added on top of an online payment, as a percentage (2.5 = 2.5%).
+   *
+   * Returns 0 on any failure so a payment screen never blocks on it — the server computes the
+   * real charge at checkout regardless of what was disclosed here.
+   */
+  getConvenienceFeePercentage: async (): Promise<number> => {
+    try {
+      const authData = localStorage.getItem('authData');
+      let token = '';
+
+      if (authData) {
+        token = JSON.parse(authData).token || '';
+      }
+
+      const response = await axios.get<{ status: string; convenience_fee_percentage?: number }>(
+        `${API_BASE_URL}/payments/convenience-fee`,
+        {
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : ''
+          }
+        }
+      );
+
+      return Number(response.data.convenience_fee_percentage) || 0;
+    } catch (error: any) {
+      console.error('Get convenience fee error:', error.response?.data || error.message);
+      return 0;
     }
   },
 

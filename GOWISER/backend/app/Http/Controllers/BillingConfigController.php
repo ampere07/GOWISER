@@ -59,8 +59,9 @@ class BillingConfigController extends Controller
                 'overdue_day' => 'nullable|integer|min:0',
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
-                'vat_rate' => 'nullable|numeric|min:0|max:1',
                 'pullout_day' => 'nullable|integer|min:0',
+                // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
+                'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
                 'user_email' => 'nullable|email|max:255'
             ]);
 
@@ -86,8 +87,8 @@ class BillingConfigController extends Controller
                 'overdue_day' => $request->input('overdue_day', 0),
                 'disconnection_notice' => $request->input('disconnection_notice', 0),
                 'disconnection_fee' => $request->input('disconnection_fee', 0.00),
-                'vat_rate' => $request->input('vat_rate', 0.12),
                 'pullout_day' => $request->input('pullout_day', 0),
+                'convenience_fee_percentage' => $request->input('convenience_fee_percentage', 0.00),
                 'updated_by' => $userEmail,
                 'created_by' => $userEmail
             ]);
@@ -131,8 +132,9 @@ class BillingConfigController extends Controller
                 'overdue_day' => 'nullable|integer|min:0',
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
-                'vat_rate' => 'nullable|numeric|min:0|max:1',
                 'pullout_day' => 'nullable|integer|min:0',
+                // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
+                'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
                 'user_email' => 'nullable|email|max:255'
             ]);
 
@@ -158,8 +160,8 @@ class BillingConfigController extends Controller
                 'overdue_day' => $request->input('overdue_day', $config->overdue_day),
                 'disconnection_notice' => $request->input('disconnection_notice', $config->disconnection_notice),
                 'disconnection_fee' => $request->input('disconnection_fee', $config->disconnection_fee),
-                'vat_rate' => $request->input('vat_rate', $config->vat_rate),
                 'pullout_day' => $request->input('pullout_day', $config->pullout_day),
+                'convenience_fee_percentage' => $request->input('convenience_fee_percentage', $config->convenience_fee_percentage),
                 'updated_by' => $userEmail
             ]);
 

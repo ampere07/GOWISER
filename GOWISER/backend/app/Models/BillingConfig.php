@@ -20,9 +20,9 @@ class BillingConfig extends Model
         'overdue_day',
         'disconnection_notice',
         'disconnection_fee',
-        'vat_rate',
         'pullout_offset',
         'pullout_day',
+        'convenience_fee_percentage',
         'updated_by',
         'created_by'
     ];
@@ -34,9 +34,9 @@ class BillingConfig extends Model
         'overdue_day' => 'integer',
         'disconnection_notice' => 'integer',
         'disconnection_fee' => 'decimal:2',
-        'vat_rate' => 'decimal:4',
         'pullout_offset' => 'integer',
         'pullout_day' => 'integer',
+        'convenience_fee_percentage' => 'decimal:2',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
