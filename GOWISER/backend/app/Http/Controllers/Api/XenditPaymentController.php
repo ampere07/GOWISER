@@ -10,6 +10,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Exception;
 use App\Events\PaymentUpdated;
+use App\Models\AppPlan;
+use App\Models\BillingAccount;
+use App\Services\EnhancedBillingGenerationServiceWithNotifications;
 
 class XenditPaymentController extends Controller
 {
@@ -589,6 +592,103 @@ class XenditPaymentController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Failed to check payment status'
+            ], 500);
+        }
+    }
+
+    /**
+     * Read-only: what the unpaid prepaid ONBOARDING bill would come to under a different plan.
+     *
+     * A customer who has not paid their first bill yet may still change their mind about the plan,
+     * which re-prices that same bill. Quoting it here lets the payment screen show the real figure
+     * before they commit, while the VAT/withholding maths stays in the billing service — the
+     * client must never reimplement it.
+     *
+     * Nothing is written: this calls the same re-price routine the settlement path would, with
+     * persist disabled. Any account outside that never-paid window comes back eligible:false on a
+     * 200, and the caller keeps whatever amount it already had.
+     */
+    public function quotePlanChange(Request $request)
+    {
+        try {
+            $accountNo = $request->input('account_no');
+            $planId = $request->input('plan_id');
+
+            if (!$accountNo) {
+                return response()->json([
+                    'status' => 'error',
+                    'eligible' => false,
+                    'message' => 'Account number is required'
+                ], 422);
+            }
+
+            if (!$planId || !is_numeric($planId)) {
+                return response()->json([
+                    'status' => 'error',
+                    'eligible' => false,
+                    'message' => 'A plan is required'
+                ], 422);
+            }
+
+            $account = BillingAccount::where('account_no', $accountNo)->first();
+
+            if (!$account) {
+                return response()->json([
+                    'status' => 'error',
+                    'eligible' => false,
+                    'message' => 'Account not found'
+                ], 404);
+            }
+
+            $plan = AppPlan::find((int) $planId);
+
+            if (!$plan) {
+                return response()->json([
+                    'status' => 'error',
+                    'eligible' => false,
+                    'message' => 'Plan not found'
+                ], 404);
+            }
+
+            // persist: false — this is a quote, so no invoice or balance is touched. The user id
+            // only fills the audit columns on the write path, hence 0 here.
+            $quote = app(EnhancedBillingGenerationServiceWithNotifications::class)
+                ->repricePrepaidInitialBillForPlan($account, $plan, 0, false);
+
+            if (empty($quote['revised'])) {
+                return response()->json([
+                    'status' => 'success',
+                    'eligible' => false,
+                    'reason' => $quote['reason'] ?? null
+                ]);
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'eligible' => true,
+                'reason' => null,
+                'plan' => $quote['plan'] ?? $plan->plan_name,
+                'plan_amount' => $quote['plan_amount'],
+                'vat' => $quote['vat'],
+                'withholding' => $quote['withholding'],
+                // The balance the account would carry once re-priced — i.e. what settles it in
+                // full. Taken from the balance rather than the invoice total so anything already
+                // sitting on the account unrelated to this bill is still covered by the quote.
+                'amount' => $quote['new_balance'],
+                'previous_amount' => $quote['previous_balance']
+            ]);
+
+        } catch (Exception $e) {
+            Log::error('Plan change quote failed', [
+                'account_no' => $request->input('account_no'),
+                'plan_id' => $request->input('plan_id'),
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'eligible' => false,
+                'message' => 'Failed to quote plan change'
             ], 500);
         }
     }
