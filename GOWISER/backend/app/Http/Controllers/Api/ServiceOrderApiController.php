@@ -454,7 +454,19 @@ class ServiceOrderApiController extends Controller
                     'td.lcp',
                     'td.nap',
                     'td.port',
-                    'td.vlan'
+                    'td.vlan',
+                    // PPPoE credentials are stored on the job order, not on technical_details or
+                    // service_orders. Correlated subqueries rather than a join: an account can
+                    // have several job orders, and joining would multiply the service order rows.
+                    // Newest first, so a re-install supersedes the original credentials.
+                    DB::raw("(SELECT jo.pppoe_password FROM job_orders jo
+                              WHERE jo.account_id = ba.id
+                                AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
+                              ORDER BY jo.id DESC LIMIT 1) as pppoe_password"),
+                    DB::raw("(SELECT jo.pppoe_username FROM job_orders jo
+                              WHERE jo.account_id = ba.id
+                                AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
+                              ORDER BY jo.id DESC LIMIT 1) as pppoe_username")
                 )
                 ->where('so.id', $id);
 

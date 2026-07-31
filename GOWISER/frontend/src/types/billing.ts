@@ -36,6 +36,11 @@ export interface BillingRecord {
   emailAddress?: string;
   plan?: string;
   username?: string;
+  /**
+   * PPPoE password. Read from the account's job order, not technical_details — the technician
+   * sets it when completing the install, so accounts predating that flow have none.
+   */
+  pppoePassword?: string;
   connectionType?: string;
   routerModel?: string;
   routerModemSN?: string;

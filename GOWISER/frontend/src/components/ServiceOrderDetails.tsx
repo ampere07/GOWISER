@@ -59,6 +59,8 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     emailAddress: customerData.emailAddress || '',
     plan: customerData.desiredPlan || '',
     username: customerData.technicalDetails?.username || '',
+    // Carried through so the Customer Details panel opened from here shows it too.
+    pppoePassword: (customerData.technicalDetails as any)?.pppoePassword || '',
     connectionType: customerData.technicalDetails?.connectionType || '',
     routerModel: customerData.technicalDetails?.routerModel || '',
     routerModemSN: customerData.technicalDetails?.routerModemSn || '',
@@ -108,6 +110,8 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate: string;
     username: string;
+    /** From the account's job order — technical_details has no password column. */
+    pppoePassword: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -232,6 +236,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     'plan',
     'affiliate',
     'username',
+    'pppoePassword',
     'connectionType',
     'routerModemSN',
     'lcp',
@@ -428,6 +433,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
       plan: 'Plan',
       affiliate: 'Affiliate',
       username: 'Username',
+      pppoePassword: 'PPPOE Password',
       connectionType: 'Connection Type',
       routerModemSN: 'Router/Modem SN',
       lcp: 'LCP',
@@ -732,6 +738,20 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
         return renderField('Affiliate', serviceOrder.affiliate);
       case 'username':
         return renderField('Username', serviceOrder.username);
+      // Rendered directly instead of through renderField, which drops empty values: an account
+      // with no PPPoE password on record needs to show that, not silently omit the row.
+      case 'pppoePassword':
+        return (
+          <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'
+            }`}>
+            <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>PPPOE Password</div>
+            <div className={`flex-1 font-mono ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+              {serviceOrder.pppoePassword || '-'}
+            </div>
+          </div>
+        );
       case 'connectionType':
         return renderField('Connection Type', serviceOrder.connectionType);
       case 'routerModemSN':

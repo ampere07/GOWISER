@@ -525,24 +525,15 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     // Guard against double-submits and against hammering the SmartOLT API.
     if (isValidatingSN || validateCooldown > 0) return;
 
-    // Unlike a job order, this modal edits an account whose SN is ALREADY stored in
-    // technical_details — and the endpoint rejects any serial it finds there ("Serial Number
-    // already exists in our system"). Validating the account's own unchanged serial would
-    // therefore fail misleadingly, so short-circuit it as the already-verified value.
-    if (sn === String(originalRouterModemSn || '').trim()) {
-      setIsSNValidated(true);
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors.router_modem_sn;
-        return newErrors;
-      });
-      setModal({
-        isOpen: true,
-        type: 'success',
-        title: 'Already Verified',
-        message: 'This is the Modem Serial Number already saved for this account. Enter a different serial to validate a replacement.'
-      });
-      return;
+    const accountNoForValidation =
+      recordData?.accountNo || recordData?.account_no || recordData?.AccountNo ||
+      recordData?.applicationId || recordData?.id || '';
+
+    if (!accountNoForValidation) {
+      // Without it the backend cannot tell "this account's own modem" from "someone else's",
+      // and would reject the account's own serial. Better to say so than to show a duplicate
+      // error that looks like the serial is taken.
+      console.warn('[SmartOLT] No account number on the record; cannot scope the duplicate check.');
     }
 
     setIsValidatingSN(true);
@@ -550,7 +541,19 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
     try {
       const response = await apiClient.get('/smart-olt/validate-sn', {
-        params: { sn },
+        params: {
+          sn,
+          // Scopes the backend's duplicate check to OTHER accounts. Without this the account's
+          // own stored serial reads as "already exists in our system", which stopped staff from
+          // re-validating an unchanged modem just to pull its router model. A serial held by a
+          // different account is still rejected.
+          //
+          // applicationId is part of the fallback chain on purpose: billingService's detail
+          // mapper populates ONLY applicationId, so relying on accountNo alone would send an
+          // empty value on that path and silently reinstate the duplicate error. Mirrors how
+          // CustomerDetails resolves the account number.
+          account_no: accountNoForValidation
+        },
         timeout: 15000
       });
 

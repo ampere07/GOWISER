@@ -37,6 +37,8 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate?: string;
     username: string;
+    /** From the account's job order — technical_details has no password column. */
+    pppoePassword?: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -114,6 +116,7 @@ const defaultFields = [
   'emailAddress',
   'plan',
   'username',
+  'pppoePassword',
   'connectionType',
   'routerModemSN',
   'lcp',
@@ -224,6 +227,7 @@ const getFieldLabel = (fieldKey: string): string => {
     emailAddress: 'Email Address',
     plan: 'Plan',
     username: 'Username',
+    pppoePassword: 'PPPOE Password',
     connectionType: 'Connection Type',
     routerModemSN: 'Router/Modem SN',
     lcp: 'LCP',
@@ -714,6 +718,8 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     emailAddress: () => <Text style={valStyle} selectable={true}>{serviceOrder.emailAddress}</Text>,
     plan: () => <Text style={valStyle} selectable={true}>{serviceOrder.plan}</Text>,
     username: () => <Text style={valStyle} selectable={true}>{serviceOrder.username}</Text>,
+    // selectable so a technician on site can copy the password straight out of the app.
+    pppoePassword: () => <Text style={valStyle} selectable={true}>{serviceOrder.pppoePassword || '-'}</Text>,
     connectionType: () => <Text style={valStyle} selectable={true}>{serviceOrder.connectionType}</Text>,
     routerModemSN: () => <Text style={valStyle} selectable={true}>{serviceOrder.routerModemSN}</Text>,
     lcp: () => <Text style={valStyle} selectable={true}>{serviceOrder.lcp}</Text>,

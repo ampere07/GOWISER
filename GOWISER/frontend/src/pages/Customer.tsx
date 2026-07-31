@@ -25,6 +25,7 @@ import {
   isPrepaidGeneration,
   VIP_BILLING_STATUS_ID
 } from '../utils/billingFilterOptions';
+import { mergeSavedColumns, BILLING_ATTRIBUTE_COLUMN_KEYS } from '../utils/tableColumnPrefs';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -106,6 +107,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     emailAddress: customerData.emailAddress || '',
     plan: customerData.desiredPlan || '',
     username: customerData.technicalDetails?.username || '',
+    // Sourced from the account's job order by CustomerDetailController — PPPoE credentials are
+    // not stored on technical_details.
+    pppoePassword: (customerData.technicalDetails as any)?.pppoePassword || '',
     connectionType: customerData.technicalDetails?.connectionType || '',
     routerModel: customerData.technicalDetails?.routerModel || '',
     routerModemSN: customerData.technicalDetails?.routerModemSn || '',
@@ -290,6 +294,10 @@ const allColumns = [
   { key: 'emailAddress', label: 'Email Address', width: 'min-w-48' },
   { key: 'plan', label: 'Plan', width: 'min-w-40' },
   { key: 'balance', label: 'Account Balance', width: 'min-w-32' },
+  { key: 'vatType', label: 'VAT Type', width: 'min-w-32' },
+  { key: 'generationType', label: 'Generation Type', width: 'min-w-36' },
+  { key: 'expirationDate', label: 'Expiration Date', width: 'min-w-36' },
+  { key: 'vip', label: 'VIP', width: 'min-w-24' },
   { key: 'username', label: 'Username', width: 'min-w-32' },
   { key: 'connectionType', label: 'Connection Type', width: 'min-w-36' },
   { key: 'routerModel', label: 'Router Model', width: 'min-w-32' },
@@ -410,7 +418,15 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const saved = localStorage.getItem('customerTableVisibleColumns');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Merged rather than used as-is: a preference saved before a column existed omits it,
+        // which would hide newly added columns from every returning user. Only the new keys are
+        // merged in, so columns the user hid on purpose stay hidden.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'customerTableVisibleColumns:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
@@ -428,7 +444,14 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const saved = localStorage.getItem('customerTableColumnOrder');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Without merging, a new column is missing from the saved order and indexOf returns -1,
+        // which would sort it ahead of every other column.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'customerTableColumnOrder:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -970,6 +993,10 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       case 'vatType': return deriveVatTypeLabel(item.vatEnabled, item.vatType);
       case 'generationType': return normalizeGenerationType(item.generationType);
       case 'prepaidExpiration': return item.prepaidExpiration;
+      // Table column key. Sorts on the raw timestamp (not the formatted label) so the order is
+      // chronological, and only prepaid accounts contribute a value — matching what is rendered.
+      case 'expirationDate':
+        return isPrepaidGeneration(item.generationType) ? (item.prepaidExpiration || '') : '';
       default: return (item as any)[key];
     }
   };
@@ -1417,10 +1444,12 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         );
       case 'dateInstalled':
         return formatDate(record.dateInstalled);
+      // Uppercased via CSS rather than .toUpperCase(): the underlying value is untouched, so
+      // sorting, filtering, the CSV export and the tooltip all keep the real casing.
       case 'customerName':
-        return record.customerName;
+        return <span className="uppercase" title={record.customerName}>{record.customerName}</span>;
       case 'address':
-        return <span title={record.address}>{record.address}</span>;
+        return <span className="uppercase" title={record.address}>{record.address}</span>;
       case 'contactNumber':
         return record.contactNumber || '-';
       case 'emailAddress':
@@ -1493,6 +1522,25 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       case 'techCreatedAt':
         return formatDate((record as any).techCreatedAt);
 
+      // Billing attributes. Derived through the same helpers the funnel filters use, so the
+      // column, the filter and the details panel can never disagree about a record.
+      case 'vatType':
+        // Boolean wins; the legacy free-text column is only a fallback for older accounts.
+        return deriveVatTypeLabel(record.vatEnabled, record.vatType) || '-';
+      case 'generationType':
+        return normalizeGenerationType(record.generationType) || '-';
+      case 'expirationDate':
+        // Prepaid only — a postpaid account has no rolling period to expire.
+        return isPrepaidGeneration(record.generationType)
+          ? (record.prepaidExpiration ? formatDate(record.prepaidExpiration) : '-')
+          : '-';
+      case 'vip':
+        // No VIP flag exists on billing_accounts; VIP is the billing status (id 7).
+        return deriveVipLabel(
+          record.billing_status_id === VIP_BILLING_STATUS_ID ||
+          String(record.billingStatus || '').trim().toLowerCase() === 'vip'
+        );
+
       // Related records - placeholders
       case 'relatedInvoices':
       case 'relatedStatementOfAccount':
@@ -1523,13 +1571,13 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       // Computed fields
       case 'computedAddress':
         return (record as any).computedAddress ||
-          (record.address ? (record.address.length > 25 ? `${record.address.substring(0, 25)}...` : record.address) : '-');
+          (record.address ? <span className="uppercase">{record.address.length > 25 ? `${record.address.substring(0, 25)}...` : record.address}</span> : '-');
       case 'computedStatus':
         return (record as any).computedStatus ||
           `${record.status || 'Disconnected Offline'} | ₱ ${record.balance.toFixed(2)}`;
       case 'computedAccountNo':
         return (record as any).computedAccountNo ||
-          `${record.applicationId} | ${record.customerName}${record.address ? (' | ' + record.address.substring(0, 10) + '...') : ''}`;
+          <span>{record.applicationId} | <span className="uppercase">{record.customerName}</span>{record.address ? <> | <span className="uppercase">{record.address.length > 10 ? `${record.address.substring(0, 10)}...` : record.address}</span></> : ''}</span>;
 
       default:
         return '-';
@@ -1553,8 +1601,12 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
           return getStatusInfo(record).label;
         case 'accountNo':
           return record.applicationId;
+        // Both of these render as JSX (uppercased spans), which would export as "[object
+        // Object]" — so the export reads the raw value, and keeps the original casing.
         case 'address':
           return record.address || '-';
+        case 'customerName':
+          return record.customerName || '-';
         default:
           return renderCellValue(record, columnKey);
       }
@@ -2567,7 +2619,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               <div className="flex items-center justify-between">
                                 <div className="flex-1 min-w-0">
                                   <div className="text-red-400 font-medium text-sm mb-1 flex items-center flex-wrap gap-2">
-                                    <span>{record.applicationId} | {record.customerName} | {record.address}</span>
+                                    {/* Mobile card header — name and address uppercased to match the table view. */}
+                                    <span>{record.applicationId} | <span className="uppercase">{record.customerName}</span> | <span className="uppercase">{record.address}</span></span>
                                     {(() => {
                                       const viewersForCard = viewers[record.applicationId] || [];
                                       return viewersForCard.length > 0 && (
