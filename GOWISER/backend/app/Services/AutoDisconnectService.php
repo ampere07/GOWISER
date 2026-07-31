@@ -11,6 +11,7 @@ use App\Models\EmailTemplate;
 use App\Services\EmailQueueService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use Throwable;
 use Exception;
@@ -76,6 +77,21 @@ class AutoDisconnectService
      * same "restricted from the start of the day after expiry" rule.
      */
     private const PREPAID_GRACE_DAYS = 1;
+
+    /** Remark stamped on the service order raised by {@see processPrepaidAutoPullout()}. */
+    private const PREPAID_PULLOUT_REMARKS = 'Prepaid Auto Pullout';
+
+    /**
+     * Concern values that count as an existing pullout request when de-duplicating.
+     *
+     * 'for pullout' is the spelling {@see createPulloutRequest()} has always written, so it has to
+     * be matched too — under a case-sensitive collation the canonical spellings alone would miss
+     * every row the postpaid flow created and we would raise a second pullout for the same account.
+     */
+    private const PULLOUT_CONCERNS = ['Pullout', 'For Pullout', 'for pullout'];
+
+    /** A pullout service order in one of these states is finished and no longer blocks a new one. */
+    private const PULLOUT_CLOSED_STATUSES = ['Completed', 'Cancelled', 'Failed'];
 
     private const DC_OFFSET_DAYS = 10;
     private const ADDITIONAL_INVOICE_OFFSET_DAYS = 7;
@@ -984,6 +1000,260 @@ class AutoDisconnectService
     }
 
     /**
+     * Raise pullout service orders for prepaid customers who never came back.
+     *
+     * A prepaid account is restricted (and flipped to Inactive) by {@see processPrepaidRestrictions()}
+     * as soon as its rolling service period lapses. If it is still sitting Inactive `pullout_day`
+     * days after that expiry, the customer has not renewed and the equipment is scheduled for
+     * retrieval — this raises the pullout service order the field team works from.
+     *
+     * Unlike the postpaid {@see processAutoPullout()}, this does NOT touch RADIUS or the billing
+     * status: the account is already restricted and Inactive, so the only outstanding action is the
+     * service order. That also makes the pass safe to run repeatedly.
+     *
+     * Idempotent & fault-isolated:
+     *   - An account with a live pullout service order (any concern spelling, in any state other
+     *     than Completed/Cancelled/Failed) is skipped, so re-running never stacks duplicates.
+     *   - Each account is processed in its own try/catch; one bad row never aborts the run.
+     *
+     * Steps are written to storage/logs/autodisconnect/auto_dc_YYYY-MM-DD.log.
+     *
+     * @return array{success:bool, created:int, skipped:int, errors:array, duration:int}
+     */
+    public function processPrepaidAutoPullout(): array
+    {
+        $logFile = 'auto_dc_' . Carbon::now()->format('Y-m-d') . '.log';
+        $log = fn (string $message) => $this->writeLog($message, $logFile);
+
+        $log("");
+        $log("╔════════════════════════════════════════════════════════════════╗");
+        $log("║         STARTING PREPAID AUTO PULLOUT PROCESS                  ║");
+        $log("╚════════════════════════════════════════════════════════════════╝");
+        $startTime = Carbon::now();
+        $log("Start Time: " . $startTime->format('Y-m-d H:i:s'));
+        $log("");
+
+        $createdCount = 0;
+        $skippedCount = 0;
+        $errors = [];
+
+        try {
+            $config = BillingConfig::first();
+
+            if (!$config) {
+                $log("[ERROR] Billing configuration not found");
+                throw new Exception("Billing configuration not found");
+            }
+
+            // Same fallback chain as the postpaid pullout so both flows honour one configured offset.
+            $pulloutDay = (int) ($config->pullout_day ?? $config->pullout_offset ?? 30);
+
+            if ($pulloutDay <= 0) {
+                $log("[INFO] Prepaid Auto Pullout is disabled (pullout_day = 0)");
+                $duration = Carbon::now()->diffInSeconds($startTime);
+                return [
+                    'success' => true,
+                    'created' => 0,
+                    'skipped' => 0,
+                    'errors' => [],
+                    'duration' => $duration,
+                ];
+            }
+
+            $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
+
+            $log("[CONFIG] Pullout Day Offset: {$pulloutDay} day(s) after prepaid expiry");
+            $log("[CONFIG] Target Billing Status: Inactive (ID: {$inactiveStatusId})");
+            $log("");
+
+            // Prepaid accounts left Inactive for pullout_day days past their expiry date.
+            $log("[QUERY] Searching for prepaid pullout candidates...");
+            $accounts = BillingAccount::with(['customer'])
+                ->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
+                ->where('billing_status_id', $inactiveStatusId)
+                ->whereNotNull('prepaid_expires_at')
+                ->whereRaw('DATE_ADD(prepaid_expires_at, INTERVAL ? DAY) <= NOW()', [$pulloutDay])
+                ->get();
+
+            $totalCount = $accounts->count();
+            $log("[RESULT] Found {$totalCount} inactive prepaid account(s) past expiry + {$pulloutDay} day(s)");
+            $log("");
+
+            if ($totalCount === 0) {
+                $log("[INFO] No prepaid accounts to process for pullout today.");
+                $log("[INFO] Criteria: Prepaid AND Inactive AND (prepaid_expires_at + {$pulloutDay}d) <= now");
+                $endTime = Carbon::now();
+                $duration = $endTime->diffInSeconds($startTime);
+                $log("");
+                $log("╔════════════════════════════════════════════════════════════════╗");
+                $log("║         PREPAID AUTO PULLOUT COMPLETE (No Actions)             ║");
+                $log("╚════════════════════════════════════════════════════════════════╝");
+                $log("End Time: " . $endTime->format('Y-m-d H:i:s'));
+                $log("Duration: {$duration} second(s)");
+                $log("");
+
+                return [
+                    'success' => true,
+                    'created' => 0,
+                    'skipped' => 0,
+                    'errors' => [],
+                    'duration' => $duration,
+                ];
+            }
+
+            $log("[PROCESS] Starting prepaid pullout request creation...");
+            $log("─────────────────────────────────────────────────────────────────");
+
+            $counter = 0;
+
+            foreach ($accounts as $account) {
+                $counter++;
+                $accountNo = $account->account_no;
+
+                $log("");
+                $log("[{$counter}/{$totalCount}] ══════════════════════════════════════════════");
+                $log("[ACCOUNT] {$accountNo}");
+
+                // Isolate each customer: a single unexpected failure must never abort the run.
+                try {
+                    $expiry = Carbon::parse($account->prepaid_expires_at);
+                    $dueDate = $expiry->copy()->addDays($pulloutDay);
+                    $log(
+                        "  [INFO] Prepaid expiry: {$expiry->format('Y-m-d H:i')}"
+                        . " | pullout due: {$dueDate->format('Y-m-d')}"
+                        . " | days past due: {$dueDate->diffInDays(Carbon::now())}"
+                    );
+
+                    // Dedup guard: a pullout that is still open (or has no status yet) blocks a new
+                    // one. NULL statuses are matched explicitly — `status NOT IN (...)` evaluates to
+                    // NULL for them in SQL, which would silently let duplicates through.
+                    $existingPullout = ServiceOrder::where('account_no', $accountNo)
+                        ->whereIn('concern', self::PULLOUT_CONCERNS)
+                        ->where(function ($query) {
+                            $query->whereNull('status')
+                                ->orWhereNotIn('status', self::PULLOUT_CLOSED_STATUSES);
+                        })
+                        ->exists();
+
+                    if ($existingPullout) {
+                        $log("  [SKIP] An open pullout service order already exists");
+                        $log("[{$counter}/{$totalCount}] ⊘ SKIPPED");
+                        $skippedCount++;
+                        continue;
+                    }
+
+                    $log("  [CREATE] Creating prepaid pullout service order...");
+                    $serviceOrderId = $this->createPrepaidPulloutRequest($account);
+                    $createdCount++;
+                    $log("  [CREATE] ✓ Service order #{$serviceOrderId} created (concern: Pullout, status: Pending)");
+                    $log("  [COMPLETE] Prepaid pullout raised for {$accountNo}");
+                    $log("[{$counter}/{$totalCount}] ✓ SUCCESS");
+
+                } catch (Throwable $e) {
+                    $log("  [ERROR] " . $e->getMessage());
+                    $log("  [TRACE] " . $e->getTraceAsString());
+                    $log("[{$counter}/{$totalCount}] ✗ ERROR");
+                    $errors[] = "Account {$accountNo}: " . $e->getMessage();
+                    $skippedCount++;
+                }
+            }
+
+            $endTime = Carbon::now();
+            $duration = $endTime->diffInSeconds($startTime);
+
+            $log("");
+            $log("╔════════════════════════════════════════════════════════════════╗");
+            $log("║         PREPAID AUTO PULLOUT COMPLETE                          ║");
+            $log("╚════════════════════════════════════════════════════════════════╝");
+            $log("Summary:");
+            $log("  • Total Found: {$totalCount}");
+            $log("  • Service Orders Created: {$createdCount}");
+            $log("  • Skipped: {$skippedCount}");
+            $log("  • Errors: " . count($errors));
+            $log("  • Duration: {$duration} second(s)");
+            $log("End Time: " . $endTime->format('Y-m-d H:i:s'));
+            $log("");
+
+            if (!empty($errors)) {
+                $log("[ERROR DETAILS]");
+                foreach ($errors as $error) {
+                    $log("  × {$error}");
+                }
+                $log("");
+            }
+
+            return [
+                'success' => true,
+                'created' => $createdCount,
+                'skipped' => $skippedCount,
+                'errors' => $errors,
+                'duration' => $duration,
+            ];
+
+        } catch (Throwable $e) {
+            $endTime = Carbon::now();
+            $duration = $endTime->diffInSeconds($startTime);
+
+            $log("");
+            $log("╔════════════════════════════════════════════════════════════════╗");
+            $log("║         CRITICAL ERROR                                         ║");
+            $log("╚════════════════════════════════════════════════════════════════╝");
+            $log("[CRITICAL] " . $e->getMessage());
+            $log("[TRACE] " . $e->getTraceAsString());
+            $log("End Time: " . $endTime->format('Y-m-d H:i:s'));
+            $log("Duration: {$duration} second(s)");
+            $log("");
+
+            return [
+                'success' => false,
+                'created' => $createdCount,
+                'skipped' => $skippedCount,
+                'errors' => $errors,
+                'error' => $e->getMessage(),
+                'duration' => $duration,
+            ];
+        }
+    }
+
+    /**
+     * Create the pullout service order for a lapsed prepaid account.
+     *
+     * Attributes are assigned individually rather than mass-assigned: ServiceOrder's $fillable
+     * carries the legacy capitalised column names, so ServiceOrder::create() would silently drop
+     * account_no and concern.
+     *
+     * customer_id / remarks are only written when the deployed schema actually has them — the
+     * columns are absent from the current service_orders migration, and concern_remarks is where
+     * this codebase records the reason a service order exists.
+     *
+     * @return int The new service order id.
+     */
+    private function createPrepaidPulloutRequest(BillingAccount $billingAccount): int
+    {
+        $serviceOrder = new ServiceOrder();
+        $serviceOrder->Timestamp = Carbon::now();
+        $serviceOrder->account_no = $billingAccount->account_no;
+        $serviceOrder->concern = 'Pullout';
+        $serviceOrder->concern_remarks = self::PREPAID_PULLOUT_REMARKS;
+        $serviceOrder->status = 'Pending';
+        $serviceOrder->support_status = 'For Visit';
+        $serviceOrder->requested_by = 'System';
+        $serviceOrder->created_by_user = 'System';
+        $serviceOrder->updated_by_user = 'System';
+
+        if (Schema::hasColumn('service_orders', 'customer_id')) {
+            $serviceOrder->customer_id = $billingAccount->customer_id;
+        }
+        if (Schema::hasColumn('service_orders', 'remarks')) {
+            $serviceOrder->remarks = self::PREPAID_PULLOUT_REMARKS;
+        }
+
+        $serviceOrder->save();
+
+        return (int) $serviceOrder->id;
+    }
+
+    /**
      * Create a pullout service order
      */
     private function createPulloutRequest(BillingAccount $billingAccount, int $pulloutOffset): void
@@ -1271,15 +1541,18 @@ class AutoDisconnectService
 
     /**
      * Write to log file
+     *
+     * @param string      $fileName Log file to append to, relative to storage/logs/autodisconnect.
+     *                              Defaults to the shared run log every other step writes to.
      */
-    private function writeLog(string $message): void
+    private function writeLog(string $message, string $fileName = 'auto_disconnect_pullout.log'): void
     {
         $timestamp = Carbon::now()->format('Y-m-d H:i:s');
         $logMessage = "[{$timestamp}] [{$this->logName}] {$message}";
-        
+
         // Define directory and file path
         $logDir = storage_path('logs/autodisconnect');
-        $logFile = $logDir . '/auto_disconnect_pullout.log';
+        $logFile = $logDir . '/' . $fileName;
 
         // Check/Create Directory
         if (!file_exists($logDir)) {

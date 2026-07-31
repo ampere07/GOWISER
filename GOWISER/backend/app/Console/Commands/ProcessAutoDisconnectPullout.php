@@ -69,6 +69,7 @@ class ProcessAutoDisconnectPullout extends Command
         try {
             $dcResult = null;
             $pulloutResult = null;
+            $prepaidPulloutResult = null;
 
             // Process Auto Disconnection
             if (!$pulloutOnly) {
@@ -205,7 +206,41 @@ class ProcessAutoDisconnectPullout extends Command
                     $this->error("[FAILED] Auto Pullout Failed: " . ($pulloutResult['error'] ?? 'Unknown error'));
                     return 1;
                 }
-                
+
+                $this->newLine();
+
+                // Process Prepaid Auto Pullout (prepaid accounts left Inactive for pullout_day days
+                // past their expiry never renewed, so their equipment is scheduled for retrieval).
+                $this->info("─────────────────────────────────────────────────────────");
+                $this->info("[PROCESS] Processing Prepaid Auto Pullout...");
+                $this->info("─────────────────────────────────────────────────────────");
+
+                $prepaidPulloutResult = $this->autoDisconnectService->processPrepaidAutoPullout();
+
+                if ($prepaidPulloutResult['success']) {
+                    $this->newLine();
+                    $this->info("[SUCCESS] Prepaid Auto Pullout Complete:");
+                    $this->table(
+                        ['Metric', 'Count'],
+                        [
+                            ['Created', $prepaidPulloutResult['created']],
+                            ['Skipped', $prepaidPulloutResult['skipped']],
+                            ['Duration', $prepaidPulloutResult['duration'] . 's']
+                        ]
+                    );
+                } else {
+                    // Non-fatal: the postpaid pullout has already run, so report and carry on.
+                    $this->warn("[WARNING] Prepaid Auto Pullout reported a failure: " . ($prepaidPulloutResult['error'] ?? 'Unknown error'));
+                }
+
+                if (!empty($prepaidPulloutResult['errors'])) {
+                    $this->newLine();
+                    $this->warn("[WARNING] Errors encountered:");
+                    foreach ($prepaidPulloutResult['errors'] as $error) {
+                        $this->line("   - " . $error);
+                    }
+                }
+
                 $this->newLine();
             }
 
@@ -220,14 +255,20 @@ class ProcessAutoDisconnectPullout extends Command
             $this->info("Total Duration: {$totalDuration} seconds");
             
             if ($dcResult && $pulloutResult) {
+                $summaryRows = [
+                    ['Disconnections', $dcResult['processed'], $dcResult['skipped']],
+                    ['Pullout Requests', $pulloutResult['created'], $pulloutResult['skipped']]
+                ];
+
+                if ($prepaidPulloutResult) {
+                    $summaryRows[] = ['Prepaid Pullout Requests', $prepaidPulloutResult['created'], $prepaidPulloutResult['skipped']];
+                }
+
                 $this->newLine();
                 $this->info("[SUMMARY] Overall Results:");
                 $this->table(
                     ['Process', 'Success', 'Failed/Skipped'],
-                    [
-                        ['Disconnections', $dcResult['processed'], $dcResult['skipped']],
-                        ['Pullout Requests', $pulloutResult['created'], $pulloutResult['skipped']]
-                    ]
+                    $summaryRows
                 );
             }
             
