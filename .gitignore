@@ -44,3 +44,4 @@ yarn-error.log*
 # Laravel specific
 storage/*.key
 GOWISER.zip
+*.md
