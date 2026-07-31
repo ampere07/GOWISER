@@ -1,0 +1,29 @@
+{
+  "name": "gowiser-monitor",
+  "version": "1.0.0",
+  "description": "Read-only executive monitoring portal. Laravel API + React frontend, reporting across multiple operational databases.",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:frontend": "cd frontend && npm start",
+    "start:backend": "cd backend && php artisan serve --port=8000",
+    "install:all": "npm run install:frontend && npm run install:backend",
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && composer install",
+    "build": "cd frontend && npm run build",
+    "migrate": "cd backend && php artisan migrate --seed",
+    "dev": "npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "monitoring",
+    "executive-dashboard",
+    "laravel",
+    "react",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT"
+}

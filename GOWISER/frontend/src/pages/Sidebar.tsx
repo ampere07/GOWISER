@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { roleService } from '../services/userService';
 
@@ -133,6 +133,16 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       children: [
         { id: 'inventory', label: 'Inventory', icon: Package, allowedRoles: ['administrator', 'inventorystaff'] },
         { id: 'inventory-category-list', label: 'Inventory Category List', icon: List, allowedRoles: ['administrator', 'inventorystaff'] }
+      ]
+    },
+    {
+      id: 'expenses-group',
+      label: 'Expenses',
+      icon: Wallet,
+      allowedRoles: ['administrator', 'superadmin'],
+      children: [
+        { id: 'expenses', label: 'Expenses', icon: Wallet, allowedRoles: ['administrator', 'superadmin'] },
+        { id: 'expenses-category', label: 'Expenses Category', icon: Tag, allowedRoles: ['administrator', 'superadmin'] }
       ]
     },
     {

@@ -43,6 +43,8 @@ import LcpList from './LcpList';
 import NapList from './NapList';
 import Inventory from './Inventory';
 import ExpensesLog from './ExpensesLog';
+import Expenses from './Expenses';
+import ExpensesCategoryList from './ExpensesCategoryList';
 import Logs from './Logs';
 import SOA from './SOA';
 import Invoice from './Invoice';
@@ -393,6 +395,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Inventory />;
             case 'inventory-category-list':
                 return <InventoryCategoryList />;
+            case 'expenses':
+                return <Expenses />;
+            case 'expenses-category':
+                return <ExpensesCategoryList />;
             case 'expenses-log':
                 return <ExpensesLog />;
             case 'system-logs':

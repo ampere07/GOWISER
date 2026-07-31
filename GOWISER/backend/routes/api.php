@@ -132,7 +132,28 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 Route::get('/sms-blast', [SmsBlastController::class , 'index']);
 Route::post('/sms-blast', [SmsBlastController::class , 'store']);
-Route::get('/expenses-logs', [ExpensesLogController::class , 'index']);
+// Expenses module. The bare GET stays first and unchanged so the legacy
+// ExpensesLog page keeps hitting exactly the endpoint it already knows.
+Route::prefix('expenses-logs')->group(function () {
+    Route::get('/', [ExpensesLogController::class , 'index']);
+    // Literal segments before /{id}, or the wildcard swallows them.
+    Route::get('/summary', [ExpensesLogController::class , 'summary']);
+    Route::get('/export', [ExpensesLogController::class , 'export']);
+    Route::post('/', [ExpensesLogController::class , 'store']);
+    Route::get('/{id}', [ExpensesLogController::class , 'show']);
+    // POST+_method=PUT is how the frontend sends multipart updates; PHP does not
+    // populate $_FILES on a real PUT body.
+    Route::match(['put', 'post'], '/{id}', [ExpensesLogController::class , 'update']);
+    Route::delete('/{id}', [ExpensesLogController::class , 'destroy']);
+});
+
+Route::prefix('expenses-categories')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'index']);
+    Route::post('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'show']);
+    Route::put('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'update']);
+    Route::delete('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'destroy']);
+});
 Route::get('/disconnection-logs', [DisconnectionLogsController::class , 'index']);
 Route::get('/smart-olt/validate-sn', [\App\Http\Controllers\SmartOltController::class , 'validateOnuSn']);
 Route::post('/smart-olt/update-name', [\App\Http\Controllers\SmartOltController::class , 'updateOnuNameBySn']);

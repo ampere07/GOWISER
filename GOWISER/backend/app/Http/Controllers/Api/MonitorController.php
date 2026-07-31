@@ -550,18 +550,29 @@ class MonitorController extends Controller
                 ]);
             }
 
-            // 8) EXPENSES (your real table is expenses_log; category_id exists)
+            // 8) EXPENSES — table is `expenses_logs` (plural) and the date column is
+            // `date`. This block previously read `expenses_log`.`expense_date`, neither
+            // of which exists, so the action always errored. category_id is real as of
+            // the Expenses module migration.
             if ($action === 'expenses_mon') {
-                $qb = DB::table('expenses_log');
-                $applyOrg($qb, 'expenses_log');
-                $qb->leftJoin('expenses_category', 'expenses_log.category_id', '=', 'expenses_category.id')
+                $qb = DB::table('expenses_logs');
+                $applyOrg($qb, 'expenses_logs');
+                $qb->leftJoin('expenses_category', 'expenses_logs.category_id', '=', 'expenses_category.id')
                     ->select(
-                        DB::raw("COALESCE(expenses_category.category_name, 'Unknown') as label"),
-                        DB::raw("SUM(COALESCE(expenses_log.amount,0)) as value")
+                        // Rows predating categories carry only the free-text `category`
+                        // string; without that middle fallback they would all collapse
+                        // into a single "Unknown" slice.
+                        DB::raw("COALESCE(expenses_category.category_name, NULLIF(expenses_logs.category, ''), 'Unknown') as label"),
+                        DB::raw("SUM(COALESCE(expenses_logs.amount,0)) as value")
                     );
 
-                $applyScope($qb, 'expenses_log.expense_date');
-                $qb->groupBy('expenses_category.category_name')
+                // Raw query builder, so the model's SoftDeletes scope does not apply here.
+                $qb->whereNull('expenses_logs.deleted_at');
+
+                $applyScope($qb, 'expenses_logs.date');
+                // Grouped by the alias, not by category_name: the label expression reads
+                // expenses_logs.category too, which ONLY_FULL_GROUP_BY would otherwise reject.
+                $qb->groupBy('label')
                     ->orderByDesc('value');
 
                 return response()->json(['status' => 'success', 'data' => $qb->get(), 'barangays' => $response['barangays']]);
