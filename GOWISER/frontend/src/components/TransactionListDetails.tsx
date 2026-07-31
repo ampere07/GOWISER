@@ -17,6 +17,8 @@ import { useBillingStore } from '../store/billingStore';
 import { API_BASE_URL } from '../config/api';
 import TransactionRevertModal from '../modals/TransactionRevertModal';
 import TransactionFormModal from '../modals/TransactionFormModal';
+import ReceiptPreviewModal from '../modals/ReceiptPreviewModal';
+import { ReceiptData } from '../utils/receiptTemplates';
 import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
 
@@ -161,6 +163,8 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     techUpdatedBy: customerData.technicalDetails?.updatedBy,
     usernameStatus: customerData.technicalDetails?.usernameStatus,
     vip_expiration: customerData.billingAccount?.vip_expiration || '',
+    generationType: customerData.billingAccount?.generation_type || '',
+    prepaidExpiration: customerData.billingAccount?.prepaid_expires_at || '',
     vip_remarks: customerData.billingAccount?.vip_remarks || '',
   };
 };
@@ -190,6 +194,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showFailedConfirmModal, setShowFailedConfirmModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [showCustomerDetails, setShowCustomerDetails] = useState(false);
   const [loadingCustomerOverlay, setLoadingCustomerOverlay] = useState(false);
   const [selectedCustomerForOverlay, setSelectedCustomerForOverlay] = useState<BillingDetailRecord | null>(null);
@@ -648,18 +654,21 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     );
   };
 
-  // Build and print an acknowledgment receipt (thermal-printer layout) for this transaction.
-  // Deliberately NOT an Official Receipt: the slip carries a disclaimer stating it cannot be used
-  // to claim input tax, so it must not be described or presented as one.
-  // Uses a hidden same-origin iframe so it is not blocked like window.open popups, and
-  // removes the iframe once printing is done (or the dialog is dismissed).
-  const handlePrintReceipt = () => {
+  /**
+   * Assemble the printable receipt payload for this transaction.
+   *
+   * The markup itself lives in utils/receiptTemplates so the preview, the print
+   * output and the PDF export all render from one source instead of the HTML
+   * being built inline here (which made a faithful preview impossible).
+   *
+   * Deliberately carries a disclaimer stating it cannot be used to claim input
+   * tax, so it must not be presented as a BIR Official Receipt.
+   */
+  const buildReceiptData = (): ReceiptData => {
     const customer = transaction.account?.customer;
     const location = [customer?.address, customer?.barangay, customer?.city, customer?.region]
       .filter(Boolean).join(', ');
 
-    const receiptNo = transaction.or_no || transaction.reference_no || transaction.id || '-';
-    const dateStr = formatDate(transaction.date_processed || transaction.payment_date);
     const timeStr = (() => {
       const raw = transaction.date_processed || transaction.payment_date;
       if (!raw) return '-';
@@ -672,169 +681,31 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     })();
 
     const planText = customer?.desired_plan ? ` (${customer.desired_plan})` : '';
-    const description = `${transaction.transaction_type || 'Payment'}${planText}`;
-    const amount = formatCurrency(transaction.received_payment || 0);
 
-    const esc = (v: any) => String(v ?? '-')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    // Prefer the DB-configured logo (same one the Header shows); fall back to the bundled asset.
-    const logoSrc = receiptLogoUrl || gowiserLogo;
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Receipt ${esc(receiptNo)}</title>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; }
-    body {
-      font-family: 'Courier New', Courier, monospace;
-      color: #000; background: #fff;
-      font-size: 11px; line-height: 1.4;
-      width: 72mm; max-width: 72mm; margin: 0 auto; padding: 10px 8px;
-    }
-    .center { text-align: center; }
-    .logo { width: 54px; height: auto; margin: 0 auto 4px; display: block; }
-    .company { font-weight: bold; font-size: 13px; letter-spacing: .5px; }
-    .muted { font-size: 11px; }
-    .divider { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-    .title { font-weight: bold; letter-spacing: 2px; font-size: 13px; }
-    .row { display: flex; justify-content: space-between; gap: 8px; }
-    .row .label { white-space: nowrap; }
-    .row .value { text-align: right; font-weight: bold; word-break: break-word; }
-    .section-head { display: flex; justify-content: space-between; font-weight: bold; }
-    .total-row { display: flex; justify-content: space-between; font-weight: bold; font-size: 13px; }
-    .thanks { font-size: 11px; }
-    /* Boxed and bold so the validity notice reads as a disclaimer rather than as part of the
-       sign-off. No colour — thermal printers are monochrome. */
-    .disclaimer {
-      font-size: 10px; line-height: 1.35; text-align: center; font-weight: bold;
-      border: 1px dashed #000; padding: 5px 4px; margin: 8px 0;
-    }
-    @page { margin: 0; }
-    @media print {
-      /* html spans the full sheet (Letter, A4 or thermal roll); the body is a fixed
-         narrow slip auto-centered within it, so the receipt is centered on ANY paper size. */
-      html { width: 100%; margin: 0; }
-      body { width: 72mm; max-width: 72mm; margin: 0 auto; padding: 8px 6px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="center">
-    <img class="logo" src="${esc(logoSrc)}" alt="logo" onerror="this.style.display='none'" />
-    <div class="company">${esc(RECEIPT_COMPANY.name)}</div>
-    <div class="muted">${esc(RECEIPT_COMPANY.address)}</div>
-    <div class="muted">TIN: ${esc(RECEIPT_COMPANY.tin)} | SEC: ${esc(RECEIPT_COMPANY.sec)}</div>
-    <div class="muted">BP No: ${esc(RECEIPT_COMPANY.bpNo)}</div>
-    <div class="muted">Tel: ${esc(RECEIPT_COMPANY.tel)}</div>
-    <div class="muted">${esc(RECEIPT_COMPANY.email)}</div>
-  </div>
-
-  <hr class="divider" />
-  <div class="center title">*RECEIPT *</div>
-  <hr class="divider" />
-
-  <div class="row"><span class="label">Receipt #:</span><span class="value">${esc(receiptNo)}</span></div>
-  <div class="row"><span class="label">Date:</span><span class="value">${esc(dateStr)}</span></div>
-  <div class="row"><span class="label">Time:</span><span class="value">${esc(timeStr)}</span></div>
-
-  <hr class="divider" />
-  <div style="font-weight:bold;">Bill To:</div>
-  <div style="font-weight:bold;">${esc(customer?.full_name)}</div>
-  <div class="row"><span class="label">Account #:</span><span class="value">${esc(transaction.account?.account_no)}</span></div>
-  <div class="row"><span class="label">Contact:</span><span class="value">${esc(customer?.contact_number_primary)}</span></div>
-  <div class="muted">Address: ${esc(location || '-')}</div>
-
-  <hr class="divider" />
-  <div class="section-head"><span>DESCRIPTION</span><span>AMOUNT</span></div>
-  <hr class="divider" />
-  <div class="row"><span class="label">${esc(description)}</span><span class="value">${esc(amount)}</span></div>
-
-  <hr class="divider" />
-  <div class="total-row"><span>TOTAL AMOUNT:</span><span>${esc(amount)}</span></div>
-  <hr class="divider" />
-  <div class="row"><span class="label">Payment Method:</span><span class="value">${esc(getPaymentMethodName()).toUpperCase()}</span></div>
-
-  <hr class="divider" />
-  <div class="disclaimer">
-    This document is a temporary proof of payment/acknowledgment only and is not valid for
-    claiming input tax or official accounting purposes.
-  </div>
-
-  <hr class="divider" />
-  <div class="center thanks">THANK YOU FOR YOUR PAYMENT!</div>
-  <div class="center thanks">Keep this receipt for your records.</div>
-  <div class="center thanks">For inquiries, please contact us.</div>
-  <div class="center thanks" style="margin-top:6px; font-weight:bold;">${esc(RECEIPT_COMPANY.name)}</div>
-  <div class="center thanks">Tel: ${esc(RECEIPT_COMPANY.tel)}</div>
-  <div class="center thanks">${esc(RECEIPT_COMPANY.email)}</div>
-</body>
-</html>`;
-
-    // Primary path: print from a real top-level window. Chromium IGNORES the @page size
-    // (80mm receipt width) when printing from an <iframe>, forcing Letter/A4 — a standalone
-    // window honours it, so the paper actually becomes receipt-sized. The auto-print script
-    // waits for load (so the logo is included) then prints and closes the window.
-    const printScript =
-      '<' + 'script>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});' +
-      'window.addEventListener("afterprint",function(){window.close();});<' + '/script>';
-
-    const printWindow = window.open('', '_blank', 'width=420,height=640');
-    if (printWindow) {
-      printWindow.document.open();
-      printWindow.document.write(html.replace('</body>', printScript + '</body>'));
-      printWindow.document.close();
-      return;
-    }
-
-    // Fallback (popup blocked): hidden iframe. Paper size may fall back to Letter here.
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    document.body.appendChild(iframe);
-
-    const cleanup = () => {
-      // Delay removal so the browser has finished the print job.
-      setTimeout(() => {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      }, 500);
+    return {
+      company: RECEIPT_COMPANY,
+      // Prefer the DB-configured logo (same one the Header shows); fall back to the bundled asset.
+      logoSrc: receiptLogoUrl || gowiserLogo,
+      receiptNo: String(transaction.or_no || transaction.reference_no || transaction.id || '-'),
+      dateStr: formatDate(transaction.date_processed || transaction.payment_date),
+      timeStr,
+      customerName: customer?.full_name || '-',
+      accountNo: String(transaction.account?.account_no || '-'),
+      contact: customer?.contact_number_primary || '-',
+      address: location,
+      description: `${transaction.transaction_type || 'Payment'}${planText}`,
+      amount: formatCurrency(transaction.received_payment || 0),
+      paymentMethod: getPaymentMethodName(),
+      referenceNo: transaction.reference_no || undefined,
+      processedBy: transaction.processed_by_user || undefined,
     };
+  };
 
-    const doc = iframe.contentWindow?.document;
-    if (!doc) {
-      cleanup();
-      return;
-    }
-    doc.open();
-    doc.write(html);
-    doc.close();
-
-    const triggerPrint = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch (e) {
-        console.error('Failed to print receipt:', e);
-      }
-      cleanup();
-    };
-
-    // Wait for the logo image to load so it appears in the print; fall back on a timeout.
-    const img = doc.querySelector('img');
-    if (img && !img.complete) {
-      img.addEventListener('load', triggerPrint, { once: true });
-      img.addEventListener('error', triggerPrint, { once: true });
-      setTimeout(triggerPrint, 1500);
-    } else {
-      setTimeout(triggerPrint, 200);
-    }
+  // Opens the preview instead of printing straight away, so the cashier can pick
+  // the paper format and check the slip before committing it to a thermal roll.
+  const handlePrintReceipt = () => {
+    setReceiptData(buildReceiptData());
+    setShowReceiptPreview(true);
   };
 
   return (
@@ -1434,6 +1305,16 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           initialTransactionData={transaction}
         />
       )}
+
+      {/* Opens on the 80mm thermal slip — that is what a cashier prints; the A4
+          invoice is the deliberate opt-in for when a customer asks for one. */}
+      <ReceiptPreviewModal
+        isOpen={showReceiptPreview}
+        onClose={() => setShowReceiptPreview(false)}
+        data={receiptData}
+        isDarkMode={isDarkMode}
+        initialFormat="pos80"
+      />
     </>
   );
 };

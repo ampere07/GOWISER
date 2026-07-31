@@ -161,6 +161,20 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
   const [activeTechField, setActiveTechField] = useState<'visitBy' | 'visitWith' | 'visitWithOther' | null>(null);
 
+  /**
+   * Reset the technician search whenever a different picker takes over.
+   *
+   * Visit By / Visit With / Visit With (Other) all share the single `technician`
+   * search key, and it was previously only cleared when the whole modal closed.
+   * A query typed while choosing Visit By therefore carried over and kept
+   * filtering the list when Visit With was opened next — so most technicians
+   * simply were not there, which looked like the options being arbitrarily
+   * limited. Every picker now opens showing the full list.
+   */
+  useEffect(() => {
+    setSearchQueries(prev => (prev.technician ? { ...prev, technician: '' } : prev));
+  }, [activeTechField]);
+
   const currentUserEmail = currentUser?.email_address || currentUser?.email || 'unknown@ampere.com';
   const isTechnician = useMemo(() => {
     if (!currentUser) return false;

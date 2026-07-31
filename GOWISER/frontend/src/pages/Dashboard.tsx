@@ -460,7 +460,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 {/* <ApplicationVisitProvider> */}
                 {/* <JobOrderProvider> */}
                 {/* <ServiceOrderProvider> */}
-                <div className={`h-screen flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
+                {/* h-[100dvh], not h-screen: 100vh on iOS Safari is the LARGE viewport
+                    (measured as if the address bar were hidden), so the bottom of the
+                    shell sits behind the browser chrome and anything pinned there —
+                    the sidebar's Logout button — is unreachable. dvh tracks the
+                    actually-visible height. Matches the h-[100dvh] already used by the
+                    detail panels. */}
+                <div className={`h-[100dvh] flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
                     }`}>
                     {/* Fixed Header */}
                     <div className="flex-shrink-0">
@@ -486,7 +492,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                         {/* Fixed Sidebar */}
                         {showSidebar && (
                             <div className={`flex-shrink-0 fixed md:relative z-50 transition-all duration-300 top-0 md:top-auto left-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
-                                } md:translate-x-0 h-screen md:h-auto`}>
+                                } md:translate-x-0 h-[100dvh] md:h-auto`}>
                                 <div className="h-full md:h-full">
                                     <Sidebar
                                         activeSection={activeSection}

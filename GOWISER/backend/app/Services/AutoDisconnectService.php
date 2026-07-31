@@ -62,6 +62,21 @@ class AutoDisconnectService
      */
     private const PREPAID_RESTRICTION_REMARKS = 'Prepaid Period Expired';
 
+    /**
+     * Grace days a prepaid customer keeps AFTER their expiry date before being restricted.
+     *
+     * 1 means the expiry date is treated as the last full day of service: an account expiring
+     * 07/30 stays connected all through 07/30 and is restricted on 07/31.
+     *
+     * This is a whole-DAY offset applied to the expiry's calendar date, deliberately ignoring its
+     * time-of-day. prepaid_expires_at is written as payment date + 30 days, so it inherits the
+     * payment's clock time — 3,505 of the live rows sit at 00:00:00 but a handful carry times like
+     * 17:24. Comparing the raw timestamp would have cut those customers off mid-afternoon on their
+     * expiry day while the 00:00 ones lost the entire day, so the whole cohort is normalised to the
+     * same "restricted from the start of the day after expiry" rule.
+     */
+    private const PREPAID_GRACE_DAYS = 1;
+
     private const DC_OFFSET_DAYS = 10;
     private const ADDITIONAL_INVOICE_OFFSET_DAYS = 7;
     private const PRORATE_DIVISOR_DAYS = 30;
@@ -497,16 +512,18 @@ class AutoDisconnectService
     /**
      * Restrict prepaid customers whose rolling service period has EXPIRED.
      *
-     * A prepaid customer stays active only while billing_accounts.prepaid_expires_at is in the
-     * future — that date is set/extended by {@see PrepaidRenewalService} when they pay. Once it
-     * lapses, this restricts them via the EXISTING RADIUS restriction workflow
+     * A prepaid customer keeps service through the WHOLE of their expiry date and is restricted at
+     * the start of the following day — an account whose prepaid_expires_at is 07/30 is restricted on
+     * 07/31 (see {@see PREPAID_GRACE_DAYS}). The expiry itself is set/extended by
+     * {@see PrepaidRenewalService} when they pay. Once the grace day is over, this restricts them
+     * via the EXISTING RADIUS restriction workflow
      * ({@see ManualRadiusOperationsService::restrictedUser()}) and flips the billing status to
      * Inactive, mirroring the postpaid auto-disconnect. The restriction is removed automatically
      * on their next successful payment (the existing payment reconnect flow), so the whole
      * restrict → pay → renew → restrict cycle can repeat indefinitely.
      *
      * Idempotent & fault-isolated:
-     *   - Only currently-Active accounts whose prepaid_expires_at has passed are selected. Once
+     *   - Only currently-Active accounts past their expiry date AND its grace day are selected. Once
      *     restricted they become Inactive and drop out of the query; after a renewal payment they
      *     are Active again with a future expiry — so an account is never restricted twice for the
      *     same period, yet is correctly re-restricted each time a new period lapses.
@@ -535,16 +552,33 @@ class AutoDisconnectService
             $activeStatusId = DB::table('billing_status')->where('status_name', 'Active')->value('id') ?? 1;
             $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
 
-            // Active prepaid accounts whose current service period has already lapsed.
+            /*
+             * Cutoff for "the grace day is over".
+             *
+             * An account is restricted only once its expiry date is strictly in the past, so the
+             * expiry date itself is served in full:
+             *
+             *   expiry 2026-07-30 (any time)  →  cutoff on 07/30 is 07/30 00:00  →  not yet due
+             *                                 →  cutoff on 07/31 is 07/31 00:00  →  RESTRICTED
+             *
+             * Compared against the bare column rather than DATE(prepaid_expires_at) so the
+             * comparison stays index-friendly on a table with thousands of prepaid accounts.
+             */
+            $restrictFrom = $now->copy()->startOfDay()->subDays(self::PREPAID_GRACE_DAYS - 1);
+
+            $this->writeLog("[RULE] Prepaid grace: " . self::PREPAID_GRACE_DAYS . " day(s) after expiry.");
+            $this->writeLog("[RULE] Restricting accounts that expired before {$restrictFrom->format('Y-m-d H:i:s')}.");
+
+            // Active prepaid accounts whose service period lapsed on an earlier calendar day.
             $accounts = BillingAccount::with(['technicalDetails', 'billingStatus'])
                 ->whereIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
                 ->where('billing_status_id', $activeStatusId)
                 ->whereNotNull('prepaid_expires_at')
-                ->where('prepaid_expires_at', '<=', $now)
+                ->where('prepaid_expires_at', '<', $restrictFrom)
                 ->get();
 
             $totalCount = $accounts->count();
-            $this->writeLog("[QUERY] Found {$totalCount} active prepaid account(s) with an expired service period.");
+            $this->writeLog("[QUERY] Found {$totalCount} active prepaid account(s) past their expiry date and grace day.");
             $this->writeLog("");
 
             if ($totalCount === 0) {
@@ -565,7 +599,13 @@ class AutoDisconnectService
                 // Isolate each customer: a single unexpected failure must never abort the run.
                 try {
                     $expiry = Carbon::parse($account->prepaid_expires_at);
-                    $this->writeLog("  [INFO] Prepaid period expired: {$expiry->format('Y-m-d H:i')}");
+                    // The expiry date is served in full, so restriction is due the next day.
+                    $dueDate = $expiry->copy()->startOfDay()->addDays(self::PREPAID_GRACE_DAYS);
+                    $this->writeLog(
+                        "  [INFO] Prepaid expiry: {$expiry->format('Y-m-d H:i')}"
+                        . " | restriction due: {$dueDate->format('Y-m-d')}"
+                        . " | days past due: {$dueDate->diffInDays($now->copy()->startOfDay())}"
+                    );
 
                     // Need a PPPoE username to act on.
                     $technicalDetail = $account->technicalDetails->first();

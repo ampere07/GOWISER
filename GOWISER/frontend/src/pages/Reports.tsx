@@ -16,12 +16,18 @@ interface ReportData {
     report_type: string;
     report_schedule: string;
     report_time: string;
-    day: string;
+    day: string | null;
+    /** Only set when the schedule is weekly. */
+    report_weekday?: string | null;
+    /** 1–12; only set for quarterly and yearly schedules. */
+    report_month?: number | string | null;
     send_to: string;
     date_range: string;
     created_by: string;
     created_at: string;
     file_url?: string;
+    is_active?: boolean | number | null;
+    last_dispatched_at?: string | null;
 }
 
 const ALL_COLUMNS = [
@@ -31,14 +37,25 @@ const ALL_COLUMNS = [
     { key: 'report_schedule', label: 'Schedule' },
     { key: 'report_time', label: 'Time' },
     { key: 'day', label: 'Day' },
+    { key: 'report_weekday', label: 'Weekday' },
+    { key: 'report_month', label: 'Month' },
     { key: 'send_to', label: 'Send To' },
     { key: 'date_range', label: 'Date Range' },
+    { key: 'last_dispatched_at', label: 'Last Sent' },
     { key: 'created_by', label: 'Created By' },
     { key: 'created_at', label: 'Created At' },
 ];
 
+// Weekday and Month are hidden by default: they only apply to some schedules,
+// and the Schedule column already spells the whole cadence out in words.
 const DEFAULT_VISIBLE = [
-    'id', 'report_name', 'report_type', 'report_schedule', 'day', 'report_time', 'send_to', 'date_range', 'created_by', 'created_at'
+    'id', 'report_name', 'report_type', 'report_schedule', 'report_time',
+    'send_to', 'date_range', 'last_dispatched_at', 'created_by', 'created_at',
+];
+
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
 // itemsPerPage is now managed as state inside the component
@@ -65,23 +82,68 @@ const formatDate = (d?: string | null) => {
     }
 };
 
-const getCellValue = (row: ReportData, key: string): string => {
-    const raw = (row as any)[key];
-    if (raw == null) return '—';
-    if (key === 'created_at') return formatDate(raw);
+const formatTime12h = (raw: string): string => {
+    const match = /^(\d{1,2}):(\d{2})/.exec(String(raw).trim());
+    if (!match) return String(raw);
 
-    if (key === 'report_time' && raw) {
-        // Simple 24h to 12h formatting if needed, or return raw
-        try {
-            const [h, m] = String(raw).split(':');
-            let hours = parseInt(h, 10);
-            const ampm = hours >= 12 ? 'PM' : 'AM';
-            hours = hours % 12;
-            hours = hours ? hours : 12;
-            return `${hours}:${m} ${ampm} GMT+8`;
-        } catch {
-            return String(raw);
-        }
+    const hours24 = Number(match[1]);
+    if (Number.isNaN(hours24) || hours24 > 23) return String(raw);
+
+    const ampm = hours24 >= 12 ? 'PM' : 'AM';
+    const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+    return `${hours12}:${match[2]} ${ampm} GMT+8`;
+};
+
+/**
+ * Spell the cadence out in full, e.g. "Every Year on December 25".
+ *
+ * Reading a schedule used to require cross-referencing the Schedule and Day
+ * columns, and Day was meaningless for daily and weekly reports.
+ */
+const describeSchedule = (row: ReportData): string => {
+    const schedule = (row.report_schedule || '').trim();
+    if (!schedule) return '—';
+
+    const day = row.day ? Number(row.day) : null;
+    const monthIndex = row.report_month ? Number(row.report_month) - 1 : null;
+    const month = monthIndex !== null && monthIndex >= 0 && monthIndex < 12
+        ? MONTH_NAMES[monthIndex]
+        : null;
+
+    switch (schedule) {
+        case 'Every Week':
+            return row.report_weekday ? `Every ${row.report_weekday}` : schedule;
+        case 'Every Month':
+            return day ? `Every Month on day ${day}` : schedule;
+        case 'Every 3 Months':
+            if (month && day) return `Every 3 Months from ${month}, day ${day}`;
+            return day ? `Every 3 Months on day ${day}` : schedule;
+        case 'Every Year':
+            return month && day ? `Every Year on ${month} ${day}` : schedule;
+        default:
+            return schedule;
+    }
+};
+
+const getCellValue = (row: ReportData, key: string): string => {
+    if (key === 'report_schedule') return describeSchedule(row);
+
+    const raw = (row as any)[key];
+
+    // A blank day / weekday / month is correct for schedules that don't use it,
+    // rather than missing data.
+    if (raw == null || raw === '') {
+        return key === 'day' || key === 'report_weekday' || key === 'report_month'
+            ? 'n/a'
+            : '—';
+    }
+
+    if (key === 'created_at' || key === 'last_dispatched_at') return formatDate(raw);
+    if (key === 'report_time') return formatTime12h(String(raw));
+
+    if (key === 'report_month') {
+        const index = Number(raw) - 1;
+        return index >= 0 && index < 12 ? MONTH_NAMES[index] : String(raw);
     }
 
     return String(raw);
@@ -224,9 +286,10 @@ const Reports: React.FC = () => {
             );
         }
 
-        // Sort
+        // Sort on a copy: sorting `f` in place mutated the `rows` state array
+        // whenever no search filter had produced a new array.
         if (sortColumn) {
-            f.sort((a, b) => {
+            f = [...f].sort((a, b) => {
                 const va = (a as any)[sortColumn];
                 const vb = (b as any)[sortColumn];
                 if (va == null && vb == null) return 0;

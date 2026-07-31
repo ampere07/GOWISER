@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Check, Copy } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -331,6 +332,95 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       setLoadingLcpNap(false);
     }
   };
+
+  /**
+   * Scheme picker for the IP row in Technical Details.
+   *
+   * Holds the IP plus the on-screen position of the arrow that opened it, because
+   * the popover is portalled to <body> (see the render at the bottom of this
+   * component) and therefore positions itself in viewport coordinates.
+   *
+   * Portalled rather than absolutely positioned inside the row: the details
+   * sections are scroll containers and the whole panel is `overflow-hidden` on
+   * mobile, so an in-flow popover would be clipped.
+   */
+  const [ipSchemeMenu, setIpSchemeMenu] = useState<{ ip: string; top: number; right: number } | null>(null);
+
+  /** Which scheme was just copied, for the transient tick. */
+  const [copiedScheme, setCopiedScheme] = useState<'https' | 'http' | null>(null);
+
+  /**
+   * Copy text, falling back to a hidden textarea when the async Clipboard API is
+   * unavailable.
+   *
+   * navigator.clipboard only exists in a secure context, so on a plain-http host
+   * (or an older browser) the copy would otherwise fail silently and the feature
+   * would appear broken.
+   */
+  const copyToClipboard = useCallback(async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall through to the legacy path
+    }
+
+    try {
+      const scratch = document.createElement('textarea');
+      scratch.value = text;
+      scratch.setAttribute('readonly', '');
+      scratch.style.position = 'fixed';
+      scratch.style.top = '-1000px';
+      scratch.style.opacity = '0';
+      document.body.appendChild(scratch);
+      scratch.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(scratch);
+      return ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const handleCopyIpUrl = useCallback(async (scheme: 'https' | 'http', ip: string) => {
+    const ok = await copyToClipboard(`${scheme}://${ip}`);
+
+    if (ok) {
+      setCopiedScheme(scheme);
+      // Brief confirmation, then dismiss the menu.
+      window.setTimeout(() => {
+        setCopiedScheme(null);
+        setIpSchemeMenu(null);
+      }, 900);
+    } else {
+      setIpSchemeMenu(null);
+    }
+  }, [copyToClipboard]);
+
+  // Dismiss the scheme menu on Escape, on any outside click, and on scroll or
+  // resize — its position is captured from the trigger, so it would otherwise
+  // drift away from the row it belongs to.
+  useEffect(() => {
+    if (!ipSchemeMenu) return;
+
+    const close = () => setIpSchemeMenu(null);
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', close);
+    // Capture phase so scrolling in any nested container also dismisses it.
+    window.addEventListener('scroll', close, true);
+    document.addEventListener('mousedown', close);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      document.removeEventListener('mousedown', close);
+    };
+  }, [ipSchemeMenu]);
 
   const [showTransactModal, setShowTransactModal] = useState(false);
   const [showTransactionFormModal, setShowTransactionFormModal] = useState(false);
@@ -1168,14 +1258,61 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.vlan}>{billingRecord.vlan}</span>
         </div>
       ) : null,
-      sessionIp: () => (billingRecord.sessionIp || billingRecord.sessionIP) ? (
-        <div className="flex justify-between items-center gap-4">
-          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>IP</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`} title={billingRecord.sessionIp || billingRecord.sessionIP}>{billingRecord.sessionIp || billingRecord.sessionIP}</span>
-        </div>
-      ) : null,
+      sessionIp: () => {
+        const rawIp = String(billingRecord.sessionIp || billingRecord.sessionIP || '').trim();
+        if (!rawIp) return null;
+
+        // Strip any scheme already stored on the value. Today every row is a bare
+        // IPv4, but if one ever arrives as "http://10.0.0.1" the naive join would
+        // silently copy "https://http://10.0.0.1" — and a bad clipboard value is
+        // only discovered after it has been pasted somewhere.
+        const ip = rawIp.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>IP</span>
+            <span className="flex items-center gap-1 min-w-0">
+              <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+                }`} title={ip}>{ip}</span>
+              <button
+                type="button"
+                title="Copy as URL"
+                aria-label="Copy IP as a URL"
+                aria-haspopup="menu"
+                aria-expanded={ipSchemeMenu?.ip === ip}
+                // mousedown is the document-level dismiss handler, so stop it here
+                // or opening the menu would immediately close it again.
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (ipSchemeMenu?.ip === ip) {
+                    setIpSchemeMenu(null);
+                    return;
+                  }
+                  // Anchor to the trigger in viewport coordinates; the menu is
+                  // portalled to <body> and right-aligned under the arrow.
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setIpSchemeMenu({
+                    ip,
+                    top: r.bottom + 6,
+                    right: Math.max(8, window.innerWidth - r.right),
+                  });
+                }}
+                className={`flex-shrink-0 p-0.5 rounded transition-colors ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200'
+                  }`}
+              >
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-150 ${ipSchemeMenu?.ip === ip ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </span>
+          </div>
+        );
+      },
       accountNumber: () => billingRecord.applicationId ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -1233,14 +1370,29 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
           </div>
         );
       },
-      prepaidExpiration: () => billingRecord.prepaidExpiration ? (
-        <div className="flex justify-between items-center gap-4">
-          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>Prepaid Expiration</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>{formatDateTime(billingRecord.prepaidExpiration)}</span>
-        </div>
-      ) : null,
+      prepaidExpiration: () => {
+        // Letters-only compare so accounts still carrying the older 'Pre Paid'
+        // spelling resolve too — same normalisation the backend uses.
+        const isPrepaid = String(billingRecord.generationType ?? '')
+          .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+        // Shown for every prepaid account, NOT only those with a date. A prepaid
+        // account with no expiry is a real state (it is only set on the first
+        // payment), and "Not set" tells you that — whereas hiding the row made it
+        // indistinguishable from the field not existing. Postpaid accounts have no
+        // prepaid period, so the row stays hidden for them unless a stray value
+        // exists, in which case it is surfaced rather than swallowed.
+        if (!isPrepaid && !billingRecord.prepaidExpiration) return null;
+
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>Prepaid Expiration</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>{billingRecord.prepaidExpiration ? formatDateTime(billingRecord.prepaidExpiration) : NOT_SET}</span>
+          </div>
+        );
+      },
       vip_expiration: () => (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -2533,6 +2685,56 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             other_isp_bill_url: billingRecord.otherIspBillUrl
           }}
         />
+      )}
+
+      {/* ── IP scheme picker ──────────────────────────────────────────────────
+          Portalled to <body> so the details sections' scrolling and the panel's
+          overflow-hidden cannot clip it, and so it sits above the panel's own
+          stacking context. Positioned in viewport coordinates from the arrow that
+          opened it, which is why scroll/resize dismiss it. */}
+      {ipSchemeMenu && createPortal(
+        <div
+          role="menu"
+          aria-label="Copy IP as URL"
+          // Keep clicks inside from reaching the document-level dismiss handler.
+          onMouseDown={(e) => e.stopPropagation()}
+          className={`fixed z-[10070] w-52 rounded-lg border shadow-2xl overflow-hidden ${isDarkMode
+            ? 'bg-gray-800 border-gray-700'
+            : 'bg-white border-gray-200'
+            }`}
+          style={{ top: ipSchemeMenu.top, right: ipSchemeMenu.right }}
+        >
+          <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${isDarkMode
+            ? 'bg-gray-900/50 text-gray-500'
+            : 'bg-gray-50 text-gray-400'
+            }`}>
+            Copy as URL
+          </div>
+
+          {(['https', 'http'] as const).map(scheme => {
+            const url = `${scheme}://${ipSchemeMenu.ip}`;
+            const justCopied = copiedScheme === scheme;
+
+            return (
+              <button
+                key={scheme}
+                type="button"
+                role="menuitem"
+                onClick={() => handleCopyIpUrl(scheme, ipSchemeMenu.ip)}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors border-t first:border-t-0 ${isDarkMode
+                  ? 'border-gray-700 hover:bg-gray-700 text-gray-200'
+                  : 'border-gray-100 hover:bg-gray-50 text-gray-700'
+                  }`}
+              >
+                <span className="truncate font-mono text-xs" title={url}>{url}</span>
+                {justCopied
+                  ? <Check size={14} className="flex-shrink-0 text-green-500" />
+                  : <Copy size={14} className="flex-shrink-0 opacity-50" />}
+              </button>
+            );
+          })}
+        </div>,
+        document.body
       )}
     </div>
   );

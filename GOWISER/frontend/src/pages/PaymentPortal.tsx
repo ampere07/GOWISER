@@ -97,6 +97,8 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     techUpdatedBy: customerData.technicalDetails?.updatedBy,
     usernameStatus: customerData.technicalDetails?.usernameStatus,
     vip_expiration: customerData.billingAccount?.vip_expiration || '',
+    generationType: customerData.billingAccount?.generation_type || '',
+    prepaidExpiration: customerData.billingAccount?.prepaid_expires_at || '',
     vip_remarks: customerData.billingAccount?.vip_remarks || '',
   };
 };

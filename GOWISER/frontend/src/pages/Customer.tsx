@@ -38,6 +38,44 @@ const formatDate = (dateString: string | null | undefined): string => {
   }
 };
 
+/**
+ * Prepaid expiry as a countdown, e.g. "30 days left".
+ *
+ * Counts whole CALENDAR days, deliberately ignoring the stored time-of-day:
+ * prepaid_expires_at inherits the clock time of the payment that set it, so a
+ * millisecond diff would report "29 days left" or "30 days left" for the same
+ * account depending on the hour it was viewed. Comparing dates keeps the label
+ * stable for the whole day.
+ *
+ * The +1 makes the expiry date itself count as a remaining day, matching
+ * AutoDisconnectService::processPrepaidRestrictions() — an account expiring 07/30
+ * keeps service all through 07/30 and is only restricted on 07/31. So on 07/30
+ * this reads "1 day left", not "Expired".
+ *
+ * @returns null when there is no expiry (postpaid, or a prepaid account that has
+ *          never paid), so the caller can omit the segment entirely.
+ */
+const formatPrepaidDaysLeft = (raw: string | null | undefined): string | null => {
+  if (!raw) return null;
+
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw).trim());
+  if (!parts) return null;
+
+  // Local midnight on both sides so the subtraction is a pure date difference.
+  const expiry = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (isNaN(expiry.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+  const daysLeft = Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1;
+
+  if (daysLeft <= 0) return 'Expired';
+
+  return `${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left`;
+};
+
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => {
   return {
     id: customerData.billingAccount?.accountNo || '',
@@ -2510,10 +2548,24 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   </div>
                                   <div className={`text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                                     }`}>
-                                    {/* Prepaid expiry sits between the status and the balance.
-                                        Post Paid accounts have no expiry, so the segment (and its
-                                        separator) is omitted entirely rather than showing a blank. */}
-                                    {record.status} | {record.prepaidExpiration ? `${formatDate(record.prepaidExpiration)} | ` : ''}₱ {record.balance.toFixed(2)}
+                                    {/* Prepaid expiry sits between the status and the balance, shown
+                                        as a countdown ("30 days left") rather than a raw date — the
+                                        useful question is how long is left, not which date it lands on.
+                                        The exact date stays available on hover. Post Paid accounts have
+                                        no expiry, so the segment (and its separator) is omitted
+                                        entirely rather than showing a blank. */}
+                                    {record.status} | {(() => {
+                                      const daysLeft = formatPrepaidDaysLeft(record.prepaidExpiration);
+                                      if (!daysLeft) return null;
+                                      return (
+                                        <>
+                                          <span title={`Prepaid expires ${formatDate(record.prepaidExpiration)}`}>
+                                            {daysLeft}
+                                          </span>
+                                          {' | '}
+                                        </>
+                                      );
+                                    })()}₱ {record.balance.toFixed(2)}
                                   </div>
                                 </div>
                                 <div className="flex items-center space-x-2 ml-4 flex-shrink-0">

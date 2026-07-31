@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { Calendar, ChevronDown, Minus, Plus, Camera, Loader2 } from 'lucide-react';
 import { transactionService } from '../services/transactionService';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
@@ -959,8 +960,21 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         </div>
       </div>
 
-      {loading && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center">
+      {/*
+        Both overlays are rendered into document.body via a portal instead of
+        inline here.
+
+        On mobile, CustomerDetails (this modal's parent) switches its root to
+        `fixed inset-0 z-[9999] overflow-hidden`. That establishes a stacking
+        context AND a clipping box around everything inside it, so an overlay
+        nested in here is confined to that context no matter how high its own
+        z-index is — the confirm dialog at z-[60] lost that fight and never
+        appeared in mobile view. Portalling to body puts both overlays outside
+        every app container, which is the only placement that cannot be trapped
+        by an ancestor's stacking context, overflow, or transform.
+      */}
+      {loading && createPortal(
+        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10040] flex items-center justify-center">
           <div className={`rounded-lg p-8 flex flex-col items-center space-y-6 min-w-[320px] ${isDarkMode ? 'bg-gray-800' : 'bg-white'
             }`}>
             <Loader2
@@ -972,12 +986,15 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 }`}>{uploadProgress}%</p>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {modal.isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[60]">
-          <div className={`border rounded-lg p-8 max-w-md w-full mx-4 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
+      {modal.isOpen && createPortal(
+        // Above the loading overlay: if both are ever up at once the dialog must
+        // win, otherwise the user is left staring at a spinner they cannot dismiss.
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[10050] p-4">
+          <div className={`border rounded-lg p-6 sm:p-8 max-w-md w-full max-h-[90dvh] overflow-y-auto ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
             }`}>
             {modal.type === 'loading' ? (
               <div className="text-center">
@@ -1054,7 +1071,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

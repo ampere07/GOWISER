@@ -197,15 +197,31 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     <>
                       {renderPickerTrigger('visitStatus', 'Visit Status', formData.visitStatus, 'Select Visit Status', true)}
 
-                      <SearchablePickerTrigger
-                        label="Assigned Email"
-                        value={formData.assignedEmail}
-                        onPress={() => setActivePicker('assignedEmail')}
-                        error={errors.assignedEmail}
-                        isDarkMode={isDarkMode}
-                        placeholder="Select Technician"
-                        required={true}
-                      />
+                      {/* Read-only for technicians: reassigning a visit is a dispatcher
+                          decision, so a technician sees who it is assigned to but cannot
+                          change it. Same treatment as Support Status above. */}
+                      {isTechnician ? (
+                        <View style={styles.inputGroup}>
+                          <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
+                            Assigned Email <Text style={styles.required}>*</Text>
+                          </Text>
+                          <TextInput
+                            style={[styles.textInput, { backgroundColor: isDarkMode ? '#374151' : '#f3f4f6', color: isDarkMode ? '#9ca3af' : '#6b7280' }]}
+                            value={formData.assignedEmail}
+                            editable={false}
+                          />
+                        </View>
+                      ) : (
+                        <SearchablePickerTrigger
+                          label="Assigned Email"
+                          value={formData.assignedEmail}
+                          onPress={() => setActivePicker('assignedEmail')}
+                          error={errors.assignedEmail}
+                          isDarkMode={isDarkMode}
+                          placeholder="Select Technician"
+                          required={true}
+                        />
+                      )}
 
                       {formData.visitStatus === 'Done' && (
                         <>

@@ -86,6 +86,8 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     housingStatus: customerData.housingStatus || '',
     addressCoordinates: customerData.addressCoordinates || '',
     vip_expiration: customerData.billingAccount?.vip_expiration || '',
+    generationType: customerData.billingAccount?.generation_type || '',
+    prepaidExpiration: customerData.billingAccount?.prepaid_expires_at || '',
     vip_remarks: customerData.billingAccount?.vip_remarks || '',
   };
 };

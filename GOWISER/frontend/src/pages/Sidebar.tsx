@@ -421,8 +421,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
           })}
         </nav>
 
-        {/* Logout icon only */}
-        <div className={`px-0 py-3 border-t flex-shrink-0 flex justify-center ${isDarkMode ? 'border-gray-600' : 'border-gray-300'}`}>
+        {/* Logout icon only. Same home-indicator clearance as the expanded sidebar. */}
+        <div
+          className={`px-0 pt-3 pb-3 border-t flex-shrink-0 flex justify-center ${isDarkMode ? 'border-gray-600' : 'border-gray-300'}`}
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+        >
           <button
             onClick={onLogout}
             onMouseEnter={e => {
@@ -502,7 +505,15 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         {filteredMenuItems.map(item => renderMenuItem(item))}
       </nav>
 
-      <div className={`px-3 py-3 ${isDarkMode ? 'border-gray-600' : 'border-gray-300'} border-t flex-shrink-0`}>
+      {/* Bottom block (account + Logout).
+          The extra bottom padding clears the iPhone home indicator, which
+          otherwise overlaps the Logout button on a notched device. env() returns 0
+          where there is no inset, so desktop and Android are unaffected. Requires
+          viewport-fit=cover on the viewport meta. */}
+      <div
+        className={`px-3 pt-3 pb-3 ${isDarkMode ? 'border-gray-600' : 'border-gray-300'} border-t flex-shrink-0`}
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+      >
         <div className="mb-3">
           <div className={`text-xs mb-2 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             {currentDateTime}

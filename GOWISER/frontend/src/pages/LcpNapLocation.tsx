@@ -101,6 +101,27 @@ const LcpNapLocation: React.FC = () => {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
+  /**
+   * Cap on how many pins are drawn at once, matching the mobile page.
+   *
+   * Kept as a string so the input can be cleared while typing; parsed with a
+   * fallback at the point of use.
+   */
+  const [pinLimit, setPinLimit] = useState<string>('25');
+
+  /**
+   * Current map viewport, refreshed on Google Maps' `idle` event.
+   *
+   * Needed so the cap keeps the pins NEAREST to wherever the user is looking
+   * rather than an arbitrary first-N of the dataset — pan somewhere new and the
+   * pins there load in.
+   */
+  const [mapViewport, setMapViewport] = useState<{
+    center: { lat: number; lng: number };
+    bounds: { north: number; south: number; east: number; west: number } | null;
+  } | null>(null);
+
+
   const filteredMarkers = React.useMemo(() => {
     return markers.filter(m => {
       if (currentUserOrgId) {
@@ -113,6 +134,59 @@ const LcpNapLocation: React.FC = () => {
       }
     });
   }, [markers, currentUserOrgId]);
+
+  /**
+   * The pins actually drawn on the map, after the limit is applied.
+   *
+   * Mirrors the mobile page: start from the active set (all markers, or just the
+   * selected LCP/NAP group), cull to the viewport plus a 50% buffer, then keep
+   * only the N closest to the map centre.
+   *
+   * Distance uses a plain lat/lng delta rather than a great-circle calculation —
+   * this only needs a relative ordering over a few kilometres, and it avoids
+   * thousands of trig calls on every pan.
+   */
+  const visibleMarkers = React.useMemo(() => {
+    const active = selectedLcpNapId === 'all'
+      ? filteredMarkers
+      : (lcpNapGroups.find(g => g.lcp_name === selectedLcpNapId)?.locations ?? filteredMarkers);
+
+    const limit = Math.max(1, parseInt(pinLimit, 10) || 25);
+
+    // Before the first `idle` there is no viewport to measure against, so fall
+    // back to a plain cap instead of rendering everything.
+    if (!mapViewport) return active.slice(0, limit);
+
+    const { center, bounds } = mapViewport;
+
+    let candidates = active;
+    if (bounds) {
+      const latBuffer = (bounds.north - bounds.south) * 0.25;
+      const lngBuffer = (bounds.east - bounds.west) * 0.25;
+
+      candidates = active.filter(m =>
+        m.latitude >= bounds.south - latBuffer &&
+        m.latitude <= bounds.north + latBuffer &&
+        m.longitude >= bounds.west - lngBuffer &&
+        m.longitude <= bounds.east + lngBuffer
+      );
+
+      // Nothing in view (the user panned away from every pin): fall back to the
+      // nearest ones overall so the map is never mysteriously empty.
+      if (candidates.length === 0) candidates = active;
+    }
+
+    if (candidates.length <= limit) return candidates;
+
+    return candidates
+      .map(m => ({
+        m,
+        d: Math.abs(m.latitude - center.lat) + Math.abs(m.longitude - center.lng),
+      }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, limit)
+      .map(x => x.m);
+  }, [filteredMarkers, selectedLcpNapId, lcpNapGroups, pinLimit, mapViewport]);
 
   const searchResults = React.useMemo(() => {
     if (!searchQuery) return [];
@@ -208,12 +282,34 @@ const LcpNapLocation: React.FC = () => {
     }
   }, [filteredMarkers]);
 
+  // Build the marker pool from the FULL set — initializeAllMarkers creates the
+  // google.maps.Marker objects (detached) and updateMapMarkers just toggles which
+  // are attached. Limiting here instead would mean re-creating markers on every
+  // pan rather than simply showing different ones.
   useEffect(() => {
     if (isMapReady && isDataLoaded && selectedLcpNapId === 'all') {
       initializeAllMarkers(filteredMarkers);
+      // Frame the FULL coverage area, as before — the limit is applied by the
+      // effect below once the resulting `idle` reports a real viewport. Framing
+      // the capped set here would zoom to an arbitrary first-N instead.
       updateMapMarkers(filteredMarkers);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapReady, isDataLoaded, filteredMarkers]);
+
+  /**
+   * Re-attach the displayed pins whenever the limited set changes — a pan, a zoom
+   * or a new limit value.
+   *
+   * Never refits the camera (see updateMapMarkers): doing so here would fight the
+   * user's own panning and loop through `idle`.
+   */
+  useEffect(() => {
+    if (!isMapReady || !isDataLoaded) return;
+
+    updateMapMarkers(visibleMarkers, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleMarkers, isMapReady, isDataLoaded]);
 
   useEffect(() => {
     if (!isResizingSidebar) return;
@@ -331,6 +427,27 @@ const LcpNapLocation: React.FC = () => {
       mapInstanceRef.current = map;
       autocompleteServiceRef.current = new google.maps.places.AutocompleteService();
       placesServiceRef.current = new google.maps.places.PlacesService(map);
+
+      // Recompute which pins are nearest whenever the camera settles, so panning
+      // to a new area loads that area's pins within the configured limit.
+      map.addListener('idle', () => {
+        const center = map.getCenter();
+        const bounds = map.getBounds();
+        if (!center) return;
+
+        setMapViewport({
+          center: { lat: center.lat(), lng: center.lng() },
+          bounds: bounds
+            ? {
+                north: bounds.getNorthEast().lat(),
+                east: bounds.getNorthEast().lng(),
+                south: bounds.getSouthWest().lat(),
+                west: bounds.getSouthWest().lng(),
+              }
+            : null,
+        });
+      });
+
       setIsMapReady(true);
     } catch (error) {
       console.error('Error initializing map:', error);
@@ -526,7 +643,16 @@ const LcpNapLocation: React.FC = () => {
     };
   };
 
-  const updateMapMarkers = (locations: LocationMarker[]) => {
+  /**
+   * Show exactly `locations` on the map and hide everything else.
+   *
+   * @param shouldFitBounds Move the camera to frame the given pins. MUST stay
+   *   false for updates driven by the pin limit: fitBounds moves the viewport →
+   *   fires `idle` → recomputes the limited set → would call fitBounds again,
+   *   looping forever and making the map impossible to pan. Only deliberate user
+   *   actions (picking a group, choosing a search result) reframe the camera.
+   */
+  const updateMapMarkers = (locations: LocationMarker[], shouldFitBounds: boolean = true) => {
     if (!mapInstanceRef.current || !window.google?.maps) return;
 
     // Use a fresh set for fast lookup
@@ -545,7 +671,7 @@ const LcpNapLocation: React.FC = () => {
       }
     });
 
-    if (hasVisibleMarkers && locations.length > 0) {
+    if (shouldFitBounds && hasVisibleMarkers && locations.length > 0) {
       mapInstanceRef.current.fitBounds(bounds, { top: 50, right: 50, bottom: 50, left: 50 });
       if (locations.length === 1) {
         mapInstanceRef.current.setZoom(18);
@@ -921,6 +1047,34 @@ const LcpNapLocation: React.FC = () => {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Pin limit — caps how many markers are drawn, keeping the ones
+                  closest to the map centre. Mirrors the mobile page's control. */}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className={`flex items-center rounded-lg border px-2.5 py-1.5 ${isDarkMode
+                  ? 'bg-gray-800 border-gray-700'
+                  : 'bg-gray-50 border-gray-200'
+                  }`}>
+                  <MapPin className="h-4 w-4 mr-1.5 flex-shrink-0" style={{ color: colorPalette?.primary || '#7c3aed' }} />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label="Maximum pins to display"
+                    title="Maximum number of pins drawn on the map"
+                    placeholder="Limit"
+                    value={pinLimit}
+                    // Digits only, so the parse at point of use can never see junk.
+                    onChange={(e) => setPinLimit(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
+                    className={`w-14 bg-transparent text-sm text-center focus:outline-none ${isDarkMode
+                      ? 'text-white placeholder-gray-500'
+                      : 'text-gray-900 placeholder-gray-400'
+                      }`}
+                  />
+                </div>
+                <span className={`text-xs whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {visibleMarkers.length.toLocaleString()} / {filteredMarkers.length.toLocaleString()} pins
+                </span>
               </div>
 
               {!isMobile && (

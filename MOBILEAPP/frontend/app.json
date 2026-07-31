@@ -4,7 +4,7 @@
     "slug": "gowiser",
     "owner": "gowiserphs-team",
     "scheme": "gowiser-app",
-    "version": "2.5.57",
+    "version": "2.5.58",
     "orientation": "portrait",
     "icon": "./assets/applogo.png",
     "userInterfaceStyle": "light",
@@ -45,11 +45,7 @@
       },
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.READ_MEDIA_VIDEO"
       ],
       "permissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -58,7 +54,12 @@
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -89,6 +90,17 @@
         {
           "photosPermission": "Allow GOWISER to access your photos to select job order images.",
           "cameraPermission": "Allow GOWISER to access your camera to take job order pictures."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "GOWISER shares your location with dispatch so they can see which technician is nearest a job while you are on duty.",
+          "locationAlwaysAndWhenInUsePermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "locationAlwaysPermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ]
     ],

@@ -1690,17 +1690,36 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   )}
                 </div>
 
-                <SearchableField
-                  label="Assigned Email"
-                  value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
-                  onSelect={(val, option) => handleInputChange('assignedEmail', option?.email || val)}
-                  options={[{ name: 'None', email: 'None' }, ...technicianUsers]}
-                  optionLabelKey="name"
-                  isDarkMode={isDarkMode}
-                  error={errors.assignedEmail}
-                  required
-                  placeholder="Select Technician"
-                />
+                {/* Read-only for technicians: reassigning a visit is a dispatcher
+                    decision, so a technician sees who it is assigned to but cannot
+                    change it. Same treatment as Concern / Concern Remarks below. */}
+                {isTechnician ? (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>Assigned Email<span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      // Resolved to the technician's name, matching what the editable
+                      // SearchableField displays, rather than showing the raw email.
+                      value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
+                      readOnly
+                      className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
+                        } ${errors.assignedEmail ? 'border-red-500' : ''}`}
+                    />
+                  </div>
+                ) : (
+                  <SearchableField
+                    label="Assigned Email"
+                    value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
+                    onSelect={(val, option) => handleInputChange('assignedEmail', option?.email || val)}
+                    options={[{ name: 'None', email: 'None' }, ...technicianUsers]}
+                    optionLabelKey="name"
+                    isDarkMode={isDarkMode}
+                    error={errors.assignedEmail}
+                    required
+                    placeholder="Select Technician"
+                  />
+                )}
 
                 {formData.visitStatus === 'Done' && (
                   <>
@@ -2201,7 +2220,10 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       label="Visit By"
                       value={formData.visitBy}
                       onSelect={(val) => handleInputChange('visitBy', val)}
-                      options={[{ name: 'None' }, ...technicians]}
+                      // Excludes whoever is already in the other two fields, matching
+                      // the Done branch above. Without this, Visit By was the one
+                      // picker that let the same technician be chosen twice.
+                      options={[{ name: 'None' }, ...technicians.filter(tech => tech.name !== formData.visitWith && tech.name !== formData.visitWithOther)]}
                       optionLabelKey="name"
                       isDarkMode={isDarkMode}
                       error={errors.visitBy}

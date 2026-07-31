@@ -139,7 +139,19 @@ class Kernel extends ConsoleKernel
         // ===================================================================
         // AUTOMATED REPORTS QUEUING
         // ===================================================================
-        
+
+        // Generate due scheduled reports as PDFs and queue them to the email
+        // queue, then sweep stale attachments.
+        // Uses: ReportDispatchService -> ReportPdfService, ReportMetricsService
+        // Runs every minute so a report can be scheduled to any HH:MM.
+        // Exactly-once delivery: each (report, occurrence) pair is claimed in
+        // report_dispatches under a UNIQUE index before any email is queued, so
+        // overlapping or repeated runs cannot send a report twice.
+        // Late runs: an occurrence stays eligible for reports.catch_up_minutes
+        // after its scheduled time, so one missed tick does not skip a report
+        // for a whole day/month/year.
+        // The queued emails are then sent by 'cron:process-email-queue' above.
+        // Logs: storage/logs/reports/reports.log
         $schedule->command('reports:queue')
                  ->everyMinute()
                  ->withoutOverlapping()

@@ -63,6 +63,13 @@ Route::get('/commissions/incentive-history', [CommissionController::class, 'getI
 Route::get('/commissions/bonus-history', [CommissionController::class, 'getBonusHistory']);
 Route::post('/commissions/bonus-history', [CommissionController::class, 'storeBonusHistory']);
 Route::post('/reports', [ReportController::class , 'store']);
+Route::get('/reports/options', [ReportController::class , 'options']);
+Route::put('/reports/{id}', [ReportController::class , 'update']);
+Route::delete('/reports/{id}', [ReportController::class , 'destroy']);
+Route::get('/reports/{id}/preview', [ReportController::class , 'preview']);
+Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate']);
+Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow']);
+Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches']);
 Route::get('/reports-migrate-pdf', function () {
     $reports = \App\Models\Report::all();
     $pdfService = new \App\Services\ReportPdfService();
@@ -70,14 +77,13 @@ Route::get('/reports-migrate-pdf', function () {
     $folderId = $driveService->findFolder('Reports') ?? $driveService->createFolder('Reports');
 
     $count = 0;
+    $failures = [];
     foreach ($reports as $report) {
         try {
-            if (strtolower($report->report_type) === 'summary') {
-                $tempPath = $pdfService->generateSummaryPdf($report);
-            }
-            else {
-                $tempPath = $pdfService->generateTablePdf($report);
-            }
+            // generate() picks the summary or tabular layout itself. The old
+            // branch called generateTablePdf(), which did not exist, so every
+            // non-summary report silently failed inside the catch below.
+            $tempPath = $pdfService->generate($report);
             $fileName = basename($tempPath);
 
             $fileUrl = $driveService->uploadFile($tempPath, $folderId, $fileName, 'application/pdf');
@@ -96,10 +102,21 @@ Route::get('/reports-migrate-pdf', function () {
             @unlink($tempPath);
             $count++;
         }
-        catch (\Exception $e) {
+        catch (\Throwable $e) {
+            // Previously swallowed entirely, which is why a broken PDF pipeline
+            // could report "Converted 0 reports." and look like success.
+            $failures[] = "#{$report->id} {$report->report_name}: {$e->getMessage()}";
+            \Illuminate\Support\Facades\Log::error('Report PDF migration failed', [
+                'report_id' => $report->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
-    return response()->json(['success' => true, 'message' => "Converted {$count} reports."]);
+    return response()->json([
+        'success' => $failures === [],
+        'message' => "Converted {$count} of {$reports->count()} reports.",
+        'failures' => $failures,
+    ], $failures === [] ? 200 : 207);
 });
 
 Route::middleware('auth:sanctum')->group(function () {

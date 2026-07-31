@@ -207,6 +207,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
   const currentUserEmail = currentUser?.email || 'unknown@unknown.com';
 
+
   const [formData, setFormData] = useState<JobOrderDoneFormData>({
     dateInstalled: formatDateTimeForInput(new Date()),
     usageType: '',
@@ -259,6 +260,38 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   }, [loading]);
 
   const [technicians, setTechnicians] = useState<Array<{ email: string; name: string }>>([]);
+  /**
+   * The signed-in user expressed as a technician NAME.
+   *
+   * visit_by holds a display name (first + middle initial + last), not an email,
+   * and the Visit With / Visit With (Other) pickers exclude the current pick with
+   * `t.name !== formData.visit_by`. Resolving through the technicians list keeps
+   * that comparison working; full_name / email are only fallbacks for a signed-in
+   * user who is not in the technician list.
+   */
+  const currentTechnicianName = useMemo(() => {
+    const email = (currentUser?.email || '').trim().toLowerCase();
+    const match = technicians.find(t => (t.email || '').trim().toLowerCase() === email);
+
+    return match?.name || currentUser?.full_name || currentUser?.email || '';
+  }, [technicians, currentUser]);
+
+  /**
+   * Keep visit_by populated now that the picker is gone.
+   *
+   * It is still required by validateForm and still sent in the save payload, so
+   * without this the form would refuse to save citing a field that is no longer
+   * on screen. Only filled when empty: a job order that already carries a
+   * recorded Visit_By keeps it, so re-opening a completed job never rewrites it
+   * to whoever happens to be logged in.
+   */
+  useEffect(() => {
+    if (!isOpen || !currentTechnicianName) return;
+
+    setFormData(prev => (
+      prev.visit_by.trim() ? prev : { ...prev, visit_by: currentTechnicianName }
+    ));
+  }, [isOpen, currentTechnicianName]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [routerModels, setRouterModels] = useState<RouterModelEntry[]>([]);
   const [lcpnaps, setLcpnaps] = useState<LCPNAP[]>([]);
@@ -3098,43 +3131,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             </View>
                           )}
 
-                          <View style={styles.inputGroup}>
-                            <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                              Visit By<Text style={styles.required}>*</Text>
-                            </Text>
-                            <View>
-                              <Pressable
-                                onPress={() => {
-                                  setActiveTechField('visit_by');
-                                  setIsTechMiniModalVisible(true);
-                                }}
-                                style={[styles.searchContainer, {
-                                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                                  borderColor: errors.visit_by ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
-                                  paddingVertical: 12
-                                }]}
-                              >
-                                <Search size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                                <Text style={{
-                                  flex: 1,
-                                  paddingHorizontal: 12,
-                                  color: formData.visit_by ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
-                                  fontSize: 14
-                                }}>
-                                  {formData.visit_by || "Select Visit By..."}
-                                </Text>
-                                <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                              </Pressable>
-                            </View>
-                            {errors.visit_by && (
-                              <View style={styles.errorContainer}>
-                                <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
-                                  <Text style={styles.errorIconText}>!</Text>
-                                </View>
-                                <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.visit_by}</Text>
-                              </View>
-                            )}
-                          </View>
+                          {/* Visit By is intentionally not rendered: the signed-in technician IS the
+                              person who made the visit, so formData.visit_by is filled from the session
+                              (see currentTechnicianName) rather than being pickable here. */}
 
                           <View style={styles.inputGroup}>
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
@@ -3492,43 +3491,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                       {(formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') && (
                         <>
-                          <View style={styles.inputGroup}>
-                            <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                              Visit By<Text style={styles.required}>*</Text>
-                            </Text>
-                            <View>
-                              <Pressable
-                                onPress={() => {
-                                  setActiveTechField('visit_by');
-                                  setIsTechMiniModalVisible(true);
-                                }}
-                                style={[styles.searchContainer, {
-                                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                                  borderColor: errors.visit_by ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
-                                  paddingVertical: 12
-                                }]}
-                              >
-                                <Search size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                                <Text style={{
-                                  flex: 1,
-                                  paddingHorizontal: 12,
-                                  color: formData.visit_by ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
-                                  fontSize: 14
-                                }}>
-                                  {formData.visit_by || "Select Visit By..."}
-                                </Text>
-                                <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                              </Pressable>
-                            </View>
-                            {errors.visit_by && (
-                              <View style={styles.errorContainer}>
-                                <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
-                                  <Text style={styles.errorIconText}>!</Text>
-                                </View>
-                                <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.visit_by}</Text>
-                              </View>
-                            )}
-                          </View>
+                          {/* Visit By is intentionally not rendered: the signed-in technician IS the
+                              person who made the visit, so formData.visit_by is filled from the session
+                              (see currentTechnicianName) rather than being pickable here. */}
 
                           <View style={styles.inputGroup}>
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
