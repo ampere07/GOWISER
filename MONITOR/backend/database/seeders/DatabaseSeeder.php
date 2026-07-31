@@ -11,6 +11,11 @@ class DatabaseSeeder extends Seeder
 {
     public function run()
     {
+        $this->call([
+            SchemaProfileSeeder::class,
+            SiteConnectionSeeder::class,
+        ]);
+
         $executive = Role::updateOrCreate(
             ['role_name' => 'Executive'],
             [

@@ -82,4 +82,22 @@ class User extends Authenticatable
 
         return is_array($permissions) ? $permissions : [];
     }
+
+    /**
+     * Site keys this user may look at, or null for unrestricted.
+     *
+     * Null rather than "all" on purpose: the caller must decide what
+     * unrestricted means, and an empty array stays a genuine "no sites".
+     */
+    public function allowedSites(): ?array
+    {
+        $scope = $this->role?->site_scope;
+
+        return is_array($scope) ? $scope : null;
+    }
+
+    public function can_(string $permission): bool
+    {
+        return in_array($permission, $this->permissionList(), true);
+    }
 }

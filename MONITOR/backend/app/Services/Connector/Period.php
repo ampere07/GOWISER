@@ -16,11 +16,11 @@ class Period
     public const GRANULARITIES = ['daily', 'weekly', 'monthly', 'yearly'];
 
     private function __construct(
-        public readonly string $granularity,
-        public readonly Carbon $from,
-        public readonly Carbon $to,
-        public readonly Carbon $anchor,
-        public readonly string $label
+        public string $granularity,
+        public Carbon $from,
+        public Carbon $to,
+        public Carbon $anchor,
+        public string $label
     ) {
     }
 

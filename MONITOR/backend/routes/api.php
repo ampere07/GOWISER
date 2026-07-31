@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\Api\FinancialsController;
 use App\Http\Controllers\Api\MonitorController;
+use App\Http\Controllers\Api\SiteController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SettingsColorPaletteController;
 use Illuminate\Support\Facades\Route;
@@ -42,6 +44,20 @@ Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
 });
 
+/*
+ * Connector-backed dashboards. Sites and their capabilities come from the
+ * site_connections table, so adding a site needs no deploy.
+ */
+Route::middleware(['auth', 'executive'])->group(function () {
+    Route::get('/sites', [SiteController::class, 'index']);
+    Route::get('/financials', [FinancialsController::class, 'show']);
+    Route::get('/financials/group', [FinancialsController::class, 'group']);
+});
+
+/*
+ * Legacy config-driven endpoints, still serving the current frontend pages
+ * until each is migrated onto the connector above.
+ */
 Route::middleware(['auth', 'executive'])->prefix('monitor')->group(function () {
     Route::get('/sources', [MonitorController::class, 'sources']);
     Route::get('/overview', [MonitorController::class, 'overview']);

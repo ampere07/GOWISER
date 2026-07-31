@@ -16,12 +16,16 @@ class Role extends Model
         'role_name',
         'description',
         'permissions',
+        'site_scope',
+        'is_system',
         'created_by_user_id',
         'updated_by_user_id',
     ];
 
     protected $casts = [
         'permissions' => 'array',
+        'site_scope' => 'array',
+        'is_system' => 'boolean',
     ];
 
     public function users()

@@ -17,17 +17,17 @@ use RuntimeException;
 class DatasetMap
 {
     public function __construct(
-        public readonly string $dataset,
-        public readonly string $table,
-        public readonly string $alias,
+        public string $dataset,
+        public string $table,
+        public string $alias,
         /** @var array<string,string> canonical field => real column */
-        public readonly array $fields,
+        public array $fields,
         /** @var array<int,array> row filters baked into every query */
-        public readonly array $filters = [],
+        public array $filters = [],
         /** @var array<int,array> joins needed to reach mapped columns */
-        public readonly array $joins = [],
+        public array $joins = [],
         /** @var array{column:string,value:mixed}|null per-site row scope */
-        public readonly ?array $scope = null
+        public ?array $scope = null
     ) {
     }
 
@@ -85,7 +85,13 @@ class DatasetMap
             }
         }
 
+        // Filters tagged with a granularity depend on the window being asked
+        // for, which this object does not know. The engine applies those.
         foreach ($this->filters as $filter) {
+            if (!empty($filter['granularity'])) {
+                continue;
+            }
+
             $this->applyFilter($query, $filter);
         }
 
@@ -99,6 +105,26 @@ class DatasetMap
         }
 
         return $query;
+    }
+
+    /**
+     * Applies the filters that only hold for a particular window.
+     *
+     * The case this exists for: expenses booked against a longer reporting
+     * horizon (a month's rent) must not be counted into a single day, or that
+     * day shows a loss that never happened.
+     */
+    public function applyGranularityFilters(Builder $query, string $granularity): void
+    {
+        foreach ($this->filters as $filter) {
+            $scope = $filter['granularity'] ?? null;
+
+            if (!$scope || !in_array($granularity, (array) $scope, true)) {
+                continue;
+            }
+
+            $this->applyFilter($query, $filter);
+        }
     }
 
     /**
