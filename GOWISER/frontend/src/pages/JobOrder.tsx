@@ -14,6 +14,12 @@ import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
 import { User } from '../types/api';
+import {
+  deriveVipLabel,
+  deriveVatTypeLabel,
+  normalizeGenerationType,
+  isPrepaidGeneration
+} from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -809,6 +815,15 @@ const JobOrderPage: React.FC = () => {
       case 'computedTime': return jo.computed_time || jo._ComputedTime || (jo as any).computedTime || '';
       case 'modifiedBy': return jo.Modified_By || jo.modified_by || jo.updated_by_user_email || '';
       case 'modifiedDate': return jo.Modified_Date || jo.modified_date || jo.updated_at || '';
+      // Job orders carry an explicit vip_enabled flag, unlike customers where VIP is a
+      // billing status.
+      case 'vip': return deriveVipLabel(jo.vip_enabled);
+      // Matches the label JobOrderDetails shows, so the filter never disagrees with the panel.
+      case 'vatType': return deriveVatTypeLabel(jo.vat_enabled, jo.vat_type || (jo as any).Vat_Type);
+      case 'generationType': return normalizeGenerationType(jo.generation_type);
+      // Sourced from the linked billing account by JobOrderController — job_orders has no
+      // prepaid column of its own.
+      case 'prepaidExpiration': return (jo as any).prepaid_expires_at || '';
       default: return (jo as any)[key] || '';
     }
   };
@@ -819,6 +834,13 @@ const JobOrderPage: React.FC = () => {
     return orders.filter(order => {
       return Object.entries(filters).every(([key, filter]: [string, any]) => {
         const orderValue = getVal(order, key);
+
+        // Prepaid Expiration only applies to Prepaid job orders — a postpaid one has no expiry
+        // to compare against, so it cannot satisfy a date range. Handled before the generic
+        // date branch so postpaid records are excluded rather than silently kept.
+        if (key === 'prepaidExpiration' && !isPrepaidGeneration(order.generation_type)) {
+          return false;
+        }
 
         let match = true;
         if (filter.type === 'text') {

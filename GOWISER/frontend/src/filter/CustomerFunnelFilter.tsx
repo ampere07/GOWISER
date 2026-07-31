@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { planService } from '../services/planService';
 import apiClient from '../config/api';
+import { VIP_OPTIONS, VAT_TYPE_OPTIONS, GENERATION_TYPE_OPTIONS } from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -69,6 +70,12 @@ export const allColumns: Column[] = [
   { key: 'billingAccountUpdatedAt', label: 'Billing Account Updated At', dataType: 'datetime' },
   { key: 'billingAccountUpdatedBy', label: 'Billing Account Updated By', dataType: 'varchar' },
   { key: 'totalPaid', label: 'Total Paid', dataType: 'decimal' },
+  { key: 'vip', label: 'VIP', dataType: 'checklist' },
+  { key: 'vatType', label: 'VAT Type', dataType: 'checklist' },
+  { key: 'generationType', label: 'Generation Type', dataType: 'checklist' },
+  // Only meaningful for Prepaid accounts; Customer.tsx excludes non-prepaid records while
+  // this filter is active.
+  { key: 'prepaidExpiration', label: 'Prepaid Expiration', dataType: 'date' },
 
   // Technical Details Table
   { key: 'username', label: 'Username', dataType: 'varchar' },
@@ -387,6 +394,12 @@ const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
           { label: 'Renter', value: 'renter' },
           { label: 'Owner', value: 'owner' }
         ];
+      } else if (selectedColumn.key === 'vip') {
+        options = VIP_OPTIONS;
+      } else if (selectedColumn.key === 'vatType') {
+        options = VAT_TYPE_OPTIONS;
+      } else if (selectedColumn.key === 'generationType') {
+        options = GENERATION_TYPE_OPTIONS;
       }
 
       const filteredOptions = options.filter(opt =>

@@ -18,6 +18,13 @@ import { userService } from '../services/userService';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
+import {
+  deriveVipLabel,
+  deriveVatTypeLabel,
+  normalizeGenerationType,
+  isPrepaidGeneration,
+  VIP_BILLING_STATUS_ID
+} from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -953,6 +960,16 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       case 'groupName': return item.groupName || item.provider;
       case 'usernameStatus': return item.usernameStatus;
       case 'sessionGroup': return item.sessionGroup;
+      // A customer is VIP when their billing status is VIP — there is no vip flag on
+      // billing_accounts, and status id 7 is what CheckVipExpiration acts on.
+      case 'vip': return deriveVipLabel(
+        item.billing_status_id === VIP_BILLING_STATUS_ID ||
+        String(item.billingStatus || '').trim().toLowerCase() === 'vip'
+      );
+      // Matches the label CustomerDetails shows, so the filter never disagrees with the panel.
+      case 'vatType': return deriveVatTypeLabel(item.vatEnabled, item.vatType);
+      case 'generationType': return normalizeGenerationType(item.generationType);
+      case 'prepaidExpiration': return item.prepaidExpiration;
       default: return (item as any)[key];
     }
   };
@@ -964,6 +981,31 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     return records.filter(record => {
       return Object.entries(filters).every(([key, filter]: [string, any]) => {
         const recordValue = getVal(record, key);
+
+        // Prepaid Expiration needs its own handling, before the generic date branch:
+        //  1. It is only meaningful for Prepaid accounts — a postpaid customer has no expiry to
+        //     compare against, so it cannot satisfy a date range.
+        //  2. prepaid_expires_at is a datetime while the filter inputs are plain dates. The
+        //     generic branch feeds both to new Date(), which reads 'YYYY-MM-DD' as UTC midnight
+        //     but 'YYYY-MM-DD HH:mm:ss' as local — so an expiry at local midnight would fall
+        //     before a "from" of its own date and be dropped. Both sides are pinned to local
+        //     day boundaries here instead.
+        if (key === 'prepaidExpiration') {
+          if (!isPrepaidGeneration(record.generationType)) return false;
+          if (!recordValue) return false;
+
+          const toLocalTime = (raw: any, endOfDay = false): number => {
+            let s = String(raw).trim().replace(' ', 'T');
+            if (s.length === 10) s = endOfDay ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+            return new Date(s).getTime();
+          };
+
+          const expiryTime = toLocalTime(recordValue);
+          if (isNaN(expiryTime)) return false;
+          if (filter.from && expiryTime < toLocalTime(filter.from)) return false;
+          if (filter.to && expiryTime > toLocalTime(filter.to, true)) return false;
+          return true;
+        }
 
         if (filter.type === 'checklist') {
           if (!filter.value || !Array.isArray(filter.value) || filter.value.length === 0) return true;

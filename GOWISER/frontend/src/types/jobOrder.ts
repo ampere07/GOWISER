@@ -83,6 +83,11 @@ export interface JobOrder {
   vip_enabled?: boolean | null;
   /** Copied to billing_accounts.vip_expiration at approval — the existing VIP expiry. */
   vip_expiration?: string | null;
+  /**
+   * Read from the linked billing account, not stored on job_orders. Present only once the
+   * job order has an approved account, and only meaningful when generation_type is Prepaid.
+   */
+  prepaid_expires_at?: string | null;
 
   // Technical Information
   Modem_Router_SN?: string | null;

@@ -179,6 +179,12 @@ class JobOrderController extends Controller
                     'withholding_percentage' => $jobOrder->withholding_percentage,
                     'vip_enabled' => $jobOrder->vip_enabled,
                     'vip_expiration' => $jobOrder->vip_expiration,
+                    // job_orders has no prepaid column of its own — the expiry lives on the
+                    // linked billing account, which is already eager-loaded, so no extra query.
+                    // Needed by the Prepaid Expiration funnel filter on the Job Order list.
+                    'prepaid_expires_at' => $jobOrder->billingAccount && $jobOrder->billingAccount->prepaid_expires_at
+                        ? $jobOrder->billingAccount->prepaid_expires_at->format('Y-m-d H:i:s')
+                        : null,
                     'Onsite_Status' => $jobOrder->onsite_status,
                     'Status' => $jobOrder->status,
                     'status' => $jobOrder->status,

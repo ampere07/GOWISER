@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import apiClient from '../config/api';
 import { planService } from '../services/planService';
+import { VIP_OPTIONS, VAT_TYPE_OPTIONS, GENERATION_TYPE_OPTIONS } from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -82,6 +83,12 @@ export const allColumns: Column[] = [
   { key: 'fullName', label: 'Full Name of Client', dataType: 'varchar' },
   { key: 'address', label: 'Full Address of Client', dataType: 'varchar' },
   { key: 'computedTime', label: '_Computed Time', dataType: 'datetime' },
+  { key: 'vip', label: 'VIP', dataType: 'checklist' },
+  { key: 'vatType', label: 'VAT Type', dataType: 'checklist' },
+  { key: 'generationType', label: 'Generation Type', dataType: 'checklist' },
+  // Read from the job order's billing account; only meaningful for Prepaid job orders, and
+  // JobOrder.tsx excludes non-prepaid ones while this filter is active.
+  { key: 'prepaidExpiration', label: 'Prepaid Expiration', dataType: 'date' },
 ];
 
 const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
@@ -368,6 +375,12 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
         ];
       } else if (selectedColumn.key === 'lcpnapport') {
         options = [];
+      } else if (selectedColumn.key === 'vip') {
+        options = VIP_OPTIONS;
+      } else if (selectedColumn.key === 'vatType') {
+        options = VAT_TYPE_OPTIONS;
+      } else if (selectedColumn.key === 'generationType') {
+        options = GENERATION_TYPE_OPTIONS;
       }
 
       const filteredOptions = options.filter(opt =>

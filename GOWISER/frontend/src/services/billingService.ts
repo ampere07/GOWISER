@@ -56,6 +56,12 @@ export const getBillingRecords = async (page: number = 1, perPage: number = 50, 
         timestamp: item.Modified_Date || '',
         billingStatus: item.Billing_Status_Name || (item.Billing_Status_ID ? getFallbackBillingStatus(item.Billing_Status_ID) : ''),
         billing_status_id: item.Billing_Status_ID,
+        // VAT and VIP are needed by the customer funnel filter, which runs client-side over
+        // LIST records — without these, the VAT Type and VIP filters would see undefined on
+        // every row. The /billing index already returns all three.
+        vatType: item.Vat_Type || '',
+        vatEnabled: item.Vat_Enabled ?? null,
+        vip_expiration: item.Vip_Expiration || '',
         dateInstalled: item.Date_Installed || '',
         contactNumber: item.Contact_Number || '',
         secondContactNumber: item.Second_Contact_Number || '',

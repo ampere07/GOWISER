@@ -213,7 +213,22 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             ? usable.find(p => p.id === Number(billingRecord.pendingPlanId))
             : undefined;
           const preselect = queued ?? usable.find(p => p.name === extractPlanName(prev.plan));
-          return preselect ? { ...prev, selectedPlanId: preselect.id, plan: preselect.name } : prev;
+          if (!preselect) return prev;
+
+          // Prefill the amount with the preselected plan's price so the cashier does not
+          // have to look it up. Only when the field is still empty: editing an existing
+          // transaction loads its real received_payment, and that must not be overwritten
+          // by the plan price.
+          const shouldPrefillAmount = !prev.receivedPayment.trim();
+
+          return {
+            ...prev,
+            selectedPlanId: preselect.id,
+            plan: preselect.name,
+            ...(shouldPrefillAmount
+              ? { receivedPayment: Number(preselect.price ?? 0).toFixed(2) }
+              : {}),
+          };
         });
       } finally {
         if (!cancelled) setIsLoadingPlans(false);
@@ -653,9 +668,18 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                         selectedPlanId: planId,
                         // Keep `plan` in sync so the existing required-field validation passes
                         // and the label shown elsewhere stays truthful.
-                        plan: picked ? picked.name : prev.plan
+                        plan: picked ? picked.name : prev.plan,
+                        // Prepaid payments buy a plan, so the amount due IS that plan's price.
+                        // Overwritten on an explicit plan change (unlike the initial preselect,
+                        // which never clobbers an existing value) because after deliberately
+                        // switching plan, the previous plan's price is simply the wrong figure.
+                        // Still editable — partial payments and adjustments remain possible.
+                        ...(picked ? { receivedPayment: Number(picked.price ?? 0).toFixed(2) } : {}),
                       }));
                       if (errors.plan) setErrors(prev => ({ ...prev, plan: '' }));
+                      if (picked && errors.receivedPayment) {
+                        setErrors(prev => ({ ...prev, receivedPayment: '' }));
+                      }
                     }}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.plan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'

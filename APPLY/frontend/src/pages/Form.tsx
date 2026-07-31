@@ -754,6 +754,31 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
         errorMessage = error.message;
       }
 
+      /*
+       * A TypeError from fetch() ("Failed to fetch") is a NETWORK-level failure —
+       * the request never completed, or its response could not be read. It does
+       * NOT mean the server rejected the application: the server may well have
+       * saved it and simply been unable to reply in time.
+       *
+       * Telling the applicant "Failed" in that case is actively harmful — they
+       * resubmit, and the `applications` table ends up with duplicates minutes
+       * apart. So this says plainly that the outcome is unknown and asks them to
+       * check before trying again, rather than asserting a failure we cannot know
+       * has occurred.
+       */
+      const isNetworkFailure =
+        error instanceof TypeError ||
+        /failed to fetch|networkerror|network request failed|load failed/i.test(errorMessage);
+
+      if (isNetworkFailure) {
+        errorMessage =
+          'We could not confirm whether your application went through — the connection '
+          + 'dropped before we got a reply.\n\n'
+          + 'Your application may already have been received. Please check your email for a '
+          + 'confirmation before submitting again, so you do not send it twice. '
+          + 'If nothing arrives within a few minutes, please resubmit or contact us.';
+      }
+
       setSubmitErrorMessage(errorMessage);
       setIsSubmitting(false);
       setShowSubmitFailedModal(true);

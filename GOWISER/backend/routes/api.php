@@ -1174,8 +1174,27 @@ Route::post('/login', function (Request $request) {
             ], 403);
         }
 
-        // CRITICAL: Actually log the user in to create an authenticated session
-        \Auth::login($user);
+        // CRITICAL: Actually log the user in to create an authenticated session.
+        //
+        // $remember = true issues the long-lived recaller cookie. This is what keeps people
+        // signed in: the session itself still expires after SESSION_LIFETIME of inactivity,
+        // but on the next request SessionGuard::userFromRecaller() silently rebuilds the
+        // session from that cookie, so the user never sees a 401. Without it, closing the
+        // laptop overnight guaranteed a trip back to the login screen.
+        \Auth::login($user, true);
+
+        // Rotate the session id now that privileges have changed, so a session id captured
+        // before login cannot be reused afterwards. Must run AFTER login(), and the recaller
+        // cookie survives it.
+        try {
+            $request->session()->regenerate();
+        } catch (\Throwable $sessionError) {
+            // A request without a started session must not break login.
+            \Log::warning('Could not regenerate session on login', [
+                'user_id' => $user->id,
+                'error' => $sessionError->getMessage()
+            ]);
+        }
 
         // Verify session was created
         $sessionUserId = \Auth::id();
@@ -1345,6 +1364,59 @@ Route::get('/health', function () {
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
+});
+
+/**
+ * Explicit logout. There was previously no logout endpoint at all — the SPA just dropped
+ * localStorage, leaving the server session and (now) the recaller cookie alive. With
+ * remember-me enabled that would mean logging out never actually logged you out.
+ *
+ * Deliberately NOT behind auth:sanctum: logging out must succeed even when the session has
+ * already lapsed, otherwise the client gets a 401 while trying to clean up.
+ */
+Route::post('/logout', function (Request $request) {
+    $userId = \Auth::id();
+
+    // Cycles remember_token, so the old recaller cookie can never re-authenticate — this is
+    // what makes "explicitly logged out" stick across devices holding a stale cookie.
+    \Auth::logout();
+
+    try {
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+    } catch (\Throwable $sessionError) {
+        // Already-dead session: nothing to invalidate, and that is a successful logout.
+        \Log::info('Logout with no active session', ['error' => $sessionError->getMessage()]);
+    }
+
+    \Log::info('User logged out', ['user_id' => $userId]);
+
+    return response()->json(['success' => true, 'message' => 'Logged out']);
+});
+
+/**
+ * Cheap "is my session still good?" probe for the SPA to call on boot and before deciding a
+ * 401 is terminal. Unauthenticated is a normal answer here, not an error, so it returns 200
+ * with authenticated=false rather than a 401 — that keeps it from tripping the SPA's own
+ * 401 handling and causing a redirect loop.
+ */
+Route::get('/auth/session', function (Request $request) {
+    // Resolving the web guard is what triggers the recaller-cookie path, so simply asking
+    // this question is enough to transparently rebuild a lapsed session.
+    $user = \Auth::guard('web')->user();
+
+    if (! $user) {
+        return response()->json(['authenticated' => false], 200);
+    }
+
+    try {
+        $user->load(['organization', 'role', 'group']);
+    } catch (\Throwable $e) {
+        // Relationship failure must not make a valid session look invalid.
+        \Log::warning('Could not load relations for session probe', ['error' => $e->getMessage()]);
+    }
+
+    return response()->json(['authenticated' => true, 'user' => $user], 200);
 });
 
 // User Management Routes

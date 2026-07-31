@@ -370,6 +370,8 @@ class TransactionController extends Controller
             $oldBillingAccountBalance = $currentBalance;
             $oldBillingStatusId = $billingAccount->billing_status_id;
 
+            $oldPrepaidState = $this->buildPrepaidSnapshot($billingAccount, $accountNo);
+
             // Fetch invoices that will be affected (Unpaid/Partial for this account)
             $invoicesBeforeUpdate = \App\Models\Invoice::where('account_no', $accountNo)
                 ->whereIn('status', ['Unpaid', 'Partial'])
@@ -449,6 +451,9 @@ class TransactionController extends Controller
             if ($onlineStatusSnapshot) {
                 $updatedColumnSnapshot[] = $onlineStatusSnapshot;
             }
+            // Prepaid expiry / plan / pending-plan, so a revert can undo what
+            // attemptReconnectionAfterApproval() is about to change.
+            $updatedColumnSnapshot[] = $oldPrepaidState;
             $transaction->updated_column = $updatedColumnSnapshot;
 
             $transaction->save();
@@ -683,6 +688,51 @@ class TransactionController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Capture the prepaid-specific state of an account before an approval mutates it.
+     *
+     * Needed because attemptReconnectionAfterApproval() runs AFTER the approval commits
+     * and changes fields nothing else recorded, leaving a revert unable to undo them:
+     *
+     *   PrepaidRenewalService     moves prepaid_expires_at forward (+30 days)
+     *   PrepaidPlanChangeService  either switches plan_id immediately, or queues the
+     *                             switch via pending_plan_id / pending_plan_effective_at
+     *
+     * Must be called with the account as loaded BEFORE any mutation, so the values are
+     * the genuine pre-approval ones.
+     *
+     * Recorded for every account, prepaid or not. `was_prepaid` lets the revert decide
+     * what to do, and capturing unconditionally means an account whose generation_type
+     * changes between approve and revert still restores correctly. Datetimes are stored
+     * as strings so the JSON snapshot round-trips without depending on cast behaviour.
+     *
+     * @return array<string, mixed> one `updated_column` entry
+     */
+    private function buildPrepaidSnapshot(BillingAccount $billingAccount, string $accountNo): array
+    {
+        $asString = static function ($value): ?string {
+            if (empty($value)) {
+                return null;
+            }
+            try {
+                return \Carbon\Carbon::parse($value)->toDateTimeString();
+            } catch (\Throwable $e) {
+                return null;
+            }
+        };
+
+        return [
+            'table'                         => 'billing_accounts_prepaid',
+            'account_no'                    => $accountNo,
+            'was_prepaid'                   => BillingAccount::isPrepaidType($billingAccount->generation_type),
+            'old_generation_type'           => $billingAccount->generation_type,
+            'old_prepaid_expires_at'        => $asString($billingAccount->prepaid_expires_at),
+            'old_plan_id'                   => $billingAccount->plan_id,
+            'old_pending_plan_id'           => $billingAccount->pending_plan_id ?? null,
+            'old_pending_plan_effective_at' => $asString($billingAccount->pending_plan_effective_at ?? null),
+        ];
     }
 
     private function applyPaymentToAccount(int $accountId, string $accountNo, float $paymentReceived, int $transactionId, ?int $userId, $currentTime): array
@@ -1025,6 +1075,9 @@ class TransactionController extends Controller
                     // --- Snapshot old state BEFORE any changes ---
                     $oldBillingAccountBalance = $currentBalance;
                     $oldBillingStatusId = $billingAccount->billing_status_id;
+                    // Same prepaid capture as the single approve() path, so a batch-approved
+                    // transaction is just as revertable as an individually approved one.
+                    $batchPrepaidState = $this->buildPrepaidSnapshot($billingAccount, $accountNo);
                     $invoicesBeforeUpdate = \App\Models\Invoice::where('account_no', $accountNo)
                         ->whereIn('status', ['Unpaid', 'Partial'])
                         ->orderBy('invoice_date', 'asc')
@@ -1088,6 +1141,7 @@ class TransactionController extends Controller
                     if ($batchOnlineStatusSnapshot) {
                         $batchSnapshot[] = $batchOnlineStatusSnapshot;
                     }
+                    $batchSnapshot[] = $batchPrepaidState;
                     $transaction->updated_column = $batchSnapshot;
 
                     $transaction->save();

@@ -79,16 +79,50 @@ interface Transaction {
     id: number;
     status: string;
   };
+  /**
+   * Snapshot of the account's state taken at approval time, used by the revert to
+   * restore it. One entry per affected table; `table` discriminates the shape.
+   */
   updated_column?: Array<{
     table: string;
     account_no?: string;
     old_account_balance?: number;
+    old_billing_status_id?: number | null;
     invoice_id?: number;
     invoice_date?: string;
     old_status?: string;
     old_received_payment?: number;
+    // table === 'online_status'
+    old_session_group?: string | null;
+    old_session_status?: string | null;
+    // table === 'billing_accounts_prepaid'
+    was_prepaid?: boolean;
+    old_generation_type?: string | null;
+    old_prepaid_expires_at?: string | null;
+    old_plan_id?: number | null;
+    old_pending_plan_id?: number | null;
+    old_pending_plan_effective_at?: string | null;
   }>;
 }
+
+/** The prepaid entry of an approval snapshot, if the transaction carries one. */
+type PrepaidSnapshot = NonNullable<Transaction['updated_column']>[number];
+
+const findPrepaidSnapshot = (
+  updatedColumn: Transaction['updated_column']
+): PrepaidSnapshot | null =>
+  updatedColumn?.find(entry => entry.table === 'billing_accounts_prepaid') ?? null;
+
+/** "Aug 29, 2026" from a stored 'Y-m-d H:i:s' value. */
+const formatSnapshotDate = (raw?: string | null): string => {
+  if (!raw) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw).trim());
+  if (!m) return String(raw);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d.getTime())
+    ? String(raw)
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
 
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => {
   return {
@@ -1192,8 +1226,74 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             }`}>
             <h3 className={`text-xl font-bold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>Confirm Reversion</h3>
-            <p className={`mb-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+            <p className={`mb-4 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>Are you sure you want to revert this transaction? This will add the payment amount back to the account balance and mark paid invoices as unpaid.</p>
+
+            {/* Prepaid rollback preview.
+                Reverting a prepaid payment also takes back the service period and plan the
+                payment bought — a materially different outcome from a postpaid revert, and
+                one the operator should see BEFORE confirming rather than discover after the
+                customer is cut off. Values come from the snapshot captured at approval, so
+                this is exactly what the revert will write back. */}
+            {(() => {
+              const prepaid = findPrepaidSnapshot(transaction.updated_column);
+              if (!prepaid?.was_prepaid) return null;
+
+              const rows: Array<[string, string]> = [
+                ['Prepaid expiry', formatSnapshotDate(prepaid.old_prepaid_expires_at)],
+              ];
+              if (prepaid.old_plan_id != null) {
+                rows.push(['Plan', `#${prepaid.old_plan_id}`]);
+              }
+              if (prepaid.old_pending_plan_id != null) {
+                rows.push([
+                  'Pending plan change',
+                  `#${prepaid.old_pending_plan_id}`
+                  + (prepaid.old_pending_plan_effective_at
+                    ? ` on ${formatSnapshotDate(prepaid.old_pending_plan_effective_at)}`
+                    : ''),
+                ]);
+              }
+
+              return (
+                <div className={`mb-6 rounded-lg border p-3 ${isDarkMode
+                  ? 'bg-amber-950/30 border-amber-800/60'
+                  : 'bg-amber-50 border-amber-300'
+                  }`}>
+                  <p className={`text-xs font-bold uppercase tracking-wide mb-2 ${isDarkMode ? 'text-amber-300' : 'text-amber-800'
+                    }`}>
+                    Prepaid customer — service will also roll back
+                  </p>
+                  <p className={`text-xs mb-2 ${isDarkMode ? 'text-amber-200/80' : 'text-amber-900'}`}>
+                    These will be restored to their values from before the payment was approved,
+                    which may disconnect the customer:
+                  </p>
+                  <div className="space-y-1">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="flex items-start justify-between gap-3 text-xs">
+                        <span className={isDarkMode ? 'text-amber-200/70' : 'text-amber-800'}>{label}</span>
+                        <span className={`font-semibold text-right ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* A transaction approved before prepaid capture existed cannot have its prepaid
+                state restored. Say so plainly instead of implying a clean rollback. */}
+            {!findPrepaidSnapshot(transaction.updated_column) && (
+              <div className={`mb-6 rounded-lg border p-3 text-xs ${isDarkMode
+                ? 'bg-gray-900/60 border-gray-700 text-gray-400'
+                : 'bg-gray-50 border-gray-300 text-gray-600'
+                }`}>
+                This transaction was approved before prepaid state was recorded, so its prepaid
+                expiry and plan cannot be restored automatically. The balance and invoices will
+                still be reverted.
+              </div>
+            )}
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setShowRevertModal(false)}

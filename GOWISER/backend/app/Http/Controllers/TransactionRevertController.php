@@ -317,6 +317,49 @@ class TransactionRevertController extends Controller
                             ->whereNotIn('id', $invoiceSnapshots->pluck('invoice_id')->toArray())
                             ->update(['transaction_id' => null, 'updated_at' => $currentTime]);
 
+                        /*
+                         * --- Restore prepaid state from snapshot ---
+                         *
+                         * Undoes what attemptReconnectionAfterApproval() did after the
+                         * approval committed: PrepaidRenewalService pushed
+                         * prepaid_expires_at forward, and PrepaidPlanChangeService either
+                         * switched plan_id outright or queued pending_plan_id /
+                         * pending_plan_effective_at. None of that was previously captured,
+                         * so a reverted prepaid customer kept the service days and the plan
+                         * the payment bought them.
+                         *
+                         * Runs inside the surrounding DB transaction, so a failure here rolls
+                         * back the balance and invoice restores too rather than leaving the
+                         * account half-reverted.
+                         *
+                         * Idempotent: each field is written from the snapshot to an exact
+                         * value, never adjusted relatively, and the snapshot is cleared at
+                         * the end of this method — so a second revert cannot double-apply.
+                         */
+                        $prepaidSnapshot = collect($snapshot)->firstWhere('table', 'billing_accounts_prepaid');
+
+                        if ($prepaidSnapshot && $accountNo) {
+                            $restored = $this->restorePrepaidSnapshot($prepaidSnapshot, $accountNo, $userId);
+
+                            \Log::info(
+                                $restored === []
+                                    ? 'Revert via snapshot: prepaid state already matches snapshot, nothing to restore'
+                                    : 'Revert via snapshot: prepaid state restored',
+                                [
+                                    'account_no'     => $accountNo,
+                                    'transaction_id' => $transactionId,
+                                    'restored'       => $restored,
+                                ]
+                            );
+                        } else {
+                            // Approved before prepaid capture existed. Say so explicitly —
+                            // silence here would look identical to "nothing needed to change".
+                            \Log::warning('Revert: no prepaid snapshot on this transaction; prepaid expiry/plan NOT restored', [
+                                'transaction_id' => $transactionId,
+                                'account_no'     => $accountNo,
+                            ]);
+                        }
+
                         // --- Restore online_status session_group from snapshot ---
                         $onlineStatusSnapshot = collect($snapshot)->firstWhere('table', 'online_status');
                         if ($onlineStatusSnapshot) {
@@ -503,6 +546,89 @@ class TransactionRevertController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Put an account's prepaid fields back to the values captured before approval.
+     *
+     * Undoes what attemptReconnectionAfterApproval() did once the approval had already
+     * committed: PrepaidRenewalService pushed prepaid_expires_at forward, and
+     * PrepaidPlanChangeService either switched plan_id outright or queued the switch via
+     * pending_plan_id / pending_plan_effective_at. None of that used to be captured, so a
+     * reverted prepaid customer silently kept the service days and the plan their
+     * now-cancelled payment had bought.
+     *
+     * Called inside the caller's DB transaction, so a failure here rolls back the balance
+     * and invoice restores too rather than leaving the account half-reverted.
+     *
+     * IDEMPOTENT by construction: every field is assigned an absolute value from the
+     * snapshot, never adjusted relatively, and fields already matching are skipped. Running
+     * it twice is therefore a no-op — which matters because the caller also clears
+     * `updated_column`, so a repeat revert would otherwise find nothing to work from.
+     *
+     * @param  array<string,mixed>  $prepaidSnapshot  the `billing_accounts_prepaid` entry
+     * @return array<string, array{from: ?string, to: ?string}>  fields actually changed
+     */
+    private function restorePrepaidSnapshot(array $prepaidSnapshot, string $accountNo, $userId): array
+    {
+        $account = BillingAccount::where('account_no', $accountNo)->first();
+        if (!$account) {
+            return [];
+        }
+
+        // Restore when the account was prepaid at approval time OR is prepaid now — either
+        // way these fields could have been touched. Postpaid accounts that were never
+        // prepaid are left completely alone, preserving existing behaviour.
+        $isPrepaidNow = BillingAccount::isPrepaidType($account->generation_type);
+        if (empty($prepaidSnapshot['was_prepaid']) && !$isPrepaidNow) {
+            return [];
+        }
+
+        $columns = [
+            'prepaid_expires_at'        => 'old_prepaid_expires_at',
+            'plan_id'                   => 'old_plan_id',
+            'pending_plan_id'           => 'old_pending_plan_id',
+            'pending_plan_effective_at' => 'old_pending_plan_effective_at',
+        ];
+
+        $asText = static function ($value): ?string {
+            if ($value === null || $value === '') {
+                return null;
+            }
+            if ($value instanceof \DateTimeInterface) {
+                return $value->format('Y-m-d H:i:s');
+            }
+            return (string) $value;
+        };
+
+        $restored = [];
+
+        foreach ($columns as $column => $snapshotKey) {
+            // Only touch keys the snapshot actually carries. A transaction approved before
+            // this capture existed must not have its columns blanked out by a revert.
+            if (!array_key_exists($snapshotKey, $prepaidSnapshot)) {
+                continue;
+            }
+
+            $currentText = $asText($account->{$column});
+            $oldText     = $asText($prepaidSnapshot[$snapshotKey]);
+
+            // Compared as text so a Carbon instance and its stored representation are not
+            // mistaken for a difference, which would rewrite the row on every revert.
+            if ($currentText === $oldText) {
+                continue;
+            }
+
+            $account->{$column} = $prepaidSnapshot[$snapshotKey];
+            $restored[$column]  = ['from' => $currentText, 'to' => $oldText];
+        }
+
+        if ($restored !== []) {
+            $account->updated_by = $userId;
+            $account->save();
+        }
+
+        return $restored;
     }
 }
 

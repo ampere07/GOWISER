@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, Suspense, useCallback } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Check, Copy } from 'lucide-react';
+import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from 'react';
+import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Check, Copy, Printer } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -25,9 +25,16 @@ import PaymentPortalDetails from './PaymentPortalDetails';
 import TransactionListDetails from './TransactionListDetails';
 import * as lcpnapService from '../services/lcpnapService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
+import apiClient from '../config/api';
 
 // Break circular dependency with lazy loading
 const LcpNapLocationDetails = React.lazy(() => import('./LcpNapLocationDetails'));
+
+// Same check SOADetails uses to decide whether a stored print link can be opened as-is.
+const isGoogleDriveLink = (url: string | null | undefined): boolean => {
+  if (!url) return false;
+  return url.includes('drive.google.com') || url.includes('docs.google.com');
+};
 
 // Fix Leaflet default icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -713,6 +720,74 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   useEffect(() => {
     fetchRelatedData();
   }, [billingRecord.applicationId, billingRecord.accountNo, billingRecord.account_no, refreshKey]);
+
+  // ── Print the latest SOA ───────────────────────────────────────────────────
+  // Same behaviour as the print button in SOADetails (handleOpenGDrive): an already-generated
+  // Google Drive link opens straight away, anything else is generated first through the same
+  // /soa/{id}/generate-pdf endpoint. The only difference is which statement it acts on —
+  // here it is always the account's most recent one, so no row has to be picked first.
+  const [isGeneratingSoaPdf, setIsGeneratingSoaPdf] = useState(false);
+  const [soaPdfError, setSoaPdfError] = useState<string | null>(null);
+
+  // The by-account endpoint already returns statements ordered by statement_date desc, so the
+  // head of the list is the newest. Sorted again here so the choice does not silently depend
+  // on that ordering, with id as the tie-break when two statements share a date.
+  const latestSOA = useMemo(() => {
+    const rows = fullRelatedData.statementOfAccounts || [];
+    if (rows.length === 0) return null;
+    return [...rows].sort((a, b) => {
+      const da = new Date(a?.statement_date ?? 0).getTime();
+      const db = new Date(b?.statement_date ?? 0).getTime();
+      if (Number.isFinite(da) && Number.isFinite(db) && da !== db) return db - da;
+      return Number(b?.id ?? 0) - Number(a?.id ?? 0);
+    })[0];
+  }, [fullRelatedData.statementOfAccounts]);
+
+  const handlePrintLatestSOA = async () => {
+    if (!latestSOA?.id) {
+      setSoaPdfError('This account has no Statement of Account to print yet.');
+      return;
+    }
+
+    if (isGoogleDriveLink(latestSOA.print_link)) {
+      window.open(latestSOA.print_link, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    try {
+      setIsGeneratingSoaPdf(true);
+      setSoaPdfError(null);
+
+      const response = await apiClient.post<{ success: boolean; print_link?: string; message?: string; error?: string }>(
+        `/soa/${latestSOA.id}/generate-pdf`
+      );
+
+      if (response.data.success && response.data.print_link) {
+        const printLink = response.data.print_link;
+        // Cache the link onto the row already in state so a second click opens it directly
+        // rather than regenerating the identical PDF.
+        const applyLink = (rows: any[]) =>
+          rows.map(r => (r?.id === latestSOA.id ? { ...r, print_link: printLink } : r));
+        setFullRelatedData(prev => ({
+          ...prev,
+          statementOfAccounts: applyLink(prev.statementOfAccounts || [])
+        }));
+        setRelatedData(prev => ({
+          ...prev,
+          statementOfAccounts: applyLink(prev.statementOfAccounts || [])
+        }));
+        setIsGeneratingSoaPdf(false);
+        window.open(printLink, '_blank', 'noopener,noreferrer');
+      } else {
+        setIsGeneratingSoaPdf(false);
+        setSoaPdfError(response.data.message || 'Failed to generate PDF');
+      }
+    } catch (err: any) {
+      console.error('Error generating SOA PDF:', err);
+      setIsGeneratingSoaPdf(false);
+      setSoaPdfError(err?.response?.data?.message || err?.message || 'Failed to generate PDF. Please try again.');
+    }
+  };
 
   // Resolve user IDs for Created By / Updated By fields
   useEffect(() => {
@@ -1949,6 +2024,23 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               >
                 <Download size={18} />
               </button>
+              <button
+                onClick={handlePrintLatestSOA}
+                disabled={isGeneratingSoaPdf || !latestSOA}
+                className={`p-2 rounded transition-colors ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-600'
+                  }`}
+                title={
+                  !latestSOA
+                    ? 'No Statement of Account to print'
+                    : isGoogleDriveLink(latestSOA.print_link)
+                      ? 'Print Latest SOA (open in Google Drive)'
+                      : 'Generate & Print Latest SOA'
+                }
+              >
+                {isGeneratingSoaPdf ? <Loader2 size={18} className="animate-spin" /> : <Printer size={18} />}
+              </button>
               {hasPermission('customer.so-request') && (
                 <button
                   onClick={handleWrenchClick}
@@ -2733,6 +2825,53 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               </button>
             );
           })}
+        </div>,
+        document.body
+      )}
+
+      {/* SOA PDF Generation Loading Modal. Portalled to body because CustomerDetails is itself
+          rendered inside an overlay panel, so a plain fixed element would be trapped by it. */}
+      {isGeneratingSoaPdf && createPortal(
+        <div className="fixed inset-0 z-[10080] flex items-center justify-center bg-black bg-opacity-50">
+          <div className={`rounded-xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+            }`}>
+            <div className="flex justify-center mb-4">
+              <Loader2 className="w-10 h-10 animate-spin" style={{ color: colorPalette?.primary || '#7c3aed' }} />
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Generating PDF</h3>
+            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+              Creating SOA PDF and uploading to Google Drive...
+            </p>
+            <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+              This may take a few moments
+            </p>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* SOA PDF Error Modal */}
+      {soaPdfError && createPortal(
+        <div className="fixed inset-0 z-[10080] flex items-center justify-center bg-black bg-opacity-50">
+          <div className={`rounded-xl shadow-2xl p-8 max-w-sm w-full mx-4 text-center ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+            }`}>
+            <div className="flex justify-center mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                <X className="w-6 h-6 text-red-600" />
+              </div>
+            </div>
+            <h3 className="text-lg font-semibold mb-2">PDF Generation Failed</h3>
+            <p className={`text-sm mb-4 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+              {soaPdfError}
+            </p>
+            <button
+              onClick={() => setSoaPdfError(null)}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors"
+              style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+            >
+              Close
+            </button>
+          </div>
         </div>,
         document.body
       )}
