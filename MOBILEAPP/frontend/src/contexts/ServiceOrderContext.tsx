@@ -18,6 +18,8 @@ interface ServiceOrder {
     provider: string;
     affiliate: string;
     username: string;
+    /** From the account's job order — technical_details has no password column. */
+    pppoePassword: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -114,6 +116,8 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         provider: '',
         affiliate: order.group_name || '',
         username: order.username || '',
+        // Resolved by ServiceOrderApiController from the account's newest job order.
+        pppoePassword: (order as any).pppoe_password || '',
         connectionType: order.connection_type || '',
         routerModemSN: order.router_modem_sn || '',
         lcp: order.lcp || '',

@@ -24,6 +24,11 @@ export interface ServiceOrderData {
   plan?: string;
   group_name?: string;
   username?: string;
+  /**
+   * PPPoE password, resolved by ServiceOrderApiController from the account's newest job order.
+   * Neither service_orders nor technical_details stores it.
+   */
+  pppoe_password?: string | null;
   connection_type?: string;
   router_modem_sn?: string;
   lcp?: string;

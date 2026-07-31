@@ -20,6 +20,16 @@ import {
   normalizeGenerationType,
   isPrepaidGeneration
 } from '../utils/billingFilterOptions';
+import { mergeSavedColumns, BILLING_ATTRIBUTE_COLUMN_KEYS } from '../utils/tableColumnPrefs';
+
+// Job Orders shows a curated subset by default, not every column. The billing attributes are
+// included so they are visible out of the box, matching the Customer table.
+const DEFAULT_VISIBLE_COLUMNS = [
+  'timestamp', 'dateInstalled', 'referredBy', 'fullName', 'address', 'onsiteStatus',
+  'billingStatus', 'assignedEmail', 'billingDay', 'installationFee',
+  'vatType', 'generationType', 'expirationDate', 'vip',
+  'modifiedBy', 'modifiedDate'
+];
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -45,6 +55,10 @@ const allColumns = [
   { key: 'assignedEmail', label: 'Assigned Tech', width: 'min-w-48' },
   { key: 'billingDay', label: 'Billing Day', width: 'min-w-28' },
   { key: 'installationFee', label: 'Installation Fee', width: 'min-w-32' },
+  { key: 'vatType', label: 'VAT Type', width: 'min-w-32' },
+  { key: 'generationType', label: 'Generation Type', width: 'min-w-36' },
+  { key: 'expirationDate', label: 'Expiration Date', width: 'min-w-36' },
+  { key: 'vip', label: 'VIP', width: 'min-w-24' },
   { key: 'modifiedBy', label: 'Modified By', width: 'min-w-32' },
   { key: 'modifiedDate', label: 'Modified Date', width: 'min-w-40' },
   { key: 'modemRouterSN', label: 'Modem/Router SN', width: 'min-w-36' },
@@ -128,12 +142,20 @@ const JobOrderPage: React.FC = () => {
     const saved = localStorage.getItem('jobOrderVisibleColumns');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Merged rather than used as-is: a preference saved before a column existed omits it,
+        // which would hide newly added columns from every returning user. Only the new keys are
+        // merged in, so columns the user hid on purpose stay hidden.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          DEFAULT_VISIBLE_COLUMNS,
+          'jobOrderVisibleColumns:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
     }
-    return ['timestamp', 'dateInstalled', 'referredBy', 'fullName', 'address', 'onsiteStatus', 'billingStatus', 'assignedEmail', 'billingDay', 'installationFee', 'modifiedBy', 'modifiedDate'];
+    return [...DEFAULT_VISIBLE_COLUMNS];
   });
   const [sortColumn, setSortColumn] = useState<string | null>('timestamp');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
@@ -146,7 +168,14 @@ const JobOrderPage: React.FC = () => {
     const saved = localStorage.getItem('jobOrderColumnOrder');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Without merging, a new column is missing from the saved order and indexOf returns -1,
+        // which would sort it ahead of every other column.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'jobOrderColumnOrder:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -824,6 +853,10 @@ const JobOrderPage: React.FC = () => {
       // Sourced from the linked billing account by JobOrderController — job_orders has no
       // prepaid column of its own.
       case 'prepaidExpiration': return (jo as any).prepaid_expires_at || '';
+      // Table column key. Sorts on the raw timestamp (not the formatted label) so the order is
+      // chronological, and only prepaid job orders contribute a value — matching what renders.
+      case 'expirationDate':
+        return isPrepaidGeneration(jo.generation_type) ? ((jo as any).prepaid_expires_at || '') : '';
       default: return (jo as any)[key] || '';
     }
   };
@@ -1582,6 +1615,23 @@ const JobOrderPage: React.FC = () => {
         const start = jobOrder.start_time || jobOrder.StartTimeStamp || jobOrder.start_timestamp;
         const end = jobOrder.end_time || jobOrder.EndTimeStamp || jobOrder.end_timestamp;
         return getValue(calculateDuration(start, end));
+
+      // Billing attributes. Derived through the same helpers the funnel filters use, so the
+      // column, the filter and the details panel can never disagree about a record.
+      case 'vatType':
+        // Boolean wins; the legacy free-text column is only a fallback for older job orders.
+        return getValue(deriveVatTypeLabel(jobOrder.vat_enabled, jobOrder.vat_type || (jobOrder as any).Vat_Type));
+      case 'generationType':
+        return getValue(normalizeGenerationType(jobOrder.generation_type));
+      case 'expirationDate':
+        // Read from the linked billing account (job_orders has no prepaid column), and only
+        // meaningful for prepaid — a postpaid job order has no rolling period to expire.
+        return isPrepaidGeneration(jobOrder.generation_type)
+          ? formatOnlyDate((jobOrder as any).prepaid_expires_at)
+          : '-';
+      case 'vip':
+        // Job orders carry an explicit flag, unlike customers where VIP is a billing status.
+        return deriveVipLabel(jobOrder.vip_enabled);
     }
   };
 

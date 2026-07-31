@@ -162,8 +162,20 @@ class SmartOltController extends Controller
                         // With get_onus_details_by_sn, it should return the specific ONU
                         $onuDetails = $data['onus'][0];
 
-                        // Check if SN is already in use in technical_details
-                        $exists = TechnicalDetail::where('router_modem_sn', $sn)->exists();
+                        // Check if SN is already in use in technical_details.
+                        //
+                        // account_no scopes this to a CONFLICT with someone else. When editing an
+                        // account's own technical details the serial is already stored against
+                        // that very account, and treating that as a duplicate blocked staff from
+                        // re-validating an unchanged modem just to pull its router model. Another
+                        // account holding the serial is still rejected.
+                        $excludeAccountNo = $request->input('account_no');
+
+                        $duplicateQuery = TechnicalDetail::where('router_modem_sn', $sn);
+                        if (!empty($excludeAccountNo)) {
+                            $duplicateQuery->where('account_no', '!=', $excludeAccountNo);
+                        }
+                        $exists = $duplicateQuery->exists();
 
                         if ($exists) {
                             Log::channel('smartoltrelated')->warning('SmartOLT Validation Failed (Duplicate in DB):', [

@@ -532,6 +532,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       'usageType',
       'dateInstalled',
       'username',
+      'pppoePassword',
       'connectionType',
       'routerModel',
       'routerModemSN',
@@ -893,6 +894,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       usageType: 'Usage Type',
       dateInstalled: 'Date Installed',
       username: 'PPPOE Username',
+      pppoePassword: 'PPPOE Password',
       connectionType: 'Connection Type',
       routerModel: 'Router Model',
       routerModemSN: 'Router Serial Number',
@@ -942,7 +944,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>Full Name</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+          <span className={`font-medium truncate text-right min-w-0 uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`} title={billingRecord.customerName}>{billingRecord.customerName}</span>
         </div>
       ) : null,
@@ -974,7 +976,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>Address</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+          <span className={`font-medium truncate text-right min-w-0 uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`} title={billingRecord.address}>{billingRecord.address.split(',')[0]}</span>
         </div>
       ) : null,
@@ -1065,8 +1067,8 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                 />
                 <Marker position={[lat, lng]}>
                   <Popup>
-                    {billingRecord.customerName}<br />
-                    {billingRecord.address}
+                    <span className="uppercase">{billingRecord.customerName}</span><br />
+                    <span className="uppercase">{billingRecord.address}</span>
                   </Popup>
                 </Marker>
               </MapContainer>
@@ -1222,6 +1224,18 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.username}>{billingRecord.username}</span>
         </div>
       ) : null,
+      // Always rendered, unlike the username row above: staff need to see that an account has
+      // no PPPoE password on record, and a silently missing row cannot convey that.
+      pppoePassword: () => (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>PPPOE Password</span>
+          <span className={`font-medium truncate text-right min-w-0 font-mono ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`} title={billingRecord.pppoePassword || NOT_SET}>
+            {billingRecord.pppoePassword || NOT_SET}
+          </span>
+        </div>
+      ),
       sessionGroup: () => billingRecord.sessionGroup ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Group</span>
@@ -2011,7 +2025,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`}>
             <h1 className={`text-base sm:text-lg font-semibold truncate pr-4 min-w-0 flex-1 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`} title={`${billingRecord.applicationId} | ${billingRecord.customerName} | ${billingRecord.address}`}>
-              {billingRecord.applicationId} | {billingRecord.customerName} | {billingRecord.address}
+              {billingRecord.applicationId} | <span className="uppercase">{billingRecord.customerName}</span> | <span className="uppercase">{billingRecord.address}</span>
             </h1>
             <div className="flex items-center justify-end space-x-1.5 sm:space-x-2 flex-shrink-0">
               <button
