@@ -66,6 +66,10 @@ class BillingAccount extends Model
         // Applied (and cleared) by the prepaid:apply-pending-plans command once it falls due.
         'pending_plan_id',
         'pending_plan_effective_at',
+        // The prepaid_expires_at value the lapse notice was last sent for. Stops the daily scan
+        // re-notifying an expired customer every morning; resets itself when a payment moves
+        // prepaid_expires_at forward.
+        'prepaid_expiry_notified_for',
         'created_by',
         'updated_by',
         'vip_expiration',
@@ -78,6 +82,7 @@ class BillingAccount extends Model
         'account_balance' => 'decimal:2',
         'prepaid_expires_at' => 'datetime',
         'pending_plan_effective_at' => 'datetime',
+        'prepaid_expiry_notified_for' => 'datetime',
         // NULL is preserved by these casts, which is what lets the billing generator tell
         // "never configured" (fall back to vat_type) apart from an explicit false.
         'vat_enabled' => 'boolean',
