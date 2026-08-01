@@ -59,6 +59,8 @@ export interface CustomerDetailData {
   technicalDetails?: {
     id: number;
     username?: string;
+    pppoePassword?: string | null;
+    pppoeUsername?: string | null;
     usernameStatus?: string;
     connectionType?: string;
     routerModel?: string;

@@ -37,22 +37,31 @@ class CustomerDetailController extends Controller
                 $lcpNapLocation = LCPNAPLocation::where('lcpnap_name', $technicalDetail->lcpnap)->first();
             }
 
-            // PPPoE credentials live on the job order, not on technical_details — the technician
-            // sets them when completing the install. Matched on account_id (the structural link)
-            // rather than on the username string, and newest-first so a re-install wins.
+            // PPPoE credentials come from technical_details, the account's current-state record.
+            // Accounts installed before pppoe_password was added there were not backfilled, so fall
+            // back to the job order the technician set at install — matched on account_id (the
+            // structural link) rather than on the username string, and newest-first so a
+            // re-install wins.
             $pppoeCredentials = ['username' => null, 'password' => null];
             if ($technicalDetail) {
-                $jobOrderCredentials = \App\Models\JobOrder::where('account_id', $billingAccount->id)
-                    ->whereNotNull('pppoe_password')
-                    ->where('pppoe_password', '!=', '')
-                    ->orderByDesc('id')
-                    ->first(['pppoe_username', 'pppoe_password']);
+                $pppoeCredentials = [
+                    'username' => $technicalDetail->username,
+                    'password' => $technicalDetail->pppoe_password,
+                ];
 
-                if ($jobOrderCredentials) {
-                    $pppoeCredentials = [
-                        'username' => $jobOrderCredentials->pppoe_username,
-                        'password' => $jobOrderCredentials->pppoe_password,
-                    ];
+                if ($pppoeCredentials['password'] === null || $pppoeCredentials['password'] === '') {
+                    $jobOrderCredentials = \App\Models\JobOrder::where('account_id', $billingAccount->id)
+                        ->whereNotNull('pppoe_password')
+                        ->where('pppoe_password', '!=', '')
+                        ->orderByDesc('id')
+                        ->first(['pppoe_username', 'pppoe_password']);
+
+                    if ($jobOrderCredentials) {
+                        $pppoeCredentials = [
+                            'username' => $pppoeCredentials['username'] ?: $jobOrderCredentials->pppoe_username,
+                            'password' => $jobOrderCredentials->pppoe_password,
+                        ];
+                    }
                 }
             }
             
@@ -173,9 +182,8 @@ class CustomerDetailController extends Controller
                     'lcpnap' => $technicalDetail->lcpnap,
                     'usageTypeId' => $technicalDetail->usage_type_id,
                     'usageType' => $technicalDetail->usage_type,
-                    // The PPPoE password is not stored on technical_details — it is set on the
-                    // job order when the technician completes the install, so it is read back
-                    // from there. Resolved once above to keep this a single extra query.
+                    // Resolved above: technical_details.pppoe_password, falling back to the install
+                    // job order for accounts predating that column.
                     'pppoePassword' => $pppoeCredentials['password'],
                     'pppoeUsername' => $pppoeCredentials['username'],
                     'createdBy' => $technicalDetail->created_by,

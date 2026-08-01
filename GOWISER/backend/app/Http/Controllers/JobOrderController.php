@@ -892,6 +892,9 @@ class JobOrderController extends Controller
                     if ($jobOrder->pppoe_username) {
                         $technicalUpdateData['username'] = $jobOrder->pppoe_username;
                     }
+                    if ($jobOrder->pppoe_password) {
+                        $technicalUpdateData['pppoe_password'] = $jobOrder->pppoe_password;
+                    }
                     
                     if (!empty($technicalUpdateData)) {
                         $technicalDetail->update($technicalUpdateData);
@@ -1287,6 +1290,7 @@ class JobOrderController extends Controller
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
                 'username' => $usernameForTechnical,
+                'pppoe_password' => $jobOrder->pppoe_password,
                 'username_status' => $jobOrder->username_status,
                 'connection_type' => $jobOrder->connection_type,
                 'router_model' => $jobOrder->router_model,

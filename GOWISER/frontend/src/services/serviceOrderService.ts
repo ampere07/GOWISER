@@ -25,8 +25,9 @@ export interface ServiceOrderData {
   group_name?: string;
   username?: string;
   /**
-   * PPPoE password, resolved by ServiceOrderApiController from the account's newest job order.
-   * Neither service_orders nor technical_details stores it.
+   * PPPoE password from technical_details. service_orders does not store it, so
+   * ServiceOrderApiController joins it in — falling back to the account's newest job order for
+   * accounts installed before technical_details carried the column.
    */
   pppoe_password?: string | null;
   connection_type?: string;

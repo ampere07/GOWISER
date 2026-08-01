@@ -116,7 +116,7 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         provider: '',
         affiliate: order.group_name || '',
         username: order.username || '',
-        // Resolved by ServiceOrderApiController from the account's newest job order.
+        // Resolved by ServiceOrderApiController from technical_details.
         pppoePassword: (order as any).pppoe_password || '',
         connectionType: order.connection_type || '',
         routerModemSN: order.router_modem_sn || '',

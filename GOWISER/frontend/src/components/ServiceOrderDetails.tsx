@@ -60,7 +60,7 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     plan: customerData.desiredPlan || '',
     username: customerData.technicalDetails?.username || '',
     // Carried through so the Customer Details panel opened from here shows it too.
-    pppoePassword: (customerData.technicalDetails as any)?.pppoePassword || '',
+    pppoePassword: customerData.technicalDetails?.pppoePassword || '',
     connectionType: customerData.technicalDetails?.connectionType || '',
     routerModel: customerData.technicalDetails?.routerModel || '',
     routerModemSN: customerData.technicalDetails?.routerModemSn || '',
@@ -110,7 +110,7 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate: string;
     username: string;
-    /** From the account's job order — technical_details has no password column. */
+    /** From technical_details, falling back to the account's install job order. */
     pppoePassword: string;
     connectionType: string;
     routerModemSN: string;

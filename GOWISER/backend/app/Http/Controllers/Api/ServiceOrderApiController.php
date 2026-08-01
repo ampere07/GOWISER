@@ -169,14 +169,40 @@ class ServiceOrderApiController extends Controller
                 $technicalDetails = \App\Models\TechnicalDetail::whereIn('account_no', $accountNos)
                     ->get()
                     ->keyBy('account_no');
+
+                // Accounts installed before technical_details.pppoe_password existed were not
+                // backfilled and still carry the password only on their job order. Resolved in one
+                // batched query rather than per row: ascending id so keyBy keeps the newest, which
+                // is the one that wins when an account has been re-installed.
+                $accountIdsNeedingFallback = $accountNos
+                    ->filter(function ($accountNo) use ($technicalDetails) {
+                        $td = $technicalDetails->get($accountNo);
+                        return !$td || $td->pppoe_password === null || $td->pppoe_password === '';
+                    })
+                    ->map(function ($accountNo) use ($billingAccounts) {
+                        $ba = $billingAccounts->get($accountNo);
+                        return $ba ? $ba->id : null;
+                    })
+                    ->filter()
+                    ->values();
+
+                $jobOrderPasswords = $accountIdsNeedingFallback->isNotEmpty()
+                    ? \App\Models\JobOrder::whereIn('account_id', $accountIdsNeedingFallback)
+                        ->whereNotNull('pppoe_password')
+                        ->where('pppoe_password', '!=', '')
+                        ->orderBy('id')
+                        ->get(['account_id', 'pppoe_password'])
+                        ->keyBy('account_id')
+                    : collect();
             }
             else {
                 $billingAccounts = collect();
                 $technicalDetails = collect();
+                $jobOrderPasswords = collect();
             }
 
             // Map related data to service orders
-            $mappedOrders = $serviceOrders->map(function ($so) use ($billingAccounts, $technicalDetails) {
+            $mappedOrders = $serviceOrders->map(function ($so) use ($billingAccounts, $technicalDetails, $jobOrderPasswords) {
                 $ba = $billingAccounts->get($so->account_no);
                 $c = $ba ? $ba->customer : null;
                 $td = $technicalDetails->get($so->account_no);
@@ -203,6 +229,13 @@ class ServiceOrderApiController extends Controller
 
                 // Technical details
                 $so->username = $td ? $td->username : null;
+                // Included here as well as in show() so the details panel opened straight from the
+                // list shows the password instead of a dash.
+                $tdPassword = $td && $td->pppoe_password !== null && $td->pppoe_password !== ''
+                    ? $td->pppoe_password
+                    : null;
+                $fallbackJobOrder = $ba ? $jobOrderPasswords->get($ba->id) : null;
+                $so->pppoe_password = $tdPassword ?? ($fallbackJobOrder ? $fallbackJobOrder->pppoe_password : null);
                 $so->connection_type = $td ? $td->connection_type : null;
                 $so->router_modem_sn = $td ? $td->router_modem_sn : null;
                 $so->lcp = $td ? $td->lcp : null;
@@ -467,18 +500,20 @@ class ServiceOrderApiController extends Controller
                     'td.nap',
                     'td.port',
                     'td.vlan',
-                    // PPPoE credentials are stored on the job order, not on technical_details or
-                    // service_orders. Correlated subqueries rather than a join: an account can
-                    // have several job orders, and joining would multiply the service order rows.
-                    // Newest first, so a re-install supersedes the original credentials.
-                    DB::raw("(SELECT jo.pppoe_password FROM job_orders jo
+                    // technical_details.pppoe_password is the account's current password. Accounts
+                    // installed before that column existed were not backfilled, so fall back to the
+                    // newest job order — a correlated subquery rather than a join, since an account
+                    // can have several job orders and joining would multiply the service order rows.
+                    DB::raw("COALESCE(NULLIF(td.pppoe_password, ''),
+                             (SELECT jo.pppoe_password FROM job_orders jo
                               WHERE jo.account_id = ba.id
                                 AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
-                              ORDER BY jo.id DESC LIMIT 1) as pppoe_password"),
-                    DB::raw("(SELECT jo.pppoe_username FROM job_orders jo
+                              ORDER BY jo.id DESC LIMIT 1)) as pppoe_password"),
+                    DB::raw("COALESCE(NULLIF(td.username, ''),
+                             (SELECT jo.pppoe_username FROM job_orders jo
                               WHERE jo.account_id = ba.id
                                 AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
-                              ORDER BY jo.id DESC LIMIT 1) as pppoe_username")
+                              ORDER BY jo.id DESC LIMIT 1)) as pppoe_username")
                 )
                 ->where('so.id', $id);
 

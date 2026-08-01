@@ -37,7 +37,7 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate?: string;
     username: string;
-    /** From the account's job order — technical_details has no password column. */
+    /** From technical_details, falling back to the account's install job order. */
     pppoePassword?: string;
     connectionType: string;
     routerModemSN: string;
