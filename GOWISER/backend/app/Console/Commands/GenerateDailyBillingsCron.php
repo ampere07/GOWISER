@@ -61,19 +61,21 @@ class GenerateDailyBillingsCron extends Command
                 'target_billing_day' => $targetBillingDay
             ]);
 
-            // ── Prepaid renewal generation ──────────────────────────────────────────────
-            // Prepaid customers rejoin normal billing once their rolling prepaid period expires.
+            // ── Prepaid expiry notices ──────────────────────────────────────────────────
+            // Prepaid raises NO renewal SOA and NO renewal invoice: the amount is settled at
+            // checkout from the plan the customer picks, so billing one in advance could only
+            // price the plan they were last on. They are notified instead.
             // This runs EVERY day, independent of the postpaid billing-day, so it must execute
             // before the postpaid "no accounts due today" early return further below.
             try {
-                $prepaidRenewals = $this->billingService->generatePrepaidRenewalInvoices($today, 1);
-                $logger->info('Prepaid renewal generation completed', [
-                    'generated' => $prepaidRenewals['success'],
-                    'skipped'   => $prepaidRenewals['skipped'],
-                    'failed'    => $prepaidRenewals['failed'],
+                $prepaidNotices = $this->billingService->notifyExpiredPrepaidAccounts($today);
+                $logger->info('Prepaid expiry notices completed', [
+                    'notified' => $prepaidNotices['success'],
+                    'skipped'  => $prepaidNotices['skipped'],
+                    'failed'   => $prepaidNotices['failed'],
                 ]);
             } catch (\Throwable $prepaidEx) {
-                $logger->error('Prepaid renewal generation failed', ['error' => $prepaidEx->getMessage()]);
+                $logger->error('Prepaid expiry notices failed', ['error' => $prepaidEx->getMessage()]);
             }
 
             $logger->info('Checking billing_accounts table for eligible accounts...', [
@@ -90,9 +92,9 @@ class GenerateDailyBillingsCron extends Command
                 ->whereNotNull('account_no')
                 ->where('billing_day', $targetBillingDay)
                 // Mirror the exclusion in EnhancedBillingGenerationServiceWithNotifications::
-                // getActiveAccountsForBillingDay(): prepaid accounts are billed on their rolling
-                // prepaid period (handled separately by generatePrepaidRenewalInvoices below), not
-                // on the fixed billing day, so they are excluded from this billing-day count.
+                // getActiveAccountsForBillingDay(): prepaid accounts do not bill on the fixed
+                // billing day — their renewals raise no bill at all (see notifyExpiredPrepaidAccounts
+                // above), so they are excluded from this billing-day count.
                 ->where(function ($q) {
                     $q->whereNotIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
                       ->orWhereNull('generation_type');

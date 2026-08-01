@@ -395,16 +395,16 @@ class EnhancedBillingGenerationServiceWithNotifications
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
             ->whereNotNull('account_no')
-            // Prepaid accounts are not billed on the fixed billing-day cadence — their bills are
-            // driven by their rolling prepaid period: the initial bill at approval
-            // (generateInitialBillingForAccount) and renewal bills once the period expires
-            // (generatePrepaidRenewalInvoices). They are therefore excluded from THIS billing-day
-            // path only — NOT from the service as a whole. Post Paid and legacy NULL-generation_type
-            // accounts bill normally here.
+            // Prepaid accounts are not billed on the fixed billing-day cadence. Their ONLY bill is
+            // the initial one raised at approval (generateInitialBillingForAccount); renewals raise
+            // no bill at all, because the amount is settled at checkout from the plan the customer
+            // picks (see notifyExpiredPrepaidAccounts). They are therefore excluded from THIS
+            // billing-day path only — NOT from the service as a whole. Post Paid and legacy
+            // NULL-generation_type accounts bill normally here.
             ->where(function ($q) {
                 // Alias list, not a single '!=': a row still spelled 'Pre Paid' must stay excluded
-                // from the billing-day path, otherwise it would be billed twice (here AND by
-                // generatePrepaidRenewalInvoices).
+                // from the billing-day path, otherwise a prepaid customer would be billed on the
+                // fixed billing day on top of the initial bill they already have.
                 $q->whereNotIn('generation_type', BillingAccount::PREPAID_ALIASES)
                   ->orWhereNull('generation_type');
             });
@@ -1489,33 +1489,63 @@ class EnhancedBillingGenerationServiceWithNotifications
     }
 
     /**
-     * Generate renewal invoices for prepaid accounts whose service period has EXPIRED.
+     * What a prepaid customer pays to renew, for the plan they are currently on.
      *
-     * This is how prepaid customers "rejoin" normal billing after their first period: instead of
-     * being permanently excluded, they are billed again the moment their prepaid_expires_at passes.
-     * It reuses the exact same createEnhancedStatement()/createEnhancedInvoice() logic as the
-     * postpaid generator — the only difference is the TRIGGER (period expiry) rather than
-     * billing-day, because a prepaid period is a rolling 30-day window that does not align with a
-     * fixed billing day.
+     * The same maths {@see repricePrepaidInitialBillForPlan()} applies — plan price, plus VAT,
+     * less withholding — exposed publicly because the prepaid lapse notice has to quote a figure
+     * without an invoice to read it off. Callers must never reimplement the tax rules.
+     *
+     * Returns 0.0 when the account has no priced plan, which the caller reports rather than
+     * sending a notice quoting nothing.
+     */
+    public function quotePrepaidRenewalAmount(BillingAccount $account): float
+    {
+        $planPrice = (float) ($account->plan->price ?? 0);
+
+        if ($planPrice <= 0) {
+            return 0.0;
+        }
+
+        $vatBreakdown = $this->calculateVatBreakdown($planPrice, $account);
+        $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+
+        return round($vatBreakdown['total'] - $withholding['amount'], 2);
+    }
+
+    /**
+     * Notify prepaid customers whose service period has EXPIRED. Raises NO bill.
+     *
+     * Prepaid deliberately produces no renewal SOA and no renewal invoice. A renewal bill has to
+     * be priced before the customer has said what they want, so it could only ever be priced at
+     * the plan they were LAST on — and a customer renewing onto a different plan was then made to
+     * settle the old plan's amount to get reconnected, while
+     * {@see \App\Services\PrepaidPlanChangeService::handleSettledPayment()} switched them to the
+     * new plan anyway. Wrong money collected in both directions: undercharged on an upgrade,
+     * overcharged on a downgrade.
+     *
+     * So nothing is billed at expiry. The customer is TOLD their period lapsed, and the amount is
+     * settled at checkout from the plan they actually pick — which is already how the customer
+     * app drives it (the payment screen sets the amount from the selected plan's price). With no
+     * invoice raised, account_balance stays at 0, so nothing stale can override that choice and
+     * the balance-based reconnect gate in TransactionController still passes on payment.
      *
      * Deliberately NOT filtered on billing_status: an expired prepaid account has usually already
-     * been restricted (Inactive), and we still want to give it a renewal bill to pay.
+     * been restricted (Inactive), and it is exactly the customer who needs telling.
      *
-     * Idempotent & non-duplicating: an account that already carries an outstanding (Unpaid/Partial)
-     * invoice is skipped, so renewal bills never stack — and since the invoice we create is Unpaid,
-     * a same-day re-run finds it and skips. Each account is isolated so one failure never aborts
-     * the batch.
+     * Idempotent: `prepaid_expiry_notified_for` records the expiry the notice went out for, so a
+     * customer who stays lapsed is notified once, not every morning. It needs no cleanup —
+     * renewing moves prepaid_expires_at forward, the stored value stops matching, and the next
+     * lapse notifies again. Each account is isolated so one failure never aborts the batch.
      *
-     * @return array{success:int, failed:int, skipped:int, errors:array, invoices:array, notifications:array}
+     * @return array{success:int, failed:int, skipped:int, errors:array, notifications:array}
      */
-    public function generatePrepaidRenewalInvoices(Carbon $generationDate, int $userId): array
+    public function notifyExpiredPrepaidAccounts(Carbon $generationDate): array
     {
         $results = [
             'success' => 0,
             'failed' => 0,
             'skipped' => 0,
             'errors' => [],
-            'invoices' => [],
             'notifications' => [],
         ];
 
@@ -1528,14 +1558,14 @@ class EnhancedBillingGenerationServiceWithNotifications
             ->whereNotNull('account_no')
             ->get();
 
-        $this->log('info', 'Prepaid renewal scan: expired prepaid accounts found', [
+        $this->log('info', 'Prepaid expiry scan: expired prepaid accounts found', [
             'generation_date' => $now->format('Y-m-d'),
             'expired_count' => $accounts->count(),
         ]);
 
         foreach ($accounts as $account) {
             try {
-                // VIP guard: a VIP gets no renewal bill either. This scan deliberately ignores
+                // VIP guard: a VIP is not asked to renew. This scan deliberately ignores
                 // billing_status (an expired prepaid is usually already Inactive), so VIP has to
                 // be excluded explicitly here.
                 if ($this->isVipBillingSuspended($account)) {
@@ -1543,59 +1573,61 @@ class EnhancedBillingGenerationServiceWithNotifications
                     continue;
                 }
 
-                // Never stack a new renewal on top of an existing outstanding bill: if the
-                // customer still owes an Unpaid/Partial invoice, that IS their renewal bill.
-                $hasOutstanding = Invoice::where('account_no', $account->account_no)
-                    ->whereIn('status', ['Unpaid', 'Partial'])
-                    ->exists();
+                $expiry = Carbon::parse($account->prepaid_expires_at);
 
-                if ($hasOutstanding) {
+                // Already told them about THIS lapse. Compared as a timestamp string so a Carbon
+                // instance and its stored representation are not mistaken for a difference, which
+                // would re-notify every single day.
+                $notifiedFor = $account->prepaid_expiry_notified_for
+                    ? Carbon::parse($account->prepaid_expiry_notified_for)->toDateTimeString()
+                    : null;
+
+                if ($notifiedFor === $expiry->toDateTimeString()) {
                     $results['skipped']++;
-                    $this->log('info', 'Skipped prepaid renewal — account already has an outstanding invoice', [
+                    continue;
+                }
+
+                $renewalAmount = $this->quotePrepaidRenewalAmount($account);
+
+                if ($renewalAmount <= 0) {
+                    $results['skipped']++;
+                    $this->log('warning', 'Skipped prepaid expiry notice — account has no priced plan to quote', [
                         'account_no' => $account->account_no,
+                        'plan_id' => $account->plan_id,
                     ]);
                     continue;
                 }
 
-                // Per-period idempotency, robust to zero-amount renewals: an invoice/statement
-                // dated on/after the current expiry means THIS lapsed period was already billed.
-                // Comparing by DATE (not status) also catches a renewal invoice that computed to
-                // <= 0 and was saved 'Paid' — the status filter above would miss it and cause
-                // unbounded daily re-generation. prepaid_expires_at only advances on payment, so
-                // this guard naturally resets once the customer renews. The SOA and invoice guards
-                // are independent (mirroring the postpaid unified flow) so a partial failure of
-                // one recovers cleanly on the next run without duplicating the other.
-                $expiryDate = Carbon::parse($account->prepaid_expires_at)->toDateString();
-                $soa = null;
-                $invoice = null;
+                // 8:00 AM Asia/Manila, matching queueNotification() — the scan runs at 01:00 and
+                // customers should not be woken by it.
+                $timeToSend = Carbon::now('Asia/Manila')->setTime(8, 0, 0)->format('Y-m-d H:i:s');
 
-                if (!StatementOfAccount::where('account_no', $account->account_no)->whereDate('statement_date', '>=', $expiryDate)->exists()) {
-                    $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
-                }
+                $results['notifications'][] = $this->notificationService->notifyPrepaidExpiry(
+                    $account,
+                    $expiry,
+                    $renewalAmount,
+                    $timeToSend
+                );
 
-                if (!Invoice::where('account_no', $account->account_no)->whereDate('invoice_date', '>=', $expiryDate)->exists()) {
-                    $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
-                    $results['invoices'][] = $invoice;
-                    $results['success']++;
-                }
+                // Marked only after the notice went out, so a failure retries tomorrow rather
+                // than silently swallowing this period's only notification.
+                $account->prepaid_expiry_notified_for = $expiry;
+                $account->save();
 
-                if ($soa || $invoice) {
-                    $results['notifications'][] = $this->queueNotification($account, $invoice, $soa);
-                    $this->log('info', 'Prepaid renewal generated (period expired)', [
-                        'account_no' => $account->account_no,
-                        'prepaid_expires_at' => $expiryDate,
-                        'invoice_id' => $invoice->id ?? null,
-                    ]);
-                } else {
-                    $results['skipped']++;
-                }
+                $results['success']++;
+
+                $this->log('info', 'Prepaid expiry notice sent (no SOA, no invoice)', [
+                    'account_no' => $account->account_no,
+                    'prepaid_expires_at' => $expiry->toDateTimeString(),
+                    'renewal_amount' => $renewalAmount,
+                ]);
             } catch (\Exception $e) {
                 $results['failed']++;
                 $results['errors'][] = [
                     'account_no' => $account->account_no,
                     'error' => $e->getMessage(),
                 ];
-                $this->log('error', "Failed prepaid renewal for account {$account->account_no}: " . $e->getMessage());
+                $this->log('error', "Failed prepaid expiry notice for account {$account->account_no}: " . $e->getMessage());
             }
         }
 

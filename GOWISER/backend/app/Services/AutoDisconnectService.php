@@ -75,8 +75,12 @@ class AutoDisconnectService
      * 17:24. Comparing the raw timestamp would have cut those customers off mid-afternoon on their
      * expiry day while the 00:00 ones lost the entire day, so the whole cohort is normalised to the
      * same "restricted from the start of the day after expiry" rule.
+     *
+     * PUBLIC because TransactionRevertController applies the identical rule when a revert restores
+     * an already-lapsed expiry. Two copies of this number would let a customer be cut a day early
+     * (or served a day free) depending on which path reached them first, so both read this one.
      */
-    private const PREPAID_GRACE_DAYS = 1;
+    public const PREPAID_GRACE_DAYS = 1;
 
     /** Remark stamped on the service order raised by {@see processPrepaidAutoPullout()}. */
     private const PREPAID_PULLOUT_REMARKS = 'Prepaid Auto Pullout';
