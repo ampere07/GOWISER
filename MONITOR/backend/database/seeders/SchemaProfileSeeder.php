@@ -19,8 +19,8 @@ class SchemaProfileSeeder extends Seeder
         SchemaProfile::updateOrCreate(
             ['key' => 'sync'],
             [
-                'label' => 'SYNC (GOWISER)',
-                'description' => 'The current SYNC platform. One database per site.',
+                'label' => 'GOWISER',
+                'description' => 'The current GOWISER platform. Pick this for a branch running its own copy.',
                 'is_system' => true,
                 'definition' => ['datasets' => $this->syncDatasets()],
             ]

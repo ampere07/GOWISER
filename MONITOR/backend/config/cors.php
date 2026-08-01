@@ -13,7 +13,12 @@ return [
         'sanctum/csrf-cookie',
     ],
 
-    'allowed_methods' => ['GET', 'POST', 'OPTIONS'],
+    /*
+     * PUT and DELETE are here for the Databases configuration page, the only part
+     * of the app that writes. Without them the browser's preflight blocks an edit
+     * or a removal with a CORS error rather than anything that names the cause.
+     */
+    'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',

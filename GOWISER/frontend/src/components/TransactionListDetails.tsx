@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft, ArrowRight, Maximize2, X, Phone, MessageSquare, Info,
   ExternalLink, Mail, Edit, Trash2, Receipt, CheckCircle,
@@ -202,6 +203,25 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     vip_remarks: customerData.billingAccount?.vip_remarks || '',
   };
 };
+
+/**
+ * Backdrop for this view's inline confirm/success dialogs.
+ *
+ * Portalled to document.body and raised above the mobile panel root, which is
+ * `fixed inset-0 z-[9999]` in phone view. That establishes a stacking context
+ * the sibling dialogs at the default z-50 could not win, so every confirmation
+ * was painted behind the panel and appeared not to open at all. Portalling to
+ * body puts the dialog outside every app container, the one placement that
+ * cannot be trapped by an ancestor's stacking context, overflow or transform —
+ * the same fix already applied to TransactionFormModal's overlays.
+ */
+const DialogOverlay: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  createPortal(
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10030]">
+      {children}
+    </div>,
+    document.body
+  );
 
 interface TransactionListDetailsProps {
   transaction: Transaction;
@@ -1135,7 +1155,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       </div>
 
       {showSuccessModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1171,11 +1191,11 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1215,11 +1235,11 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showRevertModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1312,11 +1332,11 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showDeleteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1343,7 +1363,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       <TransactionRevertModal
@@ -1357,7 +1377,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       />
 
       {showFailedConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1384,7 +1404,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showEditModal && (

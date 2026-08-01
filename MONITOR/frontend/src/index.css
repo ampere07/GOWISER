@@ -53,3 +53,64 @@ body.disable-transitions *::after {
   scrollbar-width: thin;
   scrollbar-color: #4b5563 transparent;
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Printable reports
+
+   The print views are rendered through a portal so they are a direct child of
+   <body>, then everything else on the page is hidden for print. Hiding siblings
+   is the only reliable way to do this: an app shell that establishes a stacking
+   context or a transform would otherwise clip or reposition the report, and a
+   dark #root background would print as a page of black ink.
+
+   `.monitor-print-portal` marks the portal; `body.monitor-printing` is set only
+   while a print view is open, so these rules never touch a normal print of the
+   dashboard.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  body.monitor-printing {
+    background: #fff !important;
+    color: #1a1a1a !important;
+  }
+
+  body.monitor-printing > *:not(.monitor-print-portal) {
+    display: none !important;
+  }
+
+  body.monitor-printing .monitor-print-portal {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+    z-index: auto !important;
+  }
+
+  /* Screen-only chrome inside the print view: the toolbar, the close button. */
+  .monitor-print-portal .no-print {
+    display: none !important;
+  }
+
+  /* Header bands and status colours are the whole point of these layouts, so
+     they must survive the browser's default "don't print backgrounds". */
+  .monitor-print-portal * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* A ledger split mid-row across a page break is unreadable. */
+  .monitor-print-portal tr,
+  .monitor-print-portal .print-keep {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .monitor-print-portal thead {
+    display: table-header-group;
+  }
+}
+
+/* A4 portrait with the reference's margins, for the Financial Report. */
+@page {
+  size: A4 portrait;
+  margin: 12mm 14mm;
+}

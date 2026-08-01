@@ -1,0 +1,79 @@
+Options -Indexes
+DirectoryIndex index.php
+
+# Protect sensitive files
+<Files ".env">
+    Require all denied
+</Files>
+<FilesMatch "^(composer\.json|composer\.lock|\.env\.example)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /netmanager/
+
+    # ── Block direct access to internals ─────────────────────────────
+    RewriteRule ^config/ - [F,L]
+    RewriteRule ^includes/ - [F,L]
+    RewriteRule ^lib/ - [F,L]
+
+    # ── Skip API endpoints & OAuth callback — never redirect these ────
+    RewriteRule ^api/ - [L]
+    RewriteRule ^auth/google_callback\.php - [L]
+    RewriteRule ^screen\.php$ - [L]
+
+    # ── 301: /foo/index.php → /foo/
+    # \S+ matches non-whitespace (path + optional query) without spaces in pattern
+    RewriteCond %{THE_REQUEST} \s/netmanager/(\S+)/index\.php [NC]
+    RewriteRule ^ /netmanager/%1/ [R=301,L]
+
+    # ── 301: /anything.php → /anything
+    RewriteCond %{THE_REQUEST} \s/netmanager/(\S+)\.php [NC]
+    RewriteRule ^ /netmanager/%1 [R=301,L]
+
+    # ── Static assets (CSS/JS/images) — skip rewriting ───────────────
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # ── Clean URLs: resource/{id} routes ────────────────────────────────
+    RewriteRule ^modules/subscribers/view/(\d+)/?$  modules/subscribers/view.php?id=$1  [L,QSA]
+    RewriteRule ^modules/subscribers/review/(\d+)/?$ modules/subscribers/review.php?id=$1 [L,QSA]
+    RewriteRule ^modules/subscribers/edit/(\d+)/?$  modules/subscribers/edit.php?id=$1  [L,QSA]
+    RewriteRule ^modules/payments/receipt/(\d+)/?$  modules/payments/receipt.php?id=$1  [L,QSA]
+    RewriteRule ^modules/payments/edit/(\d+)/?$     modules/payments/edit.php?id=$1     [L,QSA]
+    RewriteRule ^modules/plans/edit/(\d+)/?$        modules/plans/edit.php?id=$1        [L,QSA]
+    RewriteRule ^modules/routers/edit/(\d+)/?$      modules/routers/edit.php?id=$1      [L,QSA]
+    RewriteRule ^modules/users/edit/(\d+)/?$        modules/users/edit.php?id=$1        [L,QSA]
+    RewriteRule ^modules/users/profile/(\d+)/?$     modules/users/profile.php?user_id=$1 [L,QSA]
+
+    # ── Rewrite /modules/foo[/] → modules/foo/index.php ──────────────
+    # Guard: only when the module directory actually exists
+    RewriteCond %{DOCUMENT_ROOT}/netmanager/$1 -d
+    RewriteRule ^(modules/[a-zA-Z_-]+)/?$ $1/index.php [L]
+
+    # ── Rewrite /path → /path.php when that file exists ───────────────
+    RewriteCond %{DOCUMENT_ROOT}/netmanager/$1.php -f
+    RewriteRule ^(.+)$ $1.php [L]
+
+    # ── Root ──────────────────────────────────────────────────────────
+    RewriteRule ^$ index.php [L]
+</IfModule>
+
+# Security Headers
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options nosniff
+    Header always set X-Frame-Options SAMEORIGIN
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header unset Alt-Svc
+    Header always unset Alt-Svc
+</IfModule>
+
+# PHP settings
+<IfModule mod_php8.c>
+    php_flag display_errors Off
+    php_value session.cookie_httponly 1
+    php_value session.use_strict_mode 1
+</IfModule>

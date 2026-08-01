@@ -11,24 +11,41 @@ class DatabaseSeeder extends Seeder
 {
     public function run()
     {
+        // Monitored databases are not seeded: they carry credentials, and those
+        // are entered on the Databases page where they are encrypted at rest.
         $this->call([
             SchemaProfileSeeder::class,
-            SiteConnectionSeeder::class,
         ]);
 
         $executive = Role::updateOrCreate(
             ['role_name' => 'Executive'],
             [
                 'description' => 'Full read access to every dashboard and every source.',
-                'permissions' => ['overview', 'operations', 'revenue', 'financials', 'consolidated'],
+                'permissions' => [
+                    // The five operational sections.
+                    'subscriber-analytics', 'financial', 'field-operations', 'tech', 'employee',
+                    // The executive rollups.
+                    'overview', 'operations', 'revenue', 'financials', 'consolidated',
+                    // Manage which databases the portal reads. Granted here
+                    // because this role is the administrator; it is the only
+                    // permission in the app that allows a write, and it exposes
+                    // credentials for every monitored database.
+                    'databases',
+                ],
             ]
         );
 
         Role::updateOrCreate(
             ['role_name' => 'Viewer'],
             [
-                'description' => 'Headline dashboards only, no profit and loss detail.',
-                'permissions' => ['overview', 'consolidated'],
+                'description' => 'Headline dashboards only, no profit and loss or staff detail.',
+                // Deliberately excludes 'financial' and 'employee': the first
+                // exposes expense lines and payee names, the second attributes
+                // collections to named staff.
+                'permissions' => [
+                    'subscriber-analytics', 'field-operations', 'tech',
+                    'overview', 'consolidated',
+                ],
             ]
         );
 

@@ -112,43 +112,18 @@ return [
         | config/monitor.php under 'sources'.
         */
 
-        'gowiser' => [
-            'driver' => 'mysql',
-            'host' => env('DB_GOWISER_HOST', '127.0.0.1'),
-            'port' => env('DB_GOWISER_PORT', '3306'),
-            'database' => env('DB_GOWISER_DATABASE', 'gowiser'),
-            'username' => env('DB_GOWISER_USERNAME', 'monitor_ro'),
-            'password' => env('DB_GOWISER_PASSWORD', ''),
-            'charset' => 'utf8mb4',
-            'collation' => 'utf8mb4_unicode_ci',
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'strict' => true,
-            'engine' => null,
-            'timezone' => '+08:00',
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
-        ],
+        /*
+         * Monitored databases are NOT defined here.
+         *
+         * They live in the `site_connections` table and are registered with
+         * Laravel at runtime by App\Services\SourceRegistry::connection(), which
+         * also fits each one with a guard rejecting anything but a read. That is
+         * what lets a database be added from the Databases page without a deploy.
+         *
+         * Adding a block here would create a second, competing list of which
+         * databases exist.
+         */
 
-        'netmanager' => [
-            'driver' => 'mysql',
-            'host' => env('DB_NETMANAGER_HOST', '127.0.0.1'),
-            'port' => env('DB_NETMANAGER_PORT', '3306'),
-            'database' => env('DB_NETMANAGER_DATABASE', 'netmanager'),
-            'username' => env('DB_NETMANAGER_USERNAME', 'monitor_ro'),
-            'password' => env('DB_NETMANAGER_PASSWORD', ''),
-            'charset' => 'utf8mb4',
-            'collation' => 'utf8mb4_unicode_ci',
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'strict' => true,
-            'engine' => null,
-            'timezone' => '+08:00',
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
-        ],
 
     ],
 

@@ -10,9 +10,22 @@ interface HeaderProps {
   onToggleSidebar: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
+  /**
+   * Hides the source switcher.
+   *
+   * Set on the reporting sections, which carry their own database filter — one
+   * that also offers "All databases". Showing both would give two controls for
+   * the same idea, only one of which the page obeys.
+   */
+  hideSourceSwitcher?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onRefresh, isRefreshing }) => {
+const Header: React.FC<HeaderProps> = ({
+  onToggleSidebar,
+  onRefresh,
+  isRefreshing,
+  hideSourceSwitcher,
+}) => {
   const isDarkMode = useTheme();
   const palette = usePalette();
   const { sources, activeSource, setActiveSource, lastUpdated } = useMonitorStore();
@@ -54,8 +67,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onRefresh, isRefreshin
 
       <div className="flex items-center space-x-2 sm:space-x-3">
         {/* Source switcher: which database the dashboards are reading. Hidden
-            when only one source is configured, since there is nothing to pick. */}
-        {sources.length > 1 && (
+            when only one source is configured, since there is nothing to pick,
+            and on pages that carry their own database filter. */}
+        {sources.length > 1 && !hideSourceSwitcher && (
           <div className="flex items-center gap-2">
             <Database className={`h-4 w-4 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`} />
             <select

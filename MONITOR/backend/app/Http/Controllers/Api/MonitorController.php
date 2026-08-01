@@ -46,7 +46,14 @@ class MonitorController extends Controller
             'status' => 'success',
             'data' => [
                 'sources' => $sources,
-                'default' => $this->sources->resolveKey(null),
+                // Null rather than an exception when nothing is configured.
+                // resolveKey(null) throws to stop a *report* silently reading
+                // some arbitrary database, but this endpoint's whole job is to
+                // say what exists, so it has to be able to say "nothing". A
+                // fresh install has no connections yet, and throwing here 500s
+                // the dashboard shell — including the navigation to the
+                // Databases page that is the only way to fix it.
+                'default' => $sources === [] ? null : $this->sources->resolveKey(null),
             ],
         ]);
     }

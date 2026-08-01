@@ -1,5 +1,18 @@
 import axios from 'axios';
 
+/**
+ * Name of the CSRF cookie the API issues.
+ *
+ * Not Laravel's default 'XSRF-TOKEN'. MONITOR's cookies are scoped to the parent
+ * domain so that exec.gowiser.ph talking to backend3.gowiser.ph counts as
+ * same-site — and a parent-domain cookie is visible to GOWISER, which issues its
+ * own 'XSRF-TOKEN'. Sharing that name would mean each app clobbering the other's
+ * token.
+ *
+ * Must match session.xsrf_cookie on the backend (SESSION_XSRF_COOKIE).
+ */
+const CSRF_COOKIE = 'monitor_xsrf';
+
 const getCookie = (name: string): string | null => {
   const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
   return match ? decodeURIComponent(match[2]) : null;
@@ -15,6 +28,11 @@ const apiClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
   timeout: 60000,
+  // Axios has its own XSRF handling and defaults to the 'XSRF-TOKEN' cookie.
+  // Left at the default it would pick up GOWISER's token from the shared parent
+  // domain and send that instead, which fails CSRF validation here.
+  xsrfCookieName: CSRF_COOKIE,
+  xsrfHeaderName: 'X-XSRF-TOKEN',
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -60,7 +78,7 @@ apiClient.interceptors.request.use(
       await initializeCsrf();
     }
 
-    const xsrfToken = getCookie('XSRF-TOKEN');
+    const xsrfToken = getCookie(CSRF_COOKIE);
     if (xsrfToken && requiresCsrf) {
       config.headers = config.headers || {};
       config.headers['X-XSRF-TOKEN'] = xsrfToken;
@@ -83,7 +101,10 @@ apiClient.interceptors.response.use(
         try {
           await initializeCsrf();
           const config = error.config;
-          config.headers['X-XSRF-TOKEN'] = getCookie('XSRF-TOKEN') || '';
+          // CSRF_COOKIE, not Laravel's default: on a shared parent domain the
+          // default name holds GOWISER's token, and replaying with that would
+          // turn a recoverable 419 into a permanent one.
+          config.headers['X-XSRF-TOKEN'] = getCookie(CSRF_COOKIE) || '';
           return apiClient(config);
         } catch (retryError) {
           return Promise.reject(retryError);

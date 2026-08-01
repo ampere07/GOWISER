@@ -198,4 +198,22 @@ return [
 
     'same_site' => env('SESSION_SAME_SITE_COOKIE', 'lax'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | CSRF Cookie Name
+    |--------------------------------------------------------------------------
+    |
+    | Laravel hardcodes 'XSRF-TOKEN'. MONITOR renames it because its cookies are
+    | scoped to the parent domain (.gowiser.ph) so that exec.gowiser.ph talking to
+    | backend3.gowiser.ph counts as same-site — and a parent-domain cookie is
+    | visible to GOWISER too. Two apps both issuing 'XSRF-TOKEN' would overwrite
+    | each other's token and break each other's logins.
+    |
+    | The frontend reads this name; see CSRF_COOKIE in src/config/api.ts. Change
+    | one and you must change the other.
+    |
+    */
+
+    'xsrf_cookie' => env('SESSION_XSRF_COOKIE', 'XSRF-TOKEN'),
+
 ];

@@ -7,7 +7,9 @@ interface MonitorState {
   isLoading: boolean;
   error: string | null;
   lastUpdated: number | null;
-  setSources: (sources: MonitorSource[], fallback: string) => void;
+  // fallback is null when no database has been configured yet, which the
+  // reducer below already treats the same as an empty list.
+  setSources: (sources: MonitorSource[], fallback: string | null) => void;
   setActiveSource: (source: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;

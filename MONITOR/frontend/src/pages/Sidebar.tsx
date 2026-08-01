@@ -1,8 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { LayoutDashboard, Activity, DollarSign, Layers, LogOut, User, Wallet } from 'lucide-react';
+import {
+  Activity,
+  Database,
+  DollarSign,
+  HardHat,
+  Layers,
+  LayoutDashboard,
+  LogOut,
+  User,
+  Users,
+  Wallet,
+  Wrench,
+} from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { usePalette } from '../hooks/usePalette';
 import { Capability } from '../types/monitor';
+import { ReportingSection } from '../types/reporting';
 
 export interface MenuItem {
   id: string;
@@ -13,10 +26,21 @@ export interface MenuItem {
    * Undefined means the section is not tied to one source.
    */
   capability?: Capability;
+  /**
+   * The operational sections advertise their own capability names, because they
+   * are served by a different driver set.
+   *
+   * Unlike `capability`, an item is *not* hidden when the active source cannot
+   * serve it — the sections do not all live in one database, and the request
+   * falls through to whichever system can answer. See visibleMenuItems.
+   */
+  reportingSection?: ReportingSection;
+  /** Optional divider label rendered above this item. */
+  group?: string;
 }
 
 /**
- * The whole navigable surface of this app. Four read-only views; there is
+ * The whole navigable surface of this app. Read-only views throughout; there is
  * deliberately no management, configuration or data-entry section.
  *
  * A role's `permissions` array (from the MONITOR roles table) is matched
@@ -24,12 +48,32 @@ export interface MenuItem {
  * everything — failing closed is the right default for an executive portal.
  */
 export const MENU_ITEMS: MenuItem[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, capability: 'overview' },
+  // The five operational sections, ported from the operating systems' own
+  // modules. Ordered subscribers → money → delivery → people, which is how the
+  // questions actually get asked.
+  {
+    id: 'subscriber-analytics',
+    label: 'Subscriber Analytics',
+    icon: Users,
+    reportingSection: 'subscriber_analytics',
+    group: 'Reporting',
+  },
+  { id: 'financial', label: 'Financial', icon: Wallet, reportingSection: 'financial' },
+  { id: 'field-operations', label: 'Operations', icon: Wrench, reportingSection: 'operations' },
+  { id: 'tech', label: 'Tech', icon: HardHat, reportingSection: 'tech' },
+  { id: 'employee', label: 'Employee', icon: User, reportingSection: 'employee' },
+
+  // Executive rollups.
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard, capability: 'overview', group: 'Executive' },
   { id: 'operations', label: 'Operations', icon: Activity, capability: 'operations' },
   { id: 'revenue', label: 'Revenue', icon: DollarSign, capability: 'revenue' },
   { id: 'financials', label: 'Financials', icon: Wallet, capability: 'financials' },
   // Spans every source, so it does not depend on the one currently selected.
   { id: 'consolidated', label: 'All Companies', icon: Layers },
+
+  // The only section that writes. Not tied to a source — it is the page that
+  // decides what the sources are.
+  { id: 'databases', label: 'Databases', icon: Database, group: 'Settings' },
 ];
 
 interface SidebarProps {
@@ -41,17 +85,31 @@ interface SidebarProps {
   userEmail?: string;
   permissions?: string[] | null;
   capabilities?: Capability[];
+  /** Sections that at least one configured system can answer. */
+  servableSections?: ReportingSection[];
 }
 
 /**
- * A section shows only when the user's role allows it *and* the active
- * source's schema can produce it. Passing capabilities as undefined (before
- * the source list has loaded) skips the second check rather than briefly
- * blanking the menu.
+ * Which sections the role may see.
+ *
+ * Two different rules, because the two families of pages behave differently:
+ *
+ *  - An executive page is tied to the *selected* source, so it is hidden when
+ *    that source's schema cannot produce it.
+ *  - An operational section is not. The money lives in NETMANAGER and the
+ *    technicians in GOWISER, and a request for a section the selected system
+ *    cannot serve falls through to one that can. So the test is whether *any*
+ *    configured system can answer it — hiding Tech merely because the user
+ *    happens to be pointed at NETMANAGER would make it unreachable, since
+ *    NETMANAGER is the default.
+ *
+ * Passing a list as undefined (before capabilities have loaded) skips that check
+ * rather than briefly blanking the menu.
  */
 export const visibleMenuItems = (
   permissions?: string[] | null,
-  capabilities?: Capability[]
+  capabilities?: Capability[],
+  servableSections?: ReportingSection[]
 ): MenuItem[] => {
   if (!permissions || permissions.length === 0) {
     return [];
@@ -59,9 +117,20 @@ export const visibleMenuItems = (
 
   return MENU_ITEMS.filter((item) => {
     if (!permissions.includes(item.id)) return false;
-    if (!item.capability || !capabilities) return true;
 
-    return capabilities.includes(item.capability);
+    if (item.capability && capabilities && !capabilities.includes(item.capability)) {
+      return false;
+    }
+
+    if (
+      item.reportingSection &&
+      servableSections &&
+      !servableSections.includes(item.reportingSection)
+    ) {
+      return false;
+    }
+
+    return true;
   });
 };
 
@@ -74,6 +143,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   userEmail,
   permissions,
   capabilities,
+  servableSections,
 }) => {
   const isDarkMode = useTheme();
   const palette = usePalette();
@@ -98,7 +168,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const items = visibleMenuItems(permissions, capabilities);
+  const items = visibleMenuItems(permissions, capabilities, servableSections);
 
   const activeStyle = {
     backgroundColor: `${palette.primary}33`,
@@ -202,13 +272,32 @@ const Sidebar: React.FC<SidebarProps> = ({
       } flex flex-col transition-all duration-300 ease-in-out overflow-hidden`}
     >
       <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden scrollbar-none">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const IconComponent = item.icon;
           const isActive = activeSection === item.id;
 
+          // A group heading belongs to the item that declares it, but only when
+          // that item is actually the first of its group left after filtering —
+          // otherwise a hidden section leaves a heading over the wrong item, or
+          // a heading with nothing under it.
+          const heading =
+            item.group && items.findIndex((candidate) => candidate.group === item.group) === index
+              ? item.group
+              : null;
+
           return (
+            <React.Fragment key={item.id}>
+              {heading && (
+                <p
+                  className={`px-4 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-widest ${
+                    isDarkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`}
+                >
+                  {heading}
+                </p>
+              )}
+
             <button
-              key={item.id}
               onClick={() => onSectionChange(item.id)}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
                 isActive
@@ -224,6 +313,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <span>{item.label}</span>
               </div>
             </button>
+            </React.Fragment>
           );
         })}
 

@@ -543,8 +543,14 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+  return createPortal(
+    // Portalled to body and raised above the mobile panel roots (`fixed inset-0
+    // z-[9999]` in CustomerDetails / TransactionListDetails). When this drawer is
+    // rendered as a SIBLING of such a panel — as TransactionListDetails does — a
+    // z-50 root simply loses to z-[9999] and the drawer never appears in phone
+    // view. Same reasoning as the two overlays at the bottom of this file, which
+    // sit higher still so they can cover this drawer.
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-[10010]">
       <div className={`h-full w-full max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
         }`}>
         {/* Header */}
@@ -1098,7 +1104,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         </div>,
         document.body
       )}
-    </div>
+    </div>,
+    document.body
   );
 });
 

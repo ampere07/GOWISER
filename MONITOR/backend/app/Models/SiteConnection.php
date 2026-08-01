@@ -100,7 +100,13 @@ class SiteConnection extends Model
             'timezone' => $this->timezone ?: '+08:00',
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 \PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+                // Bounds the TCP connect. Without it a branch server that is
+                // powered off but still answering ARP — or behind a firewall that
+                // drops rather than rejects — hangs the request for the OS default,
+                // which is over a minute. A dashboard must give up long before
+                // that and report the branch as unreachable.
+                \PDO::ATTR_TIMEOUT => max(1, (int) config('reporting.connect_timeout', 5)),
+            ], fn ($value) => $value !== null && $value !== '') : [],
         ];
     }
 }

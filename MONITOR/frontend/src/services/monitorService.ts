@@ -22,11 +22,11 @@ import {
 const CACHE_MS = 10000;
 
 export const monitorService = {
-  getSources: async (): Promise<{ sources: MonitorSource[]; default: string }> => {
+  getSources: async (): Promise<{ sources: MonitorSource[]; default: string | null }> => {
     return requestCache.get(
       'monitor_sources',
       async () => {
-        const response = await api.get<{ status: string; data: { sources: MonitorSource[]; default: string } }>(
+        const response = await api.get<{ status: string; data: { sources: MonitorSource[]; default: string | null } }>(
           '/monitor/sources'
         );
         return response.data.data;
