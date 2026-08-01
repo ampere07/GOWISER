@@ -28,6 +28,12 @@ const allColumns = [
   { key: 'fullName', label: 'Full Name', width: 'min-w-40' },
   { key: 'contactNumber', label: 'Contact Number', width: 'min-w-36' },
   { key: 'fullAddress', label: 'Full Address', width: 'min-w-56' },
+  // The three parts of the address as their own sortable columns. Placed next to
+  // Full Address, which still shows the whole thing; these are for grouping and
+  // sorting by area, which a single concatenated string cannot do.
+  { key: 'barangay', label: 'Barangay', width: 'min-w-36' },
+  { key: 'city', label: 'City', width: 'min-w-32' },
+  { key: 'region', label: 'Region', width: 'min-w-32' },
   { key: 'concern', label: 'Concern', width: 'min-w-36' },
   { key: 'concernRemarks', label: 'Concern Remarks', width: 'min-w-48' },
   { key: 'requestedBy', label: 'Requested By', width: 'min-w-36' },
@@ -41,6 +47,23 @@ const allColumns = [
   { key: 'duration', label: 'Duration', width: 'min-w-28' },
   { key: 'visitStatus', label: 'Visit Status', width: 'min-w-32' }
 ];
+
+/**
+ * Columns added after `serviceOrderVisibleColumns` started being persisted.
+ *
+ * Anyone who has used the page has a saved array that predates these, so without
+ * this they would be hidden for every existing user — the feature would look
+ * missing rather than new.
+ *
+ * Deliberately an explicit list rather than "every key missing from the saved
+ * array": a column can be absent because it is new, or because the user switched
+ * it off, and those two are indistinguishable from the stored data alone.
+ * Treating them alike would silently re-enable Start Time, End Time and Duration,
+ * which are hidden by default, and undo anyone's own choices.
+ *
+ * Add to this list when introducing a column that existing users should see.
+ */
+const COLUMNS_ADDED_SINCE_LAST_RELEASE = ['barangay', 'city', 'region'];
 
 const ServiceOrderPage: React.FC = () => {
   const calculateDuration = (start?: string | null, end?: string | null): string => {
@@ -116,7 +139,15 @@ const ServiceOrderPage: React.FC = () => {
     const saved = localStorage.getItem('serviceOrderVisibleColumns');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Reveal only the columns listed as new — see the constant's note on why
+          // this cannot be "everything missing from the saved array". Columns the
+          // user switched off stay off.
+          const added = COLUMNS_ADDED_SINCE_LAST_RELEASE.filter(key => !parsed.includes(key));
+
+          return added.length > 0 ? [...parsed, ...added] : parsed;
+        }
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
@@ -137,7 +168,37 @@ const ServiceOrderPage: React.FC = () => {
     const saved = localStorage.getItem('serviceOrderColumnOrder');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // A key missing from this list sorts by indexOf() === -1, which would put
+          // every newly added column to the far LEFT of the table, ahead of
+          // Timestamp. So each one is spliced in behind the neighbour it follows in
+          // allColumns — Barangay lands after Full Address rather than at either
+          // edge — while any order the user dragged for themselves is preserved.
+          const merged = [...parsed];
+
+          allColumns.forEach((col, index) => {
+            if (merged.includes(col.key)) return;
+
+            // Walk back to the nearest preceding column already in the list.
+            // Iterating allColumns in order means Barangay is placed first, so City
+            // then finds Barangay and Region finds City, keeping the three together.
+            let insertAt = merged.length;
+
+            for (let prev = index - 1; prev >= 0; prev--) {
+              const found = merged.indexOf(allColumns[prev].key);
+
+              if (found !== -1) {
+                insertAt = found + 1;
+                break;
+              }
+            }
+
+            merged.splice(insertAt, 0, col.key);
+          });
+
+          return merged;
+        }
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -731,11 +792,22 @@ const ServiceOrderPage: React.FC = () => {
             const normalizedValue = String(orderValue || '').toLowerCase().trim();
 
             if (key === 'barangay' || key === 'city' || key === 'region') {
-              // For location fields, also check fullAddress as fallback
               const address = String(serviceOrder.fullAddress || '').toLowerCase();
               const isMatch = typedFilter.value.some((opt: string) => {
                 const filterVal = String(opt).toLowerCase().trim();
-                return normalizedValue === filterVal || normalizedValue.includes(filterVal) || address.includes(filterVal);
+
+                // The API now returns barangay/city/region separately, so match the
+                // field itself when it has a value. The options come from the same
+                // customer columns, so they are exact — and an exact match cannot
+                // mistake a barangay for a city that shares its name, which scanning
+                // the concatenated address did.
+                if (normalizedValue) {
+                  return normalizedValue === filterVal;
+                }
+
+                // Only for records whose field is blank, where the address text is
+                // the sole evidence of where the job is.
+                return address.includes(filterVal);
               });
               if (!isMatch) { matchesFunnel = false; break; }
             } else {
@@ -1188,9 +1260,12 @@ const ServiceOrderPage: React.FC = () => {
   const filteredColumns = allColumns
     .filter(col => visibleColumns.includes(col.key))
     .sort((a, b) => {
+      // A key absent from columnOrder sorts last, not first. Raw indexOf returns -1,
+      // which would place an unordered column ahead of Timestamp at the left edge.
+      // The stored order is migrated on load, so this is a backstop.
       const indexA = columnOrder.indexOf(a.key);
       const indexB = columnOrder.indexOf(b.key);
-      return indexA - indexB;
+      return (indexA === -1 ? Infinity : indexA) - (indexB === -1 ? Infinity : indexB);
     });
 
   const renderCellValue = (serviceOrder: ServiceOrder, columnKey: string) => {
@@ -1248,6 +1323,14 @@ const ServiceOrderPage: React.FC = () => {
         return assignEmail;
       case 'repairCategory':
         return serviceOrder.repairCategory || '-';
+      // Explicit cases are required: the default arm below returns '-', so a column
+      // added without one renders an empty table of dashes rather than the data.
+      case 'barangay':
+        return serviceOrder.barangay || '-';
+      case 'city':
+        return serviceOrder.city || '-';
+      case 'region':
+        return serviceOrder.region || '-';
       case 'modifiedBy':
         return serviceOrder.modifiedBy || '-';
       case 'modifiedDate':
@@ -1269,9 +1352,11 @@ const ServiceOrderPage: React.FC = () => {
     const exportColumns = allColumns
       .filter(col => visibleColumns.includes(col.key))
       .sort((a, b) => {
+        // Same -1 guard as filteredColumns, so the CSV column order matches the
+        // table's rather than hoisting an unordered column to the first field.
         const indexA = columnOrder.indexOf(a.key);
         const indexB = columnOrder.indexOf(b.key);
-        return indexA - indexB;
+        return (indexA === -1 ? Infinity : indexA) - (indexB === -1 ? Infinity : indexB);
       });
 
     const getExportValue = (so: ServiceOrder, columnKey: string) => {
@@ -1299,6 +1384,11 @@ const ServiceOrderPage: React.FC = () => {
           }
           return exportEmail;
         case 'repairCategory': return so.repairCategory || '-';
+        // A separate switch from renderCellValue, with its own '-' default, so these
+        // have to be listed here too or the CSV exports a column of dashes.
+        case 'barangay': return so.barangay || '-';
+        case 'city': return so.city || '-';
+        case 'region': return so.region || '-';
         case 'modifiedBy': return so.modifiedBy || '-';
         case 'modifiedDate': return so.modifiedDate || '-';
         case 'startTime': return formatDateTime(so.start_time) || '-';

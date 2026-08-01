@@ -189,6 +189,13 @@ class ServiceOrderApiController extends Controller
                 $so->full_name = $c ? trim(($c->first_name ?? '') . ' ' . ($c->middle_initial ?? '') . ' ' . ($c->last_name ?? '')) : null;
                 $so->contact_number = $c ? $c->contact_number_primary : null;
                 $so->full_address = $c ? trim(($c->address ?? '') . ', ' . ($c->barangay ?? '') . ', ' . ($c->city ?? '') . ', ' . ($c->region ?? '')) : null;
+                // Also exposed individually, not only folded into full_address, so the
+                // table can column and sort on them and the funnel filter can match
+                // exactly instead of substring-searching the concatenated address —
+                // where a barangay named "San Jose" also matches a city of the same name.
+                $so->barangay = $c ? $c->barangay : null;
+                $so->city = $c ? $c->city : null;
+                $so->region = $c ? $c->region : null;
                 $so->contact_address = $c ? $c->address : null;
                 $so->email_address = $c ? $c->email_address : null;
                 $so->house_front_picture_url = $c ? $c->house_front_picture_url : null;
@@ -444,6 +451,11 @@ class ServiceOrderApiController extends Controller
                     DB::raw("CONCAT(IFNULL(c.first_name, ''), ' ', IFNULL(c.middle_initial, ''), ' ', IFNULL(c.last_name, '')) as full_name"),
                     'c.contact_number_primary as contact_number',
                     DB::raw("CONCAT(IFNULL(c.address, ''), ', ', IFNULL(c.barangay, ''), ', ', IFNULL(c.city, ''), ', ', IFNULL(c.region, '')) as full_address"),
+                    // Individually as well as concatenated above — see index(). Safe to
+                    // select alongside so.*: service_orders has no columns of these names.
+                    'c.barangay',
+                    'c.city',
+                    'c.region',
                     'c.address as contact_address',
                     'c.email_address',
                     'c.house_front_picture_url',

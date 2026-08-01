@@ -166,6 +166,12 @@ class ServiceOrderController extends Controller
                     'full_name' => $customer ? trim(($customer->first_name ?? '') . ' ' . ($customer->middle_initial ?? '') . ' ' . ($customer->last_name ?? '')) : null,
                     'contact_number' => $customer->contact_number_primary ?? null,
                     'full_address' => $customer ? trim(($customer->address ?? '') . ', ' . ($customer->barangay ?? '') . ', ' . ($customer->city ?? '') . ', ' . ($customer->region ?? '')) : null,
+                    // Individually too, matching Api\ServiceOrderApiController: the table
+                    // columns and the funnel filter read these rather than parsing the
+                    // concatenated address back apart.
+                    'barangay' => $customer->barangay ?? null,
+                    'city' => $customer->city ?? null,
+                    'region' => $customer->region ?? null,
                     'contact_address' => $customer->address ?? null,
                     'date_installed' => $billingAccount->date_installed ?? null,
                     'email_address' => $customer->email_address ?? null,
@@ -445,6 +451,10 @@ class ServiceOrderController extends Controller
                 'full_name' => $customer ? trim(($customer->first_name ?? '') . ' ' . ($customer->middle_initial ?? '') . ' ' . ($customer->last_name ?? '')) : null,
                 'contact_number' => $customer->contact_number_primary ?? null,
                 'full_address' => $customer ? trim(($customer->address ?? '') . ', ' . ($customer->barangay ?? '') . ', ' . ($customer->city ?? '') . ', ' . ($customer->region ?? '')) : null,
+                // Individually too — see the same block in index() above.
+                'barangay' => $customer->barangay ?? null,
+                'city' => $customer->city ?? null,
+                'region' => $customer->region ?? null,
                 'contact_address' => $customer->address ?? null,
                 'date_installed' => $billingAccount->date_installed ?? null,
                 'email_address' => $customer->email_address ?? null,
