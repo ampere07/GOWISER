@@ -1002,14 +1002,14 @@ const LiveMonitor: React.FC = () => {
                     <span
                       className="px-3 py-1 rounded-lg font-bold uppercase tracking-tight bg-blue-600/20 text-blue-500 border-2 border-blue-500/40"
                       style={{ fontSize: `${fontSize * 1.4}px` }}
-                      title="Job Orders worked on"
+                      title="Job Orders completed"
                     >
                       JO: {meta.jo_count ?? 0}
                     </span>
                     <span
                       className="px-3 py-1 rounded-lg font-bold uppercase tracking-tight bg-purple-600/20 text-purple-500 border-2 border-purple-500/40"
                       style={{ fontSize: `${fontSize * 1.4}px` }}
-                      title="Service Orders worked on"
+                      title="Service Orders completed"
                     >
                       SO: {meta.so_count ?? 0}
                     </span>

@@ -23,6 +23,8 @@ export interface ServiceOrderData {
   house_front_picture_url?: string;
   plan?: string;
   group_name?: string;
+  /** 'Prepaid' | 'Postpaid', copied in from the billing account by ServiceOrderApiController. */
+  generation_type?: string | null;
   username?: string;
   /**
    * PPPoE password from technical_details. service_orders does not store it, so

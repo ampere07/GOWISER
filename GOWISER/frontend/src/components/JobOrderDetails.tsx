@@ -661,6 +661,13 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
 
         let message = 'Job Order approved successfully! Customer, billing account, and technical details have been created.';
 
+        // A VIP job order is approved as a standard postpaid account, so the prepaid pay-first
+        // steps are skipped even when the customer signed up under a prepaid billing type. Stated
+        // here because the difference is otherwise invisible until someone opens the account.
+        if (response.data?.vip_enabled) {
+          message += '\n\nApproved as VIP: the account was created Active and is handled the same as a postpaid customer — no prepaid restriction was applied.';
+        }
+
         if (userCreated) {
           message += `\n\nCustomer Login Credentials:\nUsername: ${accountNumber}\nPassword: ${contactNumber}`;
         }
@@ -1139,8 +1146,8 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         );
 
-      // A VIP job order is approved into the VIP billing status and is never billed, so VAT and
-      // withholding are suppressed on it — the same rule the JO Assign Form enforces.
+      // VAT and withholding are suppressed on a VIP job order — the rule the JO Assign Form
+      // enforces by disabling both checkboxes when VIP is ticked.
       case 'vip': {
         // Explicit false is a real answer ("No"), not a missing value — only null/undefined,
         // meaning a job order predating the column, reads as unset.

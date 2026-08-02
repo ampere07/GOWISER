@@ -284,13 +284,40 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     return initialVisibility;
   });
 
+  /**
+   * Folds fields added to defaultFields since the user last reordered back into their saved order.
+   *
+   * Each missing field is spliced in after its nearest preceding default neighbour that survived
+   * in the saved order, rather than appended — so PPPOE Password lands right after Username where
+   * the default layout puts it, instead of alone at the bottom of the panel. Saved entries are
+   * never dropped, so a user's own ordering is preserved as-is.
+   */
+  const mergeFieldOrder = (saved: string[]): string[] => {
+    const result = [...saved];
+
+    defaultFields.forEach((field, index) => {
+      if (result.includes(field)) return;
+
+      let insertAt = result.length;
+      for (let i = index - 1; i >= 0; i--) {
+        const anchor = result.indexOf(defaultFields[i]);
+        if (anchor !== -1) {
+          insertAt = anchor + 1;
+          break;
+        }
+      }
+      result.splice(insertAt, 0, field);
+    });
+
+    return result;
+  };
+
   const [fieldOrder, setFieldOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(FIELD_ORDER_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const missingFields = defaultFields.filter(f => !parsed.includes(f));
-        return [...parsed, ...missingFields];
+        return Array.isArray(parsed) ? mergeFieldOrder(parsed) : defaultFields;
       } catch (e) {
         return defaultFields;
       }

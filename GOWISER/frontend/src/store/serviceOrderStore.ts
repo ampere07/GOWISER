@@ -16,6 +16,8 @@ export interface ServiceOrder {
     plan: string;
     provider: string;
     affiliate: string;
+    /** 'Prepaid' | 'Postpaid' from the billing account. Empty when the account has neither set. */
+    generationType: string;
     username: string;
     /** From technical_details, falling back to the account's install job order. */
     pppoePassword: string;
@@ -96,6 +98,7 @@ export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => 
         plan: order.plan || '',
         provider: order.group_name || '',
         affiliate: order.group_name || '',
+        generationType: order.generation_type || '',
         username: order.username || '',
         // Resolved by ServiceOrderApiController from technical_details.
         pppoePassword: order.pppoe_password || '',

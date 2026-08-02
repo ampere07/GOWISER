@@ -187,6 +187,7 @@ class NetmanagerReportsDriver implements ReportsDriver
             ],
 
             'by_plan' => $this->revenueByPlan($db, $from, $to, $branch),
+            'by_channel' => $this->incomeByChannel($db, $from, $to, $branch),
             'by_method' => $this->revenueByMethod($db, $from, $to, $branch),
             'by_expense_type' => $this->expensesByType($db, $expensePeriod, $from, $to, $branch),
             'payment_notes' => $this->paymentNotes($db, $from, $to, $branch),
@@ -699,9 +700,14 @@ class NetmanagerReportsDriver implements ReportsDriver
         $row = $query
             ->selectRaw('COUNT(*) AS total')
             ->selectRaw("SUM(status = 'active') AS active")
-            ->selectRaw("SUM(status = 'pending') AS pending")
-            ->selectRaw("SUM(status = 'suspended') AS suspended")
-            ->selectRaw("SUM(status = 'expired') AS expired")
+            // NETMANAGER has no VIP or Pullout status of its own; the columns exist so both
+            // sources answer the same shape, and report a truthful zero rather than absent keys
+            // the frontend would have to special-case.
+            ->selectRaw("SUM(status = 'vip') AS vip")
+            ->selectRaw("SUM(status = 'inactive') AS inactive")
+            ->selectRaw("SUM(status = 'pullout') AS pullout")
+            ->selectRaw("SUM(status IN ('restricted', 'suspended')) AS restricted")
+            ->selectRaw("SUM(status IN ('disconnected', 'expired')) AS disconnected")
             ->selectRaw("SUM(status = 'active' AND subscription_end BETWEEN ? AND ?) AS expiring_3", [$today, $plus3])
             ->selectRaw("SUM(status = 'active' AND subscription_end BETWEEN ? AND ?) AS expiring_7", [$today, $plus7])
             ->selectRaw('SUM(created_at >= ?) AS new_30day', [$minus30])
@@ -710,9 +716,11 @@ class NetmanagerReportsDriver implements ReportsDriver
         return [
             'total' => (int) ($row->total ?? 0),
             'active' => (int) ($row->active ?? 0),
-            'pending' => (int) ($row->pending ?? 0),
-            'suspended' => (int) ($row->suspended ?? 0),
-            'expired' => (int) ($row->expired ?? 0),
+            'vip' => (int) ($row->vip ?? 0),
+            'inactive' => (int) ($row->inactive ?? 0),
+            'pullout' => (int) ($row->pullout ?? 0),
+            'restricted' => (int) ($row->restricted ?? 0),
+            'disconnected' => (int) ($row->disconnected ?? 0),
             'expiring_3day' => (int) ($row->expiring_3 ?? 0),
             'expiring_7day' => (int) ($row->expiring_7 ?? 0),
             'new_30day' => (int) ($row->new_30day ?? 0),
@@ -749,10 +757,11 @@ class NetmanagerReportsDriver implements ReportsDriver
             ->selectRaw('barangay, municipality, province')
             ->selectRaw('COUNT(*) AS total')
             ->selectRaw("SUM(status = 'active') AS active")
-            ->selectRaw("SUM(status = 'expired') AS expired")
+            ->selectRaw("SUM(status = 'vip') AS vip")
+            ->selectRaw("SUM(status = 'inactive') AS inactive")
+            ->selectRaw("SUM(status = 'pullout') AS pullout")
             ->groupBy('barangay', 'municipality', 'province')
             ->orderByRaw('COUNT(*) DESC')
-            ->limit(self::TOP_N)
             ->get()
             ->map(fn ($row) => [
                 'barangay' => (string) $row->barangay,
@@ -760,7 +769,9 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'province' => (string) ($row->province ?? ''),
                 'total' => (int) $row->total,
                 'active' => (int) $row->active,
-                'expired' => (int) $row->expired,
+                'vip' => (int) $row->vip,
+                'inactive' => (int) $row->inactive,
+                'pullout' => (int) $row->pullout,
             ])
             ->all();
     }
@@ -1054,6 +1065,53 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'total' => round((float) $row->total, 2),
             ])
             ->all();
+    }
+
+    /**
+     * Channel classifier over `payments.method`. Mirrors the GOWISER driver so both sources
+     * answer the same four buckets — see PAYMENT_CHANNEL_SQL there for why GCash is caught
+     * before the cash test, and why `other` exists rather than being dropped.
+     */
+    private const PAYMENT_CHANNEL_SQL = "CASE
+        WHEN UPPER(COALESCE(py.method, '')) LIKE '%XENDIT%' THEN 'xendit'
+        WHEN UPPER(COALESCE(py.method, '')) LIKE '%PNB%' THEN 'pnb'
+        WHEN UPPER(COALESCE(py.method, '')) LIKE '%GCASH%'
+          OR UPPER(COALESCE(py.method, '')) LIKE '%G-CASH%' THEN 'other'
+        WHEN UPPER(COALESCE(py.method, '')) LIKE '%CASH%' THEN 'cash'
+        ELSE 'other'
+    END";
+
+    /** Income split across Cash, PNB and Xendit, with everything else totalled as `other`. */
+    private function incomeByChannel(ConnectionInterface $db, string $from, string $to, ?int $branch): array
+    {
+        $rows = $this->paidPayments($db, $branch)
+            ->whereBetween(DB::raw('DATE(py.payment_date)'), [$from, $to])
+            ->selectRaw(self::PAYMENT_CHANNEL_SQL . ' AS channel')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('COALESCE(SUM(py.amount), 0) AS total')
+            ->groupBy(DB::raw(self::PAYMENT_CHANNEL_SQL))
+            ->get();
+
+        $channels = [
+            'cash' => ['amount' => 0.0, 'count' => 0],
+            'pnb' => ['amount' => 0.0, 'count' => 0],
+            'xendit' => ['amount' => 0.0, 'count' => 0],
+            'other' => ['amount' => 0.0, 'count' => 0],
+        ];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->channel;
+            if (!isset($channels[$key])) {
+                continue;
+            }
+
+            $channels[$key] = [
+                'amount' => round((float) $row->total, 2),
+                'count' => (int) $row->cnt,
+            ];
+        }
+
+        return $channels;
     }
 
     private function revenueByMethod(ConnectionInterface $db, string $from, string $to, ?int $branch): array

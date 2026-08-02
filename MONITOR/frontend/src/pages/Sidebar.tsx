@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   User,
+  UserCog,
   Users,
   Wallet,
   Wrench,
@@ -16,6 +17,7 @@ import { useTheme } from '../hooks/useTheme';
 import { usePalette } from '../hooks/usePalette';
 import { Capability } from '../types/monitor';
 import { ReportingSection } from '../types/reporting';
+import { canView } from '../utils/permissions';
 
 export interface MenuItem {
   id: string;
@@ -71,9 +73,9 @@ export const MENU_ITEMS: MenuItem[] = [
   // Spans every source, so it does not depend on the one currently selected.
   { id: 'consolidated', label: 'All Companies', icon: Layers },
 
-  // The only section that writes. Not tied to a source — it is the page that
-  // decides what the sources are.
+  // The two sections that write, both against MONITOR's own database. Not tied to a source.
   { id: 'databases', label: 'Databases', icon: Database, group: 'Settings' },
+  { id: 'users', label: 'Users', icon: UserCog },
 ];
 
 interface SidebarProps {
@@ -116,7 +118,9 @@ export const visibleMenuItems = (
   }
 
   return MENU_ITEMS.filter((item) => {
-    if (!permissions.includes(item.id)) return false;
+    // `<id>.view`, not a bare id: permissions now arrive as section.verb grants, so a role
+    // holding only `financial.export` does not get the Financial page in the menu.
+    if (!canView(permissions, item.id)) return false;
 
     if (item.capability && capabilities && !capabilities.includes(item.capability)) {
       return false;

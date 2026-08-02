@@ -12,6 +12,7 @@ import FieldOperations from './FieldOperations';
 import Tech from './Tech';
 import Employee from './Employee';
 import Databases from './Databases';
+import Users from './Users';
 import { UserData } from '../types/api';
 import { useTheme } from '../hooks/useTheme';
 import { useMonitorStore } from '../store/monitorStore';
@@ -184,6 +185,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         return <Consolidated refreshToken={refreshToken} />;
       case 'databases':
         return <Databases refreshToken={refreshToken} />;
+      case 'users':
+        return <Users user={user} refreshToken={refreshToken} />;
       case 'overview':
       default:
         return <Overview refreshToken={refreshToken} />;

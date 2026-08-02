@@ -30,6 +30,8 @@ interface Plan {
   plan_name: string;
   description?: string;
   price: number;
+  /** Set per-plan in GOWISER. The API already filters on it; see the plan options below. */
+  show_in_application?: boolean;
 }
 
 interface Promo {
@@ -1239,6 +1241,15 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
             placeholder="Select plan"
             options={plans
               .filter(plan => {
+                // Second line of defence: the API already excludes hidden plans, so this only
+                // matters if a stale response is in hand. Compared against false rather than
+                // truthiness, so a plan from an API that predates the column stays selectable
+                // instead of the list silently emptying.
+                if (plan.show_in_application === false) return false;
+
+                // Legacy name-based exclusion, kept until the internal plans have actually been
+                // unticked in GOWISER — dropping it now would surface every VIP/WFH plan, since
+                // show_in_application defaults to true for existing rows.
                 const planNameLower = plan.plan_name.toLowerCase();
                 return !planNameLower.includes('wfh') &&
                   !planNameLower.includes('vip') &&

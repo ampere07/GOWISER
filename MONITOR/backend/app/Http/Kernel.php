@@ -63,6 +63,8 @@ class Kernel extends HttpKernel
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'executive' => \App\Http\Middleware\EnsureExecutiveAccess::class,
+        'permission' => \App\Http\Middleware\EnsurePermission::class,
+        'superadmin' => \App\Http\Middleware\EnsureSuperadmin::class,
         // The only middleware in this app that permits a write, and it permits
         // it against MONITOR's own tables only. See EnsureDatabaseAdmin.
         'db-admin' => \App\Http\Middleware\EnsureDatabaseAdmin::class,

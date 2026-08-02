@@ -349,15 +349,32 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     );
   };
 
-  // Flatten menu items for collapsed icon-only view
+  // Flatten menu items for collapsed icon-only view.
+  //
+  // Deduplicated by id, which is what keeps this list renderable: the same destination can sit
+  // under two groups — 'team-agent' is a child of both Agent and Users — and once the group
+  // headers are dropped, both copies land in ONE list keyed by item.id. Duplicate keys in a single
+  // list are undefined behaviour in React: it warns, then reconciles unpredictably, orphaning
+  // rendered nodes and silently dropping the entries that follow. Collapsing and reopening the
+  // sidebar was leaving stray label-less icons behind and losing the tail of the menu because of
+  // exactly that. Showing one icon per destination is also the right thing on its own — two
+  // identical icons pointing at the same section tell the user nothing.
   const flattenForCollapsed = (items: MenuItem[]): MenuItem[] => {
     const result: MenuItem[] = [];
+    const seen = new Set<string>();
+
+    const push = (item: MenuItem) => {
+      if (seen.has(item.id)) return;
+      seen.add(item.id);
+      result.push(item);
+    };
+
     items.forEach(item => {
       if (item.children && item.children.length > 0) {
         // Push children directly (skip the parent group header)
-        item.children.forEach(child => result.push(child));
+        item.children.forEach(push);
       } else {
-        result.push(item);
+        push(item);
       }
     });
     return result;
@@ -377,7 +394,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
   // ---- COLLAPSED MODE ----
   if (isCollapsed) {
     return (
+      // Keyed per mode so toggling remounts the tree instead of reconciling the icon-only list
+      // against the labelled one. Both modes return div > nav > keyed rows, so without this React
+      // matches them position-by-position and carries collapsed rows over into the expanded view.
+      // Only the DOM is remounted — this component's own state (expandedItems) is untouched.
       <div
+        key="sidebar-collapsed"
         className={`w-14 h-full flex flex-col border-r transition-all duration-300 ease-in-out overflow-visible ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
           }`}
         style={{ position: 'relative' }}
@@ -510,7 +532,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
   };
 
   return (
-    <div className={`w-64 border-r h-full ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'} flex flex-col transition-all duration-300 ease-in-out overflow-hidden`}>
+    // See the collapsed branch: distinct key so the two modes never share reconciled DOM.
+    <div
+      key="sidebar-expanded"
+      className={`w-64 border-r h-full ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'} flex flex-col transition-all duration-300 ease-in-out overflow-hidden`}
+    >
       <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden scrollbar-none">
         {filteredMenuItems.map(item => renderMenuItem(item))}
       </nav>

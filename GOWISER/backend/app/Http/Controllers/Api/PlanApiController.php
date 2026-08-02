@@ -39,6 +39,7 @@ class PlanApiController extends Controller
                     'plan_list.plan_name as name',
                     'plan_list.description',
                     'plan_list.price',
+                    'plan_list.show_in_application',
                     'plan_list.organization_id',
                     'plan_list.modified_date',
                     'users.email_address as modified_by'
@@ -80,7 +81,8 @@ class PlanApiController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255|unique:plan_list,plan_name',
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0'
+                'price' => 'required|numeric|min:0',
+                'show_in_application' => 'nullable|boolean'
             ]);
 
             if ($validator->fails()) {
@@ -100,6 +102,10 @@ class PlanApiController extends Controller
                 'plan_name' => $request->input('name'),
                 'description' => $request->input('description', ''),
                 'price' => $request->input('price'),
+                // Defaults to visible when the client omits it — a plan is offered on the
+                // application form unless someone deliberately hides it. boolean() rather than
+                // input() so the JSON false, "0" and "false" all land as a real false.
+                'show_in_application' => $request->boolean('show_in_application', true),
                 'organization_id' => $organizationId,
                 'modified_date' => $now,
                 'modified_by_user' => $currentUserId
@@ -112,6 +118,7 @@ class PlanApiController extends Controller
                     'plan_list.plan_name as name',
                     'plan_list.description',
                     'plan_list.price',
+                    'plan_list.show_in_application',
                     'plan_list.organization_id',
                     'plan_list.modified_date',
                     'users.email_address as modified_by'
@@ -157,6 +164,7 @@ class PlanApiController extends Controller
                     'plan_list.plan_name as name',
                     'plan_list.description',
                     'plan_list.price',
+                    'plan_list.show_in_application',
                     'plan_list.modified_date',
                     'users.email_address as modified_by'
                 )
@@ -188,7 +196,8 @@ class PlanApiController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
                 'description' => 'nullable|string',
-                'price' => 'required|numeric|min:0'
+                'price' => 'required|numeric|min:0',
+                'show_in_application' => 'nullable|boolean'
             ]);
 
             if ($validator->fails()) {
@@ -240,15 +249,23 @@ class PlanApiController extends Controller
             $currentUserId = $this->resolveUserId($request);
             $now = now();
             
+            $updates = [
+                'plan_name' => $request->input('name'),
+                'description' => $request->input('description', ''),
+                'price' => $request->input('price'),
+                'modified_date' => $now,
+                'modified_by_user' => $currentUserId
+            ];
+
+            // Only written when the client actually sent it, so a partial update from an older
+            // client cannot silently flip a deliberately hidden plan back into the form.
+            if ($request->has('show_in_application')) {
+                $updates['show_in_application'] = $request->boolean('show_in_application');
+            }
+
             DB::table('plan_list')
                 ->where('id', $id)
-                ->update([
-                    'plan_name' => $request->input('name'),
-                    'description' => $request->input('description', ''),
-                    'price' => $request->input('price'),
-                    'modified_date' => $now,
-                    'modified_by_user' => $currentUserId
-                ]);
+                ->update($updates);
             
             $plan = DB::table('plan_list')
                 ->leftJoin('users', 'plan_list.modified_by_user', '=', 'users.id')
@@ -257,6 +274,7 @@ class PlanApiController extends Controller
                     'plan_list.plan_name as name',
                     'plan_list.description',
                     'plan_list.price',
+                    'plan_list.show_in_application',
                     'plan_list.modified_date',
                     'users.email_address as modified_by'
                 )

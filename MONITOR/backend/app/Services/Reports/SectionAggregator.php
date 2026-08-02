@@ -85,7 +85,7 @@ class SectionAggregator
 
         return array_merge($this->envelope($payloads, $labels), [
             'kpi' => $this->sumFields($payloads, 'kpi', [
-                'total', 'active', 'pending', 'suspended', 'expired',
+                'total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected',
                 'expiring_3day', 'expiring_7day', 'new_30day', 'in_arrears', 'receivables',
             ]),
             'status' => $this->mergeStatusCounts($payloads),
@@ -121,7 +121,9 @@ class SectionAggregator
         arsort($byStatus);
 
         return array_merge(
-            $this->sumFields($payloads, 'status', ['total', 'active', 'pending', 'suspended', 'expired']),
+            $this->sumFields($payloads, 'status', [
+                'total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected',
+            ]),
             ['by_status' => $byStatus]
         );
     }
@@ -147,21 +149,24 @@ class SectionAggregator
                         'province' => $row['province'] ?? '',
                         'total' => 0,
                         'active' => 0,
-                        'expired' => 0,
+                        'vip' => 0,
+                        'inactive' => 0,
+                        'pullout' => 0,
                     ];
                 }
 
-                $rows[$key]['total'] += (int) ($row['total'] ?? 0);
-                $rows[$key]['active'] += (int) ($row['active'] ?? 0);
-                $rows[$key]['expired'] += (int) ($row['expired'] ?? 0);
+                foreach (['total', 'active', 'vip', 'inactive', 'pullout'] as $field) {
+                    $rows[$key][$field] += (int) ($row[$field] ?? 0);
+                }
             }
         }
 
         usort($rows, fn ($a, $b) => $b['total'] <=> $a['total']);
 
-        // Re-capped after merging: each database contributed its own top ten, so
-        // the merged list is longer and has to be trimmed to a real top ten.
-        return array_slice(array_values($rows), 0, 10);
+        // Deliberately uncapped. This feeds the Barangay Analytics table, which lists the whole
+        // footprint and sorts client-side; trimming to a top ten here would silently drop the
+        // barangays someone opened the table to look up.
+        return array_values($rows);
     }
 
     /**
@@ -242,6 +247,35 @@ class SectionAggregator
     //  FINANCIAL
     // ═════════════════════════════════════════════════════════════════════
 
+    /**
+     * Payment channels summed across databases.
+     *
+     * A fixed-key map rather than a ranked list, so the four channels stay in a known order and
+     * a database that saw no Xendit payments contributes zero instead of removing the bucket.
+     */
+    private function mergeChannels(array $payloads): array
+    {
+        $channels = [
+            'cash' => ['amount' => 0.0, 'count' => 0],
+            'pnb' => ['amount' => 0.0, 'count' => 0],
+            'xendit' => ['amount' => 0.0, 'count' => 0],
+            'other' => ['amount' => 0.0, 'count' => 0],
+        ];
+
+        foreach ($payloads as $payload) {
+            foreach ($channels as $key => $_) {
+                $channels[$key]['amount'] += (float) ($payload['by_channel'][$key]['amount'] ?? 0);
+                $channels[$key]['count'] += (int) ($payload['by_channel'][$key]['count'] ?? 0);
+            }
+        }
+
+        foreach ($channels as $key => $channel) {
+            $channels[$key]['amount'] = round($channel['amount'], 2);
+        }
+
+        return $channels;
+    }
+
     private function financial(array $payloads, array $labels): array
     {
         $kpi = $this->sumFields($payloads, 'kpi', [
@@ -274,6 +308,7 @@ class SectionAggregator
                 'period' => $first['trend']['period'] ?? 'monthly',
                 'points' => $this->mergeTrend($payloads, fn ($payload) => $payload['trend']['points'] ?? []),
             ],
+            'by_channel' => $this->mergeChannels($payloads),
             'by_plan' => $this->rank($payloads, 'by_plan', 'total'),
             'by_method' => $this->rank($payloads, 'by_method', 'total'),
             'by_expense_type' => $this->rank($payloads, 'by_expense_type', 'total'),

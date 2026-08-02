@@ -210,6 +210,9 @@ class ServiceOrderApiController extends Controller
                 // Manually populate fields that were previously joined
                 $so->account_id = $ba ? $ba->id : null;
                 $so->date_installed = $ba ? $ba->date_installed : null;
+                // Prepaid vs Postpaid lives on the billing account, not on the service order.
+                // Carried through so the sidebar can group by it without a second round trip.
+                $so->generation_type = $ba ? $ba->generation_type : null;
 
                 // Customer details
                 $so->full_name = $c ? trim(($c->first_name ?? '') . ' ' . ($c->middle_initial ?? '') . ' ' . ($c->last_name ?? '')) : null;

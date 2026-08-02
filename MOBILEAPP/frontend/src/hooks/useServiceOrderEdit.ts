@@ -904,6 +904,10 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
     if (f.visitStatus === 'Done') {
       if (!items.some(i => i.itemId && i.quantity && i.itemId !== 'None') && !items.some(i => i.itemId === 'None')) e.items = 'Required item or "None"';
       if (!f.visitBy) e.visitBy = 'Required';
+      // Enforced in both visit branches below, because renderInput marks Visit Remarks with an
+      // asterisk in both — until now the asterisk was the only thing stopping a blank submit,
+      // which is to say nothing was. Trimmed, so a field of spaces is not a record of the visit.
+      if (!f.visitRemarks?.trim()) e.visitRemarks = 'Required';
       const reloc = ['Migrate', 'Relocate', 'Transfer LCP/NAP/PORT', 'Reactivation'];
       if (reloc.includes(f.repairCategory)) {
         if ((f.repairCategory === 'Migrate' || f.repairCategory === 'Reactivation') && !f.newRouterModemSN) e.newRouterModemSN = 'Required';
@@ -928,6 +932,8 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
       if (!f.visitBy) e.visitBy = 'Required';
       if (!f.visitWith) e.visitWith = 'Required';
       if (!f.visitWithOther) e.visitWithOther = 'Required';
+      // A rescheduled or failed visit is exactly the case where the reason matters most.
+      if (!f.visitRemarks?.trim()) e.visitRemarks = 'Required';
     }
   }
   if (f.supportStatus === 'Failed' || (f.supportStatus === 'For Visit' && f.visitStatus === 'Failed')) {

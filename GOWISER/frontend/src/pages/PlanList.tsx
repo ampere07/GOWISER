@@ -12,6 +12,8 @@ interface Plan {
   name: string;
   description?: string;
   price: number;
+  /** Whether the plan is offered on the public application form. Edited in AddPlanModal. */
+  show_in_application?: boolean;
   is_active?: boolean;
   organization_id?: number | null;
   modified_date?: string;

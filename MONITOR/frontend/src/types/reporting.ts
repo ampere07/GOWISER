@@ -150,9 +150,12 @@ interface BranchScoped {
 export interface SubscriberKpis {
   total: number;
   active: number;
-  pending: number;
-  suspended: number;
-  expired: number;
+  vip: number;
+  inactive: number;
+  pullout: number;
+  /** Named for what the business calls them; GOWISER stores these as Suspended and Overdue. */
+  restricted: number;
+  disconnected: number;
   /** Null on GOWISER, which stores no subscription end date. */
   expiring_3day: number | null;
   expiring_7day: number | null;
@@ -165,9 +168,11 @@ export interface SubscriberKpis {
 export interface StatusCounts {
   total: number;
   active: number;
-  pending: number;
-  suspended: number;
-  expired: number;
+  vip: number;
+  inactive: number;
+  pullout: number;
+  restricted: number;
+  disconnected: number;
   /** Every status the data actually holds, including ones not named above. */
   by_status: Record<string, number>;
 }
@@ -178,7 +183,9 @@ export interface BarangayRow {
   province: string;
   total: number;
   active: number;
-  expired: number;
+  vip: number;
+  inactive: number;
+  pullout: number;
 }
 
 export interface OverdueRow extends SourceTagged {
@@ -284,6 +291,11 @@ export interface FinancialData extends SectionBase, BranchScoped {
   kpi: FinancialKpi;
   series: TrendPoint[];
   trend: { period: Granularity; points: TrendPoint[] };
+  /**
+   * Income split by payment channel. Fixed keys, always all four present — `other` carries
+   * everything that is not one of the three named channels, so the parts sum to `kpi.income`.
+   */
+  by_channel: Record<'cash' | 'pnb' | 'xendit' | 'other', { amount: number; count: number }>;
   by_plan: LabelledTotal[];
   by_method: LabelledTotal[];
   by_expense_type: LabelledTotal[];

@@ -827,19 +827,14 @@ class MonitorController extends Controller
 
                     // 2b. Daily JO/SO counts for the widget.
                     //
-                    // Counted on OVERLAP with the view window, matching exactly what the timeline
-                    // below bills as working time — a task that began yesterday and is still open
-                    // has its time counted toward today, so it has to count as a task today too.
-                    // Filtering on start_time alone would show "Daily Working: 2h" next to "JO: 0"
-                    // for that technician, which reads as a bug.
-                    //
-                    // Re-filtered against the window rather than just counting $allTasks, because
-                    // the queries above deliberately pull in ANY task with a NULL end_time
+                    // Counted on OVERLAP with the view window: a task that began yesterday and was
+                    // finished today belongs to today, so start_time alone is not enough to place
+                    // it. Re-filtered against the window rather than just counting $allTasks,
+                    // because the queries above deliberately pull in ANY task with a NULL end_time
                     // regardless of date (the timeline needs those to spot work in progress) — so
                     // counting $allTasks directly would let an abandoned task from weeks ago
                     // inflate today's figure. Tasks with no start_time are excluded: they are
-                    // assigned but never begun, so nothing was done. 'failed' is already dropped
-                    // by $allTasks.
+                    // assigned but never begun, so nothing was done.
                     $tasksInWindow = $allTasks->filter(function ($t) use ($viewStart, $timeBound) {
                         if (empty($t->start_time)) {
                             return false;
@@ -854,8 +849,24 @@ class MonitorController extends Controller
                         }
                         return $taskStart->lte($timeBound) && $taskEnd->gte($viewStart);
                     });
-                    $joCount = $tasksInWindow->where('task_type', 'jo')->count();
-                    $soCount = $tasksInWindow->where('task_type', 'so')->count();
+
+                    // Finished work only. A task the technician is still on is genuine work in
+                    // progress and the timeline below still bills its time, but it is not
+                    // something they completed, and the board reads these badges as a completed
+                    // tally. So an in-progress task deliberately shows working time against
+                    // "JO: 0" — that mismatch is the intended reading, not a bug to reconcile.
+                    //
+                    // JO carries the outcome on onsite_status and SO on visit_status, both aliased
+                    // to `status` by the queries above. 'resolved' and 'completed' are accepted
+                    // next to 'done' so a status written in either vocabulary still counts.
+                    // 'failed' never reaches here — $allTasks drops it.
+                    $completedTaskStatuses = ['done', 'completed', 'resolved'];
+                    $completedInWindow = $tasksInWindow->filter(function ($t) use ($completedTaskStatuses) {
+                        return in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
+                    });
+
+                    $joCount = $completedInWindow->where('task_type', 'jo')->count();
+                    $soCount = $completedInWindow->where('task_type', 'so')->count();
 
                     // Define effective start for availability (either view start or time_in)
                     $effectiveStart = $viewStart->copy();

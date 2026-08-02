@@ -171,6 +171,35 @@ const defaultFields = [
 
 const initialVisibility = defaultFields.reduce((acc: Record<string, boolean>, field) => ({ ...acc, [field]: true }), {});
 
+/**
+ * Folds fields added to defaultFields since the user last reordered back into their saved order.
+ *
+ * Without this, a saved order replaces the defaults wholesale and a newly added field — PPPOE
+ * Password, say — is simply absent from the panel forever for anyone who had ever opened the
+ * field settings. Each missing field is spliced in after its nearest preceding default neighbour
+ * that survived in the saved order, so it lands where the default layout puts it rather than at
+ * the bottom. Saved entries are never dropped, so the user's own ordering is preserved.
+ */
+const mergeFieldOrder = (saved: string[]): string[] => {
+  const result = [...saved];
+
+  defaultFields.forEach((field, index) => {
+    if (result.includes(field)) return;
+
+    let insertAt = result.length;
+    for (let i = index - 1; i >= 0; i--) {
+      const anchor = result.indexOf(defaultFields[i]);
+      if (anchor !== -1) {
+        insertAt = anchor + 1;
+        break;
+      }
+    }
+    result.splice(insertAt, 0, field);
+  });
+
+  return result;
+};
+
 const formatDate = (dateStr?: string | null): string => {
   if (!dateStr) return 'Not set';
   try {
@@ -413,8 +442,25 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
         AsyncStorage.getItem(FIELD_ORDER_KEY)
       ]);
 
-      if (savedVisibility) setFieldVisibility(JSON.parse(savedVisibility));
-      if (savedOrder) setFieldOrder(JSON.parse(savedOrder));
+      // Both are MERGED onto the defaults rather than replacing them: a stored blob only knows
+      // about the fields that existed when it was written, so assigning it straight through hides
+      // every field added since — the saved order omits them, and the saved visibility map has no
+      // key for them, which reads as false.
+      if (savedVisibility) {
+        try {
+          setFieldVisibility({ ...initialVisibility, ...JSON.parse(savedVisibility) });
+        } catch (e) {
+          setFieldVisibility(initialVisibility);
+        }
+      }
+      if (savedOrder) {
+        try {
+          const parsedOrder = JSON.parse(savedOrder);
+          setFieldOrder(Array.isArray(parsedOrder) ? mergeFieldOrder(parsedOrder) : defaultFields);
+        } catch (e) {
+          setFieldOrder(defaultFields);
+        }
+      }
     };
     loadSettings();
 

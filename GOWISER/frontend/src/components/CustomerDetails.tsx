@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Check, Copy, Printer } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Printer } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -352,59 +352,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
    * mobile, so an in-flow popover would be clipped.
    */
   const [ipSchemeMenu, setIpSchemeMenu] = useState<{ ip: string; top: number; right: number } | null>(null);
-
-  /** Which scheme was just copied, for the transient tick. */
-  const [copiedScheme, setCopiedScheme] = useState<'https' | 'http' | null>(null);
-
-  /**
-   * Copy text, falling back to a hidden textarea when the async Clipboard API is
-   * unavailable.
-   *
-   * navigator.clipboard only exists in a secure context, so on a plain-http host
-   * (or an older browser) the copy would otherwise fail silently and the feature
-   * would appear broken.
-   */
-  const copyToClipboard = useCallback(async (text: string): Promise<boolean> => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // fall through to the legacy path
-    }
-
-    try {
-      const scratch = document.createElement('textarea');
-      scratch.value = text;
-      scratch.setAttribute('readonly', '');
-      scratch.style.position = 'fixed';
-      scratch.style.top = '-1000px';
-      scratch.style.opacity = '0';
-      document.body.appendChild(scratch);
-      scratch.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(scratch);
-      return ok;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  const handleCopyIpUrl = useCallback(async (scheme: 'https' | 'http', ip: string) => {
-    const ok = await copyToClipboard(`${scheme}://${ip}`);
-
-    if (ok) {
-      setCopiedScheme(scheme);
-      // Brief confirmation, then dismiss the menu.
-      window.setTimeout(() => {
-        setCopiedScheme(null);
-        setIpSchemeMenu(null);
-      }, 900);
-    } else {
-      setIpSchemeMenu(null);
-    }
-  }, [copyToClipboard]);
 
   // Dismiss the scheme menu on Escape, on any outside click, and on scroll or
   // resize — its position is captured from the trigger, so it would otherwise
@@ -1353,8 +1300,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 
         // Strip any scheme already stored on the value. Today every row is a bare
         // IPv4, but if one ever arrives as "http://10.0.0.1" the naive join would
-        // silently copy "https://http://10.0.0.1" — and a bad clipboard value is
-        // only discovered after it has been pasted somewhere.
+        // build "https://http://10.0.0.1", which opens a broken tab.
         const ip = rawIp.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
 
         return (
@@ -1366,8 +1312,8 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                 }`} title={ip}>{ip}</span>
               <button
                 type="button"
-                title="Copy as URL"
-                aria-label="Copy IP as a URL"
+                title="Open as URL"
+                aria-label="Open IP as a URL"
                 aria-haspopup="menu"
                 aria-expanded={ipSchemeMenu?.ip === ip}
                 // mousedown is the document-level dismiss handler, so stop it here
@@ -2801,7 +2747,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       {ipSchemeMenu && createPortal(
         <div
           role="menu"
-          aria-label="Copy IP as URL"
+          aria-label="Open IP as URL"
           // Keep clicks inside from reaching the document-level dismiss handler.
           onMouseDown={(e) => e.stopPropagation()}
           className={`fixed z-[10070] w-52 rounded-lg border shadow-2xl overflow-hidden ${isDarkMode
@@ -2814,29 +2760,32 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             ? 'bg-gray-900/50 text-gray-500'
             : 'bg-gray-50 text-gray-400'
             }`}>
-            Copy as URL
+            Open in new tab
           </div>
 
           {(['https', 'http'] as const).map(scheme => {
             const url = `${scheme}://${ipSchemeMenu.ip}`;
-            const justCopied = copiedScheme === scheme;
 
             return (
-              <button
+              // A real anchor rather than a button calling window.open: popup blockers leave
+              // user-initiated anchors alone, and it keeps the browser's own affordances —
+              // middle-click, ctrl/cmd-click, "Open in new window", copy link address — which a
+              // click handler would swallow. rel guards the opener against the target page.
+              <a
                 key={scheme}
-                type="button"
                 role="menuitem"
-                onClick={() => handleCopyIpUrl(scheme, ipSchemeMenu.ip)}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setIpSchemeMenu(null)}
                 className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors border-t first:border-t-0 ${isDarkMode
                   ? 'border-gray-700 hover:bg-gray-700 text-gray-200'
                   : 'border-gray-100 hover:bg-gray-50 text-gray-700'
                   }`}
               >
                 <span className="truncate font-mono text-xs" title={url}>{url}</span>
-                {justCopied
-                  ? <Check size={14} className="flex-shrink-0 text-green-500" />
-                  : <Copy size={14} className="flex-shrink-0 opacity-50" />}
-              </button>
+                <ExternalLink size={14} className="flex-shrink-0 opacity-50" />
+              </a>
             );
           })}
         </div>,

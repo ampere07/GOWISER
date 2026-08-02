@@ -296,10 +296,10 @@ class JobOrderController extends Controller
         }
     }
     /**
-     * VIP is comped — a VIP account is billed nothing at all, so VAT and withholding are
-     * meaningless on it. The JO Assign Form disables both checkboxes when VIP is ticked; this
-     * enforces the same rule for anything posting to the API directly, so a stored job order —
-     * and the billing account approval copies it to — can never hold a contradictory combination.
+     * VAT and withholding do not apply to a VIP job order. The JO Assign Form disables both
+     * checkboxes when VIP is ticked; this enforces the same rule for anything posting to the API
+     * directly, so a stored job order — and the billing account approval copies it to — can never
+     * hold a contradictory combination.
      *
      * Only touches the payload when VIP is explicitly being turned on, so a partial update that
      * never mentions vip_enabled is left alone.
@@ -1203,28 +1203,37 @@ class JobOrderController extends Controller
                 }
             }
             
+            // A VIP job order is approved exactly the way a postpaid one is: Active from day one,
+            // with no prepaid pay-first handling at all. This flag switches off BOTH halves of
+            // prepaid onboarding — the Inactive starting status here, and the initial billing plus
+            // RADIUS restriction after the commit below — so a VIP customer who signed up under a
+            // prepaid billing type is left in service instead of being restricted at approval.
+            $isVipApproval = (bool) $jobOrder->vip_enabled;
+
             // Prepaid accounts start Inactive (pay-first): the customer must pay their initial
             // bill before service is granted. Setting the status inside the committed transaction
             // (rather than a post-commit flip) guarantees a prepaid account is durably Inactive the
             // instant approval commits — no window where a crash leaves it Active/unrestricted.
-            $isPrepaidAccount = \App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type);
+            $isPrepaidAccount = !$isVipApproval
+                && \App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type);
             $newAccountStatusId = $isPrepaidAccount
                 ? (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4)
                 : 1;
 
-            // A job order flagged VIP is approved straight into the VIP billing status rather than
-            // Active, so the account is comped from day one without anyone having to edit the
-            // customer afterwards. VIP wins over the prepaid pay-first Inactive rule above: a
-            // comped account has nothing to pay, so holding it Inactive would only block service.
-            // Everything downstream is the pre-existing VIP flow — billing generation loads Active
-            // accounts only, and vip:check-expiration moves the account off VIP once
-            // vip_expiration passes, at which point normal billing resumes.
-            if ($jobOrder->vip_enabled) {
-                $newAccountStatusId = DB::table('billing_status')->where('status_name', 'VIP')->value('id') ?? 7;
-
-                \Log::info('Job order approved as VIP', [
+            if ($isVipApproval) {
+                // Deliberately NOT the VIP billing status: approval leaves a VIP account in the
+                // ordinary Active status so it behaves as a standard postpaid account from the
+                // moment it is created. vip_expiration is still recorded on the account below as
+                // a marker of the arrangement.
+                //
+                // Consequence worth knowing: vip:check-expiration selects accounts by
+                // billing_status_id = VIP, so accounts approved through this path are outside its
+                // sweep and their vip_expiration will not auto-restrict them. Setting the account
+                // to the VIP status by hand puts it back under that command.
+                \Log::info('Job order approved as VIP, created as a standard Active account', [
                     'job_order_id' => $jobOrder->id,
                     'vip_expiration' => $jobOrder->vip_expiration,
+                    'generation_type' => $jobOrder->generation_type,
                     'billing_status_id' => $newAccountStatusId,
                 ]);
             }
@@ -1247,8 +1256,9 @@ class JobOrderController extends Controller
                 'vat_enabled' => (bool) ($jobOrder->vat_enabled ?? false),
                 'withholding_enabled' => (bool) ($jobOrder->withholding_enabled ?? false),
                 'withholding_percentage' => $jobOrder->withholding_percentage,
-                // Existing VIP column — the expiry the vip:check-expiration command already
-                // watches. Only meaningful alongside the VIP status set above.
+                // Recorded as the marker of the VIP arrangement. The account itself is created
+                // Active (see above), so this date does not drive anything on its own —
+                // vip:check-expiration only acts on accounts carrying the VIP billing status.
                 'vip_expiration' => $jobOrder->vip_enabled ? $jobOrder->vip_expiration : null,
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
@@ -1322,7 +1332,15 @@ class JobOrderController extends Controller
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
                 'username' => $generatedUsername,
-                'session_status' => '',
+                // A VIP is approved unrestricted and its RADIUS user sits in the plan group, so the
+                // row starts Online rather than blank — the account is in service from the moment
+                // approval commits and should read that way immediately, not after the next sync.
+                // Every other path keeps the blank placeholder it has always had.
+                //
+                // Advisory either way: RadiusStatusSyncService owns this column and overwrites it
+                // each pass from the RADIUS group plus live session — Online while a session is up,
+                // Offline if the ONU is down.
+                'session_status' => $isVipApproval ? 'Online' : '',
             ]);
             
             $jobOrder->update([
@@ -1391,10 +1409,13 @@ class JobOrderController extends Controller
             // from the payment pipelines), at which point the existing payment reconnect flow
             // reactivates them. Postpaid customers are untouched — they stay Active as before.
             //
+            // $isPrepaidAccount already excludes VIP approvals, so a comped customer gets neither
+            // an initial bill nor a restriction no matter which billing type they signed up under.
+            //
             // Best-effort by design: the approval transaction is already committed, so a billing
             // or RADIUS hiccup must never undo the approval. The generator's own per-cycle
             // idempotency guards mean re-running will not create duplicate invoices.
-            if (\App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type)) {
+            if ($isPrepaidAccount) {
                 try {
                     $billingAccount->load(['customer', 'technicalDetails']);
                     $initialBilling = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class)
@@ -1534,6 +1555,11 @@ class JobOrderController extends Controller
                     'user_username' => $accountNumber,
                     'username' => $generatedUsername,
                     'password' => $generatedPassword,
+                    // Reported back so the approver can see on the spot which onboarding path ran,
+                    // rather than having to open the customer to check whether a comped account
+                    // was left in service.
+                    'vip_enabled' => $isVipApproval,
+                    'billing_status_id' => $newAccountStatusId,
                 ]
             ]);
 

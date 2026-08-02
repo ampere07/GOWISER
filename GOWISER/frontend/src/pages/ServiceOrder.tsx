@@ -23,6 +23,52 @@ const hexToRgba = (hex: string, opacity: number) => {
 
 type DisplayMode = 'card' | 'table';
 
+// Sidebar tree taxonomy. Both the counts and the row filter derive from these, so they cannot
+// drift apart the way two hand-written copies of the same if/else chain would.
+const BILLING_TYPES = [
+  { id: 'prepaid', name: 'Prepaid' },
+  { id: 'postpaid', name: 'Postpaid' },
+  // Rendered only when it actually holds rows, so the branch totals still add up to the
+  // All Service Orders count instead of quietly losing accounts with the field unset.
+  { id: 'unspecified', name: '(Unspecified)' }
+];
+
+const STATUS_CATEGORIES = [
+  { id: 'resolved', name: 'Resolved' },
+  { id: 'failed', name: 'Failed' },
+  { id: 'inprogress', name: 'In Progress' },
+  { id: 'forvisit', name: 'For Visit' },
+  { id: 'open', name: 'Open' }
+];
+
+// Mirrors BillingAccount::PREPAID_ALIASES on the backend: production has held 'Pre Paid',
+// 'PrePaid' and 'Prepaid', so match with spacing and dashes stripped rather than on an
+// exact string.
+const resolveBillingType = (generationType?: string): string => {
+  const normalized = (generationType || '').toLowerCase().replace(/[\s-]/g, '');
+  if (normalized === 'prepaid') return 'prepaid';
+  if (normalized === 'postpaid') return 'postpaid';
+  return 'unspecified';
+};
+
+const resolveStatusCategory = (supportStatus?: string): string => {
+  const s = (supportStatus || '').toLowerCase().trim();
+  if (s === 'resolved' || s === 'completed') return 'resolved';
+  if (s === 'failed') return 'failed';
+  if (s === 'in-progress' || s === 'in progress') return 'inprogress';
+  if (s === 'for-visit' || s === 'for visit') return 'forvisit';
+  if (s === 'pending' || s === 'open') return 'open';
+  return '';
+};
+
+const resolveVisitKey = (visitStatus?: string): string => {
+  const v = (visitStatus || '').toLowerCase().trim();
+  let visitKey = v || 'empty';
+  if (visitKey === 'completed') visitKey = 'done';
+  if (visitKey === 'in progress') visitKey = 'inprogress';
+  return visitKey;
+};
+
 const allColumns = [
   { key: 'timestamp', label: 'Timestamp', width: 'min-w-40' },
   { key: 'fullName', label: 'Full Name', width: 'min-w-40' },
@@ -828,89 +874,86 @@ const ServiceOrderPage: React.FC = () => {
   }, [serviceOrders, searchQuery, activeFilters, userRole, roleId, getVal, currentUserOrgId]);
 
   const locationItems = useMemo(() => {
-    const categories = [
-      { id: 'resolved', name: 'Resolved' },
-      { id: 'failed', name: 'Failed' },
-      { id: 'inprogress', name: 'In Progress' },
-      { id: 'forvisit', name: 'For Visit' },
-      { id: 'open', name: 'Open' }
-    ];
-
     const tree: Record<string, {
       count: number,
-      visits: Record<string, {
+      statuses: Record<string, {
         count: number,
-        barangays: Record<string, number>
+        visits: Record<string, {
+          count: number,
+          barangays: Record<string, number>
+        }>
       }>
     }> = {};
 
-    categories.forEach(c => {
-      tree[c.id] = { count: 0, visits: {} };
+    BILLING_TYPES.forEach(g => {
+      tree[g.id] = { count: 0, statuses: {} };
+      STATUS_CATEGORIES.forEach(c => {
+        tree[g.id].statuses[c.id] = { count: 0, visits: {} };
+      });
     });
 
     globalFilteredServiceOrders.forEach(so => {
-      const s = (so.supportStatus || '').toLowerCase().trim();
-      const v = (so.visitStatus || '').toLowerCase().trim();
+      const genNode = tree[resolveBillingType(so.generationType)];
+      const catNode = genNode.statuses[resolveStatusCategory(so.supportStatus)];
 
-      let category = '';
-      if (s === 'resolved' || s === 'completed') category = 'resolved';
-      else if (s === 'failed') category = 'failed';
-      else if (s === 'in-progress' || s === 'in progress') category = 'inprogress';
-      else if (s === 'for-visit' || s === 'for visit') category = 'forvisit';
-      else if (s === 'pending' || s === 'open') category = 'open';
-      else category = '';
+      // An unrecognised support status has no bucket to sit in, so it is left out of the
+      // branch counts entirely — matching how the old flat status list behaved.
+      if (!catNode) return;
 
-      const catNode = tree[category];
-      if (catNode) {
-        catNode.count++;
+      genNode.count++;
+      catNode.count++;
 
-        let visitKey = v || 'empty';
-        if (visitKey === 'completed') visitKey = 'done';
-        if (visitKey === 'in progress') visitKey = 'inprogress';
-
-        if (!catNode.visits[visitKey]) {
-          catNode.visits[visitKey] = { count: 0, barangays: {} };
-        }
-        const visitNode = catNode.visits[visitKey];
-        visitNode.count++;
-
-        const address = (so.fullAddress || '').toLowerCase();
-        let matchedBrgy = 'Unknown';
-        const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
-        if (foundBrgy) {
-          matchedBrgy = foundBrgy.barangay;
-        }
-
-        visitNode.barangays[matchedBrgy] = (visitNode.barangays[matchedBrgy] || 0) + 1;
+      const visitKey = resolveVisitKey(so.visitStatus);
+      if (!catNode.visits[visitKey]) {
+        catNode.visits[visitKey] = { count: 0, barangays: {} };
       }
+      const visitNode = catNode.visits[visitKey];
+      visitNode.count++;
+
+      const address = (so.fullAddress || '').toLowerCase();
+      let matchedBrgy = 'Unknown';
+      const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
+      if (foundBrgy) {
+        matchedBrgy = foundBrgy.barangay;
+      }
+
+      visitNode.barangays[matchedBrgy] = (visitNode.barangays[matchedBrgy] || 0) + 1;
     });
 
     return {
-      items: categories.map(c => ({
-        id: `status:${c.id}`,
-        name: c.name,
-        count: tree[c.id].count,
-        visits: Object.entries(tree[c.id].visits).sort().map(([vKey, vData]) => {
-          let vName = vKey;
-          if (vKey === 'done') vName = 'Done';
-          else if (vKey === 'inprogress') vName = 'In Progress';
-          else if (vKey === 'reschedule') vName = 'Reschedule';
-          else if (vKey === 'empty') vName = '(Empty)';
-          else vName = vKey.charAt(0).toUpperCase() + vKey.slice(1);
+      items: BILLING_TYPES
+        .filter(g => g.id !== 'unspecified' || tree[g.id].count > 0)
+        .map(g => ({
+          id: `gen:${g.id}`,
+          name: g.name,
+          count: tree[g.id].count,
+          statuses: STATUS_CATEGORIES.map(c => ({
+            id: `gen:${g.id}:status:${c.id}`,
+            statusId: c.id,
+            name: c.name,
+            count: tree[g.id].statuses[c.id].count,
+            visits: Object.entries(tree[g.id].statuses[c.id].visits).sort().map(([vKey, vData]) => {
+              let vName = vKey;
+              if (vKey === 'done') vName = 'Done';
+              else if (vKey === 'inprogress') vName = 'In Progress';
+              else if (vKey === 'reschedule') vName = 'Reschedule';
+              else if (vKey === 'empty') vName = '(Empty)';
+              else vName = vKey.charAt(0).toUpperCase() + vKey.slice(1);
 
-          return {
-            id: `status:${c.id}:visit:${vKey}`,
-            name: vName,
-            originalKey: vKey,
-            count: vData.count,
-            barangays: Object.entries(vData.barangays).sort().map(([bName, bCount]) => ({
-              id: `status:${c.id}:visit:${vKey}:brgy:${bName}`,
-              name: bName,
-              count: bCount
-            }))
-          };
-        })
-      })),
+              return {
+                id: `gen:${g.id}:status:${c.id}:visit:${vKey}`,
+                name: vName,
+                originalKey: vKey,
+                count: vData.count,
+                barangays: Object.entries(vData.barangays).sort().map(([bName, bCount]) => ({
+                  id: `gen:${g.id}:status:${c.id}:visit:${vKey}:brgy:${bName}`,
+                  name: bName,
+                  count: bCount
+                }))
+              };
+            })
+          }))
+        })),
       total: globalFilteredServiceOrders.length
     };
   }, [globalFilteredServiceOrders, barangays]);
@@ -919,41 +962,33 @@ const ServiceOrderPage: React.FC = () => {
     let filtered = globalFilteredServiceOrders.filter(serviceOrder => {
       if (selectedLocation === 'all') return true;
 
-      // Extract location match logic
-      if (selectedLocation.startsWith('status:')) {
+      // Node ids are the path down the sidebar tree:
+      // gen:<billingType>[:status:<category>[:visit:<visitKey>[:brgy:<barangay>]]]
+      if (selectedLocation.startsWith('gen:')) {
         const parts = selectedLocation.split(':');
-        const catId = parts[1];
 
-        const s = (serviceOrder.supportStatus || '').toLowerCase().trim();
-        const v = (serviceOrder.visitStatus || '').toLowerCase().trim();
+        if (resolveBillingType(serviceOrder.generationType) !== parts[1]) return false;
 
-        let category = '';
-        if (s === 'resolved' || s === 'completed') category = 'resolved';
-        else if (s === 'failed') category = 'failed';
-        else if (s === 'in-progress' || s === 'in progress') category = 'inprogress';
-        else if (s === 'for-visit' || s === 'for visit') category = 'forvisit';
-        else if (s === 'pending' || s === 'open') category = 'open';
-        else category = '';
+        if (parts.length > 2 && parts[2] === 'status') {
+          if (resolveStatusCategory(serviceOrder.supportStatus) !== parts[3]) return false;
 
-        if (category !== catId) return false;
+          if (parts.length > 4 && parts[4] === 'visit') {
+            if (resolveVisitKey(serviceOrder.visitStatus) !== parts[5]) return false;
 
-        if (parts.length > 2 && parts[2] === 'visit') {
-          const visitKeyFilter = parts[3];
-          let visitKey = v || 'empty';
-          if (visitKey === 'completed') visitKey = 'done';
-          if (visitKey === 'in progress') visitKey = 'inprogress';
+            if (parts.length > 6 && parts[6] === 'brgy') {
+              const brgyName = parts[7];
+              const address = (serviceOrder.fullAddress || '').toLowerCase();
+              let matchedBrgy = 'Unknown';
+              const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
+              if (foundBrgy) matchedBrgy = foundBrgy.barangay;
 
-          if (visitKey !== visitKeyFilter) return false;
-
-          if (parts.length > 4 && parts[4] === 'brgy') {
-            const brgyName = parts[5];
-            const address = (serviceOrder.fullAddress || '').toLowerCase();
-            let matchedBrgy = 'Unknown';
-            const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
-            if (foundBrgy) matchedBrgy = foundBrgy.barangay;
-
-            if (matchedBrgy !== brgyName) return false;
+              if (matchedBrgy !== brgyName) return false;
+            }
           }
+        } else {
+          // A billing-type row on its own still excludes orders whose support status has no
+          // bucket, so its badge matches the number of rows the click actually produces.
+          if (resolveStatusCategory(serviceOrder.supportStatus) === '') return false;
         }
         return true;
       }
@@ -1454,10 +1489,9 @@ const ServiceOrderPage: React.FC = () => {
                 {locationItems.total}
               </span>
             </button>
-            {/* Status Level */}
-            {locationItems.items.map((category) => {
-              const isSelected = selectedLocation === category.id || selectedLocation.startsWith(`${category.id}:`);
-              const isExpanded = expandedLocations.has(category.id);
+            {/* Billing Type Level */}
+            {locationItems.items.map((billingType) => {
+              const isBillingTypeExpanded = expandedLocations.has(billingType.id);
 
               const getStatusColor = (val: string) => {
                 switch (val) {
@@ -1472,129 +1506,178 @@ const ServiceOrderPage: React.FC = () => {
               };
 
               return (
-                <div key={category.id}>
+                <div key={billingType.id}>
                   <button
                     onClick={() => {
-                      setSelectedLocation(category.id);
+                      setSelectedLocation(billingType.id);
                       if (isMobile) {
                         setMobileViewMode('list');
                       }
                     }}
                     className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                    style={selectedLocation === category.id ? {
+                    style={selectedLocation === billingType.id ? {
                       backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                      color: colorPalette?.primary || '#7c3aed',
-                      fontWeight: 500
+                      color: colorPalette?.primary || '#7c3aed'
                     } : {
                       color: isDarkMode ? '#d1d5db' : '#374151'
                     }}
                   >
-                    <div className="flex items-center flex-1">
-                      <div className={`h-2.5 w-2.5 rounded-full mr-3 ${getStatusColor(category.id.split(':')[1]).replace('text-', 'bg-')}`} />
-                      <span className={`font-medium ${selectedLocation === category.id ? '' : isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{category.name}</span>
-                    </div>
+                    <span className="font-semibold flex-1 text-left">{billingType.name}</span>
                     <div className="flex items-center space-x-2">
-                      {category.count > 0 && (
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === category.id
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === billingType.id
                           ? 'text-white'
                           : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
                           }`}
-                          style={selectedLocation === category.id ? {
-                            backgroundColor: colorPalette?.primary || '#7c3aed'
-                          } : {}}>
-                          {category.count}
-                        </span>
-                      )}
+                        style={selectedLocation === billingType.id ? {
+                          backgroundColor: colorPalette?.primary || '#7c3aed'
+                        } : {}}
+                      >
+                        {billingType.count}
+                      </span>
                       <button
-                        onClick={(e) => toggleLocationExpansion(e, category.id)}
+                        onClick={(e) => toggleLocationExpansion(e, billingType.id)}
                         className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                       >
-                        {isExpanded ? (
-                          <ChevronDown className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
+                        {isBillingTypeExpanded ? (
+                          <ChevronDown className={`h-4 w-4 ${selectedLocation === billingType.id ? 'text-current' : 'text-gray-400'}`} />
                         ) : (
-                          <ChevronRight className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
+                          <ChevronRight className={`h-4 w-4 ${selectedLocation === billingType.id ? 'text-current' : 'text-gray-400'}`} />
                         )}
                       </button>
                     </div>
                   </button>
 
-                  {/* Visit Status Level */}
-                  {isExpanded && category.visits.map((visit) => {
-                    const isVisitSelected = selectedLocation === visit.id || selectedLocation.startsWith(`${visit.id}:`);
-                    const isVisitExpanded = expandedLocations.has(visit.id);
+                  {/* Status Level */}
+                  {isBillingTypeExpanded && billingType.statuses.map((category) => {
+                    const isExpanded = expandedLocations.has(category.id);
 
                     return (
-                      <div key={visit.id}>
+                      <div key={category.id}>
                         <button
                           onClick={() => {
-                            setSelectedLocation(visit.id);
+                            setSelectedLocation(category.id);
                             if (isMobile) {
                               setMobileViewMode('list');
                             }
                           }}
-                          className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                          style={selectedLocation === visit.id ? {
+                          className={`w-full flex items-center justify-between pl-8 pr-4 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                          style={selectedLocation === category.id ? {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                            color: colorPalette?.primary || '#7c3aed'
+                            color: colorPalette?.primary || '#7c3aed',
+                            fontWeight: 500
                           } : {
-                            color: isDarkMode ? '#9ca3af' : '#4b5563'
+                            color: isDarkMode ? '#d1d5db' : '#374151'
                           }}
                         >
-                          <span className="truncate flex-1 text-left">{visit.name}</span>
+                          <div className="flex items-center flex-1">
+                            <div className={`h-2.5 w-2.5 rounded-full mr-3 ${getStatusColor(category.statusId).replace('text-', 'bg-')}`} />
+                            <span className={`font-medium ${selectedLocation === category.id ? '' : isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{category.name}</span>
+                          </div>
                           <div className="flex items-center space-x-2">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${selectedLocation === visit.id
-                              ? 'text-white'
-                              : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
-                              }`}
-                              style={selectedLocation === visit.id ? {
-                                backgroundColor: colorPalette?.primary || '#7c3aed'
-                              } : {}}>
-                              {visit.count}
-                            </span>
+                            {category.count > 0 && (
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === category.id
+                                ? 'text-white'
+                                : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
+                                }`}
+                                style={selectedLocation === category.id ? {
+                                  backgroundColor: colorPalette?.primary || '#7c3aed'
+                                } : {}}>
+                                {category.count}
+                              </span>
+                            )}
                             <button
-                              onClick={(e) => toggleLocationExpansion(e, visit.id)}
-                              className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                              onClick={(e) => toggleLocationExpansion(e, category.id)}
+                              className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                             >
-                              {isVisitExpanded ? (
-                                <ChevronDown className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                              {isExpanded ? (
+                                <ChevronDown className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
                               ) : (
-                                <ChevronRight className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                <ChevronRight className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
                               )}
                             </button>
                           </div>
                         </button>
 
-                        {/* Barangay Level */}
-                        {isVisitExpanded && visit.barangays.map((brgy) => {
+                        {/* Visit Status Level */}
+                        {isExpanded && category.visits.map((visit) => {
+                          const isVisitExpanded = expandedLocations.has(visit.id);
+
                           return (
-                            <button
-                              key={brgy.id}
-                              onClick={() => {
-                                setSelectedLocation(brgy.id);
-                                if (isMobile) {
-                                  setMobileViewMode('list');
-                                }
-                              }}
-                              className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-[10px] transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                              style={selectedLocation === brgy.id ? {
-                                backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                                color: colorPalette?.primary || '#7c3aed',
-                                fontWeight: 'bold'
-                              } : {
-                                color: isDarkMode ? '#6b7280' : '#4b5563'
-                              }}
-                            >
-                              <span className="truncate flex-1 text-left">{brgy.name}</span>
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${selectedLocation === brgy.id
-                                ? 'text-white'
-                                : isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400'
-                                }`}
-                                style={selectedLocation === brgy.id ? {
-                                  backgroundColor: colorPalette?.primary || '#7c3aed'
-                                } : {}}>
-                                {brgy.count}
-                              </span>
-                            </button>
+                            <div key={visit.id}>
+                              <button
+                                onClick={() => {
+                                  setSelectedLocation(visit.id);
+                                  if (isMobile) {
+                                    setMobileViewMode('list');
+                                  }
+                                }}
+                                className={`w-full flex items-center justify-between pl-14 pr-4 py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                                style={selectedLocation === visit.id ? {
+                                  backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
+                                  color: colorPalette?.primary || '#7c3aed'
+                                } : {
+                                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                                }}
+                              >
+                                <span className="truncate flex-1 text-left">{visit.name}</span>
+                                <div className="flex items-center space-x-2">
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${selectedLocation === visit.id
+                                    ? 'text-white'
+                                    : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
+                                    }`}
+                                    style={selectedLocation === visit.id ? {
+                                      backgroundColor: colorPalette?.primary || '#7c3aed'
+                                    } : {}}>
+                                    {visit.count}
+                                  </span>
+                                  <button
+                                    onClick={(e) => toggleLocationExpansion(e, visit.id)}
+                                    className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                                  >
+                                    {isVisitExpanded ? (
+                                      <ChevronDown className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                    ) : (
+                                      <ChevronRight className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                    )}
+                                  </button>
+                                </div>
+                              </button>
+
+                              {/* Barangay Level */}
+                              {isVisitExpanded && visit.barangays.map((brgy) => {
+                                return (
+                                  <button
+                                    key={brgy.id}
+                                    onClick={() => {
+                                      setSelectedLocation(brgy.id);
+                                      if (isMobile) {
+                                        setMobileViewMode('list');
+                                      }
+                                    }}
+                                    className={`w-full flex items-center justify-between pl-20 pr-4 py-1.5 text-[10px] transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                                    style={selectedLocation === brgy.id ? {
+                                      backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
+                                      color: colorPalette?.primary || '#7c3aed',
+                                      fontWeight: 'bold'
+                                    } : {
+                                      color: isDarkMode ? '#6b7280' : '#4b5563'
+                                    }}
+                                  >
+                                    <span className="truncate flex-1 text-left">{brgy.name}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${selectedLocation === brgy.id
+                                      ? 'text-white'
+                                      : isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400'
+                                      }`}
+                                      style={selectedLocation === brgy.id ? {
+                                        backgroundColor: colorPalette?.primary || '#7c3aed'
+                                      } : {}}>
+                                      {brgy.count}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           );
                         })}
                       </div>

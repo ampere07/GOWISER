@@ -199,6 +199,54 @@ interface SliceChartProps {
   colors?: string[];
 }
 
+/**
+ * Draws each slice's own value onto the slice.
+ *
+ * A local plugin rather than chartjs-plugin-datalabels: this is the only place a slice label is
+ * wanted, and it avoids adding a dependency to a build that has to keep working offline.
+ *
+ * Slices below the share threshold are skipped — their arc is narrower than the text, so the
+ * label would spill across its neighbours and misread as belonging to the wrong slice. Those
+ * values stay available in the tooltip and the legend.
+ */
+const SLICE_LABEL_MIN_SHARE = 0.04;
+
+export const sliceValueLabels = {
+  id: 'sliceValueLabels',
+  afterDatasetsDraw(chart: any) {
+    const { ctx } = chart;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta?.data?.length) return;
+
+    const values: number[] = chart.data.datasets[0]?.data ?? [];
+    const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+    if (total <= 0) return;
+
+    ctx.save();
+    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    meta.data.forEach((arc: any, index: number) => {
+      const value = Number(values[index] || 0);
+      if (value <= 0 || value / total < SLICE_LABEL_MIN_SHARE) return;
+
+      const { x, y } = arc.getCenterPoint();
+      const text = formatNumber(value);
+
+      // Drawn over whatever slice colour the caller chose, so the text carries its own
+      // contrast rather than assuming a light or dark fill.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(text, x, y);
+    });
+
+    ctx.restore();
+  },
+};
+
 const sliceOptions = (theme: ReturnType<typeof useChartTheme>, unit: 'money' | 'count') => ({
   responsive: true,
   maintainAspectRatio: false,
@@ -247,6 +295,7 @@ export const DonutChart: React.FC<SliceChartProps> = ({
     <div style={{ height }} className="relative">
       <Doughnut
         options={sliceOptions(theme, unit) as any}
+        plugins={[sliceValueLabels]}
         data={{
           labels,
           datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }],

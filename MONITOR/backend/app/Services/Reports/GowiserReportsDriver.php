@@ -121,9 +121,11 @@ class GowiserReportsDriver implements ReportsDriver
         return [
             'total' => (int) ($row->total ?? 0),
             'active' => $status['active'],
-            'pending' => $status['pending'],
-            'suspended' => $status['suspended'],
-            'expired' => $status['expired'],
+            'vip' => $status['vip'],
+            'inactive' => $status['inactive'],
+            'pullout' => $status['pullout'],
+            'restricted' => $status['restricted'],
+            'disconnected' => $status['disconnected'],
             'in_arrears' => (int) ($row->in_arrears ?? 0),
             'receivables' => round((float) ($row->receivables ?? 0), 2),
             'new_30day' => (int) ($row->new_30day ?? 0),
@@ -225,10 +227,20 @@ class GowiserReportsDriver implements ReportsDriver
 
         return [
             'total' => $total,
+            // The four categories the dashboard reports on. Matched on the status NAME so a
+            // renamed lookup row keeps working, and 0 when a source has no such status at all —
+            // NETMANAGER has no VIP or Pullout concept, and reports zero rather than breaking.
             'active' => $find(['active']),
-            'pending' => $find(['in progress', 'pending']),
-            'suspended' => $find(['suspended']),
-            'expired' => $find(['overdue', 'expired']),
+            'vip' => $find(['vip']),
+            'inactive' => $find(['inactive']),
+            'pullout' => $find(['pullout']),
+
+            // Kept for the status chart, under the names the business uses: what GOWISER stores
+            // as Suspended is a RADIUS restriction, and what it stores as Overdue/Expired is a
+            // disconnection. Named here rather than in the frontend so both this and any printed
+            // report read the same.
+            'restricted' => $find(['restricted', 'suspended']),
+            'disconnected' => $find(['disconnected', 'overdue', 'expired']),
             'by_status' => $byStatus,
         ];
     }
@@ -284,6 +296,13 @@ class GowiserReportsDriver implements ReportsDriver
             ->sum(DB::raw('COALESCE(pl.price, 0)'));
     }
 
+    /**
+     * Every barangay, with the four subscriber categories the dashboard reports on.
+     *
+     * Unlimited by design — this feeds a sortable table of the whole footprint, not a top-N
+     * highlight. The row count is bounded by the number of barangays served, which is small
+     * next to the account count, and grouping already collapses it server-side.
+     */
     private function topBarangays(ConnectionInterface $db, array $params): array
     {
         $query = $db->table('customers as c')
@@ -306,11 +325,12 @@ class GowiserReportsDriver implements ReportsDriver
             ->selectRaw('c.city AS municipality')
             ->selectRaw('c.region AS province')
             ->selectRaw('COUNT(*) AS total')
-            ->selectRaw("COALESCE(SUM(LOWER(COALESCE(bs.status_name, '')) = 'active'), 0) AS active")
-            ->selectRaw("COALESCE(SUM(LOWER(COALESCE(bs.status_name, '')) IN ('overdue', 'expired')), 0) AS expired")
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'active'), 0) AS active")
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'vip'), 0) AS vip")
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'inactive'), 0) AS inactive")
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'pullout'), 0) AS pullout")
             ->groupBy('c.barangay', 'c.city', 'c.region')
             ->orderByRaw('COUNT(*) DESC')
-            ->limit(self::TOP_N)
             ->get()
             ->map(fn ($row) => [
                 'barangay' => (string) $row->barangay,
@@ -318,7 +338,9 @@ class GowiserReportsDriver implements ReportsDriver
                 'province' => (string) ($row->province ?? ''),
                 'total' => (int) $row->total,
                 'active' => (int) $row->active,
-                'expired' => (int) $row->expired,
+                'vip' => (int) $row->vip,
+                'inactive' => (int) $row->inactive,
+                'pullout' => (int) $row->pullout,
             ])
             ->all();
     }
@@ -526,6 +548,7 @@ class GowiserReportsDriver implements ReportsDriver
                 'points' => $this->trendSeries($db, $trendPeriod, $anchor),
             ],
 
+            'by_channel' => $this->incomeByChannel($db, $from, $to),
             'by_plan' => $this->revenueByPlan($db, $from, $to),
             'by_method' => $this->revenueByMethod($db, $from, $to),
             'by_expense_type' => $this->expensesByCategory($db, $expensePeriod, $from, $to),
@@ -594,6 +617,69 @@ class GowiserReportsDriver implements ReportsDriver
             'office_income' => (float) ($row->office_income ?? 0),
             'office_count' => (int) ($row->office_count ?? 0),
         ];
+    }
+
+    /**
+     * SQL that classifies a transaction into one of the reported payment channels.
+     *
+     * Matched on the free-text `payment_method` name, because that is all GOWISER stores — the
+     * payment_methods table is a name lookup with no channel or gateway column to key off.
+     *
+     * Order is load-bearing. GCash contains the substring "CASH", so a naive `LIKE '%CASH%'`
+     * books every GCash payment as over-the-counter cash — the one misclassification that would
+     * actually mislead someone reconciling a drawer. It is therefore caught and sent to `other`
+     * BEFORE the cash test runs.
+     *
+     * `other` is not a leftover bin to ignore: it exists so the four buckets always sum to total
+     * income. Three channels that quietly failed to add up would read as a bug in the totals.
+     */
+    private const PAYMENT_CHANNEL_SQL = "CASE
+        WHEN UPPER(COALESCE(t.payment_method, '')) LIKE '%XENDIT%' THEN 'xendit'
+        WHEN UPPER(COALESCE(t.payment_method, '')) LIKE '%PNB%' THEN 'pnb'
+        WHEN UPPER(COALESCE(t.payment_method, '')) LIKE '%GCASH%'
+          OR UPPER(COALESCE(t.payment_method, '')) LIKE '%G-CASH%' THEN 'other'
+        WHEN UPPER(COALESCE(t.payment_method, '')) LIKE '%CASH%' THEN 'cash'
+        ELSE 'other'
+    END";
+
+    /**
+     * Income split across Cash, PNB and Xendit, with everything else totalled as `other`.
+     *
+     * One grouped pass rather than four conditional sums: the CASE assigns exactly one channel
+     * per row, so the buckets cannot double-count a payment that matches two patterns.
+     */
+    private function incomeByChannel(ConnectionInterface $db, string $from, string $to): array
+    {
+        $rows = $this->collectedTransactions($db)
+            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->selectRaw(self::PAYMENT_CHANNEL_SQL . ' AS channel')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
+            ->groupBy(DB::raw(self::PAYMENT_CHANNEL_SQL))
+            ->get();
+
+        // Seeded with every channel so a period with no Xendit payments reports ₱0 rather than
+        // dropping the card — an absent channel and an empty one look very different to a reader.
+        $channels = [
+            'cash' => ['amount' => 0.0, 'count' => 0],
+            'pnb' => ['amount' => 0.0, 'count' => 0],
+            'xendit' => ['amount' => 0.0, 'count' => 0],
+            'other' => ['amount' => 0.0, 'count' => 0],
+        ];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->channel;
+            if (!isset($channels[$key])) {
+                continue;
+            }
+
+            $channels[$key] = [
+                'amount' => round((float) $row->total, 2),
+                'count' => (int) $row->cnt,
+            ];
+        }
+
+        return $channels;
     }
 
     /** Collections itemised by charge type. */

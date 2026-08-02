@@ -32,6 +32,7 @@ import {
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
 import PrintReportOverlay from '../components/print/PrintReportOverlay';
+import { canExport } from '../utils/permissions';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useMonitorStore } from '../store/monitorStore';
@@ -74,6 +75,7 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   );
 
   const kpi = data?.kpi;
+  const channels = data?.by_channel;
   const first = loading && !data;
   const surplus = (kpi?.net ?? 0) >= 0;
 
@@ -97,14 +99,18 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           </>
         }
         actions={
-          <Button
-            variant="primary"
-            icon={<Printer size={14} />}
-            onClick={() => setPrintOpen(true)}
-            disabled={!data}
-          >
-            Print Report
-          </Button>
+          // Hidden without financial.export. The /reporting/printable endpoint enforces the same
+          // grant, so this only spares the user a button that would 403 — it is not the control.
+          canExport(user.permissions, 'financial') ? (
+            <Button
+              variant="primary"
+              icon={<Printer size={14} />}
+              onClick={() => setPrintOpen(true)}
+              disabled={!data}
+            >
+              Print Report
+            </Button>
+          ) : undefined
         }
       />
 
@@ -131,23 +137,43 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           caption={kpi ? pluralise(kpi.income_count, 'payment') : undefined}
           loading={first}
         >
-          {/* Office vs portal is the split branch managers are asked about
-              daily, so it lives inside the Income card rather than a panel of
-              its own further down the page. */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Income by the channel it arrived through — the split management asks for by name.
+              Inside the Income card rather than a panel further down, because it is a
+              decomposition of the figure directly above it, not a separate measure.
+
+              "Other" is rendered only when it holds something. It exists so the channels always
+              reconcile to Income; showing an empty fourth tile every time would just be noise. */}
+          <div className="grid grid-cols-3 gap-2">
             <MiniStat
-              label="Office Collection"
-              value={formatMoney(kpi?.office_income)}
-              caption={kpi ? pluralise(kpi.office_count, 'payment') : undefined}
+              label="Cash"
+              value={formatMoney(channels?.cash.amount)}
+              caption={channels ? pluralise(channels.cash.count, 'payment') : undefined}
               tone="success"
             />
             <MiniStat
-              label="Portal Collection"
-              value={formatMoney(kpi?.portal_income)}
-              caption={kpi ? pluralise(kpi.portal_count, 'payment') : undefined}
+              label="PNB"
+              value={formatMoney(channels?.pnb.amount)}
+              caption={channels ? pluralise(channels.pnb.count, 'payment') : undefined}
+              tone="info"
+            />
+            <MiniStat
+              label="Xendit"
+              value={formatMoney(channels?.xendit.amount)}
+              caption={channels ? pluralise(channels.xendit.count, 'payment') : undefined}
               tone="info"
             />
           </div>
+
+          {channels && channels.other.count > 0 && (
+            <div className="grid grid-cols-3 gap-2 mt-2">
+              <MiniStat
+                label="Other"
+                value={formatMoney(channels.other.amount)}
+                caption={pluralise(channels.other.count, 'payment')}
+                tone="neutral"
+              />
+            </div>
+          )}
 
           {kpi && kpi.office_by_type.length > 0 && (
             <div className={`mt-3 pt-3 border-t ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
