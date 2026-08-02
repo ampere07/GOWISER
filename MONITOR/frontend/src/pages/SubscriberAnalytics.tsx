@@ -1,17 +1,23 @@
 import React from 'react';
-import { Crown, Hourglass, PackageX, UserCheck, UserMinus, UserPlus, Wifi } from 'lucide-react';
+import { Crown, Hourglass, PackageX, UserCheck, UserMinus, UserPlus, UserX, Wifi } from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
+import FilterBar from '../components/reporting/FilterBar';
 import StatCard from '../components/reporting/StatCard';
-import BarangayAnalyticsPanel from '../components/reporting/BarangayAnalyticsPanel';
+import BarangayTable from '../components/reporting/BarangayTable';
+import OverdueAccountsPanel from '../components/reporting/OverdueAccountsPanel';
+import WidgetRange from '../components/reporting/WidgetRange';
 import { DonutChart } from '../components/reporting/charts';
 import { ErrorBanner, PanelState } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
+import { Restricted, RestrictedPanel } from '../components/rbac/Restricted';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
+import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
 import { SubscriberAnalyticsData } from '../types/reporting';
+import { WIDGET } from '../types/rbac';
 import { formatMoney, formatNumber, pluralise } from '../utils/format';
 
 interface SubscriberAnalyticsProps {
@@ -19,62 +25,25 @@ interface SubscriberAnalyticsProps {
 }
 
 /**
- * How a stored status is presented.
+ * Status colours, so the same status is the same colour everywhere.
  *
- * The source systems keep their own vocabulary — GOWISER records a RADIUS restriction as
- * "Suspended" and a disconnection as "Overdue" — while the business reads them as Restricted and
- * Disconnected. Renamed here rather than in the database, which MONITOR only ever reads.
- *
- * A status mapped to `null` is dropped from the chart entirely. Pending is dropped because an
- * account awaiting activation is not part of the subscriber base being reported on.
+ * Keyed on the *reported* labels, not the source systems' raw values. The
+ * backend maps Suspended to Restricted and Expired to Disconnected before the
+ * payload leaves (see StatusMap), so matching on the old words here would silently
+ * fall through to grey for the two statuses that most need to stand out.
  */
-const STATUS_DISPLAY: Record<string, { label: string; color: string } | null> = {
-  active: { label: 'Active', color: '#198754' },
-  vip: { label: 'VIP', color: '#8b5cf6' },
-  inactive: { label: 'Inactive', color: '#f59e0b' },
-  pullout: { label: 'Pullout', color: '#dc3545' },
-  suspended: { label: 'Restricted', color: '#ffc107' },
-  restricted: { label: 'Restricted', color: '#ffc107' },
-  overdue: { label: 'Disconnected', color: '#b02a37' },
-  expired: { label: 'Disconnected', color: '#b02a37' },
-  disconnected: { label: 'Disconnected', color: '#b02a37' },
-  cancelled: { label: 'Cancelled', color: '#adb5bd' },
-  pending: null,
-  'in progress': null,
+const STATUS_COLORS: Record<string, string> = {
+  active: '#198754',
+  vip: '#7c3aed',
+  restricted: '#ffc107',
+  disconnected: '#dc3545',
+  inactive: '#6c757d',
+  pullout: '#d63384',
+  cancelled: '#adb5bd',
 };
 
-/**
- * Statuses for the chart: renamed, with Pending removed, and same-named ones summed.
- *
- * Summing matters — Suspended and Restricted both display as "Restricted", and a source holding
- * both would otherwise draw two slices with the same name. A status this app has never seen is
- * passed through under its own name rather than dropped, so a new workflow state stays visible.
- */
-const chartStatuses = (byStatus: Record<string, number>): Array<[string, number, string]> => {
-  const merged: Record<string, { count: number; color: string }> = {};
-
-  Object.entries(byStatus).forEach(([raw, count]) => {
-    if (count <= 0) return;
-
-    const key = raw.toLowerCase().trim();
-    if (key in STATUS_DISPLAY && STATUS_DISPLAY[key] === null) return;
-
-    const display = STATUS_DISPLAY[key] ?? {
-      label: raw.charAt(0).toUpperCase() + raw.slice(1),
-      color: '#adb5bd',
-    };
-
-    const existing = merged[display.label];
-    merged[display.label] = {
-      count: (existing?.count ?? 0) + count,
-      color: existing?.color ?? display.color,
-    };
-  });
-
-  return Object.entries(merged)
-    .map(([label, { count, color }]): [string, number, string] => [label, count, color])
-    .sort((a, b) => b[1] - a[1]);
-};
+const statusColor = (label: string): string =>
+  STATUS_COLORS[label.toLowerCase().trim()] ?? '#adb5bd';
 
 /**
  * Subscriber Analytics — who the subscribers are, and which of them are a
@@ -82,26 +51,60 @@ const chartStatuses = (byStatus: Record<string, number>): Array<[string, number,
  *
  * Deliberately not a money page: it counts people and accounts. The one currency
  * figure is expected MRC, which is here because it is a property of the base
- * rather than of a period's collections.
+ * rather than of a period's collections — and which follows the revenue
+ * permission rather than this module's, for the same reason.
+ *
+ * Three things this page no longer does, all of them deliberate: it does not
+ * count pending applications as subscribers, it does not cap the barangay table
+ * at ten rows, and it does not carry a page-level period filter — each widget
+ * below owns its own range.
  */
 const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   // Filters are still resolved because the section request needs a source and branch scope; the
   // page no longer offers a period control, since every figure on it is a snapshot of the base
   // as it stands rather than something that accrues over a window.
-  const { filters } = useSectionFilters('subscriber_analytics');
+  const { filters, update, reset, branches, databases } = useSectionFilters('subscriber_analytics');
 
-  const { data, loading, error, sourceLabel, substituted } =
-    useReportingSection<SubscriberAnalyticsData>(
-      reportingService.getSubscriberAnalytics,
-      filters,
-      refreshToken
-    );
+  // Each widget's own window. The status and plan charts are statements of the
+  // base as it stands and are not bounded by a range at all, but growth and the
+  // barangay table are — so each gets its own control rather than one for the page.
+  const growthRange = useWidgetRange('monthly');
+  const compositionRange = useWidgetRange('monthly');
+  const barangayRange = useWidgetRange('monthly');
+
+  const primary = useReportingSection<SubscriberAnalyticsData>(
+    reportingService.getSubscriberAnalytics,
+    filters,
+    refreshToken,
+    { dateFrom: growthRange.range.from, dateTo: growthRange.range.to }
+  );
+
+  const composition = useReportingSection<SubscriberAnalyticsData>(
+    reportingService.getSubscriberAnalytics,
+    filters,
+    refreshToken,
+    { dateFrom: compositionRange.range.from, dateTo: compositionRange.range.to }
+  );
+
+  const geography = useReportingSection<SubscriberAnalyticsData>(
+    reportingService.getSubscriberAnalytics,
+    filters,
+    refreshToken,
+    { dateFrom: barangayRange.range.from, dateTo: barangayRange.range.to }
+  );
+
+  const { data, loading, error, sourceLabel, substituted } = primary;
 
   const kpi = data?.kpi;
+  const billing = data?.billing_summary;
   const first = loading && !data;
 
-  const statuses = chartStatuses(data?.status.by_status ?? {});
+  // Every reported status, largest first — including ones this app has never
+  // seen, so a new workflow state cannot vanish from the chart.
+  const statuses = Object.entries(composition.data?.status.by_status ?? {})
+    .filter(([, count]) => count > 0)
+    .sort(([, a], [, b]) => b - a);
 
   return (
     <ReportingPage>
@@ -120,7 +123,64 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
       <AggregateNotice aggregate={data?.aggregate} />
       {error && <ErrorBanner message={error} />}
 
-      {/* ── The four subscriber categories ────────────────────────────── */}
+      <FilterBar
+        filters={filters}
+        onChange={update}
+        onReset={reset}
+        branches={branches}
+        databases={databases}
+        showBranch={branches.length > 0}
+      />
+
+      {/* ── Billing status summary header ─────────────────────────────── */}
+      <Restricted
+        require={WIDGET.subscriberBilling}
+        fallback={<RestrictedPanel title="Billing Status Summary" height={120} />}
+      >
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            label="Active"
+            value={formatNumber(billing?.active)}
+            tone="success"
+            icon={<UserCheck size={20} />}
+            loading={first}
+            caption={
+              billing ? (
+                <>
+                  of <span className="font-semibold">{formatNumber(billing.total)}</span> billed
+                  accounts
+                </>
+              ) : undefined
+            }
+          />
+          <StatCard
+            label="VIP"
+            value={formatNumber(billing?.vip)}
+            tone="info"
+            icon={<Crown size={20} />}
+            loading={first}
+            caption="priority accounts"
+          />
+          <StatCard
+            label="Inactive"
+            value={formatNumber(billing?.inactive)}
+            tone="neutral"
+            icon={<UserMinus size={20} />}
+            loading={first}
+            caption="closed or cancelled"
+          />
+          <StatCard
+            label="Pullout"
+            value={formatNumber(billing?.pullout)}
+            tone="danger"
+            icon={<PackageX size={20} />}
+            loading={first}
+            caption="equipment recovered"
+          />
+        </div>
+      </Restricted>
+
+      {/* ── Service state ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Active"
@@ -131,7 +191,7 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
           caption={
             kpi ? (
               <>
-                Total: <span className="font-semibold">{formatNumber(kpi.total)}</span>
+                Subscribers: <span className="font-semibold">{formatNumber(kpi.total)}</span>
               </>
             ) : undefined
           }
@@ -142,103 +202,151 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
           tone="info"
           icon={<Crown size={20} />}
           loading={first}
-          caption="comped accounts"
+          caption="priority service"
         />
+        {/* Was "Suspended". Renamed at the source of the data, not just in this
+            label, so the chart, the table and the card cannot disagree. */}
         <StatCard
-          label="Inactive"
-          value={formatNumber(kpi?.inactive)}
+          label="Restricted"
+          value={formatNumber(kpi?.restricted)}
           tone="warning"
           icon={<UserMinus size={20} />}
           loading={first}
-          caption="not in service"
+          caption="service limited"
         />
+        {/* Was "Expired". */}
         <StatCard
-          label="Pullout"
-          value={formatNumber(kpi?.pullout)}
+          label="Disconnected"
+          value={formatNumber(kpi?.disconnected)}
           tone="danger"
-          icon={<PackageX size={20} />}
+          icon={<UserX size={20} />}
           loading={first}
-          caption="equipment recovered"
+          caption="service lapsed"
         />
       </div>
 
       {/* ── Runway and growth ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Counted from the prepaid service window, so the caption says prepaid:
-            postpaid accounts have no expiry to run out and are excluded. Still
-            null-guarded for any schema that tracks no expiry at all, where "not
-            tracked" is the honest answer rather than a zero that reads as "none
-            expiring". */}
-        <StatCard
-          label="Expiring in 3 days"
-          value={kpi?.expiring_3day === null ? 'Not tracked' : formatNumber(kpi?.expiring_3day)}
-          tone="warning"
-          icon={<Hourglass size={18} />}
-          loading={first}
-          caption={kpi?.expiring_3day === null ? 'no expiry date in this system' : 'active prepaid accounts'}
-        />
-        <StatCard
-          label="Expiring in 7 days"
-          value={kpi?.expiring_7day === null ? 'Not tracked' : formatNumber(kpi?.expiring_7day)}
-          tone="warning"
-          icon={<Hourglass size={18} />}
-          loading={first}
-          caption={kpi?.expiring_7day === null ? 'no expiry date in this system' : 'active prepaid accounts'}
-        />
-        <StatCard
-          label="New in range"
-          value={formatNumber(data?.growth.new_in_range)}
-          tone="info"
-          icon={<UserPlus size={18} />}
-          loading={first}
-          caption={data?.range_label}
-        />
-        <StatCard
-          label="Expected MRC"
-          value={
-            data?.growth.expected_mrc === null ? 'Not available' : formatMoney(data?.growth.expected_mrc)
-          }
-          tone="success"
-          icon={<UserCheck size={18} />}
-          loading={first}
-          caption="active base, at plan price"
-        />
-      </div>
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div className="min-w-0">
+            <h3 className={`font-bold text-base ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              Runway &amp; Growth
+            </h3>
+            <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              New subscribers over {data?.range_label ?? 'the selected range'}
+            </p>
+          </div>
+          <WidgetRange state={growthRange} />
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Counted from the prepaid service window, so the caption says
+              prepaid: postpaid accounts have no expiry to run out and are
+              excluded. Still null-guarded for any schema that tracks no expiry,
+              where "not tracked" is the honest answer rather than a zero that
+              reads as "none expiring". */}
+          <StatCard
+            label="Expiring in 3 days"
+            value={kpi?.expiring_3day === null ? 'Not tracked' : formatNumber(kpi?.expiring_3day)}
+            tone="warning"
+            icon={<Hourglass size={18} />}
+            loading={first}
+            caption={
+              kpi?.expiring_3day === null ? 'no expiry date in this system' : 'active prepaid accounts'
+            }
+          />
+          <StatCard
+            label="Expiring in 7 days"
+            value={kpi?.expiring_7day === null ? 'Not tracked' : formatNumber(kpi?.expiring_7day)}
+            tone="warning"
+            icon={<Hourglass size={18} />}
+            loading={first}
+            caption={
+              kpi?.expiring_7day === null ? 'no expiry date in this system' : 'active prepaid accounts'
+            }
+          />
+          <StatCard
+            label="New in range"
+            value={formatNumber(data?.growth.new_in_range)}
+            tone="info"
+            icon={<UserPlus size={18} />}
+            loading={first}
+            caption={data?.range_label}
+          />
+          {/* A revenue figure on a counting page, so it follows the revenue
+              permission rather than this module's. */}
+          <Restricted
+            require={WIDGET.financialRevenue}
+            fallback={<RestrictedPanel title="Expected MRC" height={110} />}
+          >
+            <StatCard
+              label="Expected MRC"
+              value={
+                data?.growth.expected_mrc === null
+                  ? 'Not available'
+                  : formatMoney(data?.growth.expected_mrc)
+              }
+              tone="success"
+              icon={<UserCheck size={18} />}
+              loading={first}
+              caption="active base, at plan price"
+            />
+          </Restricted>
+        </div>
+      </Card>
 
       {/* ── Composition ───────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card flush>
-          <CardHeader title="Subscriber Status" subtitle={data?.branch_label} />
+          <CardHeader
+            title="Subscriber Status"
+            subtitle={composition.data?.branch_label}
+            actions={<WidgetRange state={compositionRange} />}
+          />
           <CardBody>
             <PanelState
-              loading={first}
+              loading={composition.loading && !composition.data}
               empty={statuses.length === 0}
               emptyMessage="No subscribers on file."
               height={300}
             >
+              {/* Counts are drawn on the slices — see sliceValuePlugin. A pie
+                  whose numbers live only in a tooltip cannot be read on the wall
+                  display these are shown on. */}
               <DonutChart
                 labels={statuses.map(([label]) => label)}
                 values={statuses.map(([, count]) => count)}
-                colors={statuses.map(([, , color]) => color)}
+                colors={statuses.map(([label]) => statusColor(label))}
                 unit="count"
                 height={300}
               />
             </PanelState>
+
+            {(composition.data?.status.excluded ?? 0) > 0 && (
+              <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                {pluralise(composition.data?.status.excluded ?? 0, 'pending application')} excluded —
+                an application that has not been activated is not a subscriber.
+              </p>
+            )}
           </CardBody>
         </Card>
 
         <Card flush>
-          <CardHeader title="Active Subscribers by Plan" subtitle={data?.branch_label} />
+          <CardHeader
+            title="Active Subscribers by Plan"
+            subtitle={composition.data?.branch_label}
+            actions={<WidgetRange state={compositionRange} />}
+          />
           <CardBody>
             <PanelState
-              loading={first}
-              empty={(data?.plans.length ?? 0) === 0}
+              loading={composition.loading && !composition.data}
+              empty={(composition.data?.plans.length ?? 0) === 0}
               emptyMessage="No active subscribers on any plan."
               height={300}
             >
               <DonutChart
-                labels={(data?.plans ?? []).map((plan) => plan.label)}
-                values={(data?.plans ?? []).map((plan) => plan.count)}
+                labels={(composition.data?.plans ?? []).map((plan) => plan.label)}
+                values={(composition.data?.plans ?? []).map((plan) => plan.count)}
                 unit="count"
                 height={300}
               />
@@ -273,12 +381,45 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
         </Card>
       )}
 
-      {/* ── Geography ─────────────────────────────────────────────────── */}
-      <BarangayAnalyticsPanel rows={data?.top_barangays ?? []} loading={first} error={error} />
+      {/* ── Geography: every barangay, not a top ten ───────────────────── */}
+      <Restricted
+        require={WIDGET.subscriberBarangay}
+        fallback={<RestrictedPanel title="Barangay Breakdown" height={240} />}
+      >
+        <BarangayTable
+          rows={geography.data?.barangays ?? []}
+          loading={geography.loading && !geography.data}
+          error={geography.error}
+          actions={<WidgetRange state={barangayRange} />}
+        />
+      </Restricted>
+
+      {/* ── Who owes ──────────────────────────────────────────────────── */}
+      <OverdueAccountsPanel
+        ledger={data?.overdue ?? null}
+        loading={first}
+        error={error}
+        onApply={({ search, planId, bucket }) =>
+          update({
+            overdueSearch: search,
+            overduePlanId: planId,
+            overdueBucket: bucket,
+            // Filters change how many pages exist, so page 4 of the old result
+            // is meaningless against the new one.
+            overduePage: 1,
+          })
+        }
+        onClear={() =>
+          update({ overdueSearch: '', overduePlanId: 0, overdueBucket: '', overduePage: 1 })
+        }
+        onPageChange={(page) => update({ overduePage: page })}
+      />
 
       <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-        Counts are as of {data?.as_of ?? 'today'} — a snapshot of the base as it stands, not a
-        figure that accrues over a period. Covering {pluralise(data?.status.total ?? 0, 'account')}.
+        Counts are as of {data?.as_of ?? 'today'}. Pending applications are excluded throughout —
+        they are not subscribers. <strong>Restricted</strong> is what the operating systems record as
+        suspended, and <strong>Disconnected</strong> what they record as expired or overdue.{' '}
+        {pluralise(data?.overdue.total ?? 0, 'account')} carry a balance or a lapsed subscription.
       </p>
     </ReportingPage>
   );

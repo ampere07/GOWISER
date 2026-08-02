@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMonitorStore } from '../store/monitorStore';
-import { ReportingFilters, ReportingResponse } from '../types/reporting';
+import { ReportingFilters, ReportingResponse, WidgetQuery } from '../types/reporting';
 
 interface SectionState<T> {
   data: T | null;
@@ -34,11 +34,21 @@ interface SectionState<T> {
  *  - the source that answered is reported separately from the one requested,
  *    because a section the selected system cannot serve is answered by one that
  *    can (Tech reads GOWISER even when the app points at NETMANAGER)
+ *
+ * `widget` is the calling widget's own date range. Several widgets on one page
+ * call this hook independently, and those still on the same range share a single
+ * request through reportingService's cache — so a page of eight panels that
+ * nobody has moved is one round trip, not eight.
  */
 export const useReportingSection = <T,>(
-  fetcher: (source: string, filters: ReportingFilters) => Promise<ReportingResponse<T>>,
+  fetcher: (
+    source: string,
+    filters: ReportingFilters,
+    widget?: WidgetQuery
+  ) => Promise<ReportingResponse<T>>,
   filters: ReportingFilters,
-  refreshToken: number
+  refreshToken: number,
+  widget?: WidgetQuery
 ): SectionState<T> => {
   const activeSource = useMonitorStore((state) => state.activeSource);
 
@@ -55,7 +65,7 @@ export const useReportingSection = <T,>(
     let cancelled = false;
     setLoading(true);
 
-    fetcher(activeSource, filters)
+    fetcher(activeSource, filters, widget)
       .then((result) => {
         if (cancelled) return;
 
@@ -84,9 +94,11 @@ export const useReportingSection = <T,>(
       cancelled = true;
     };
     // fetcher is a stable service method; filters is one object so a single
-    // dependency covers every control on the page.
+    // dependency covers every page control. The widget range is compared by
+    // value rather than by identity — useWidgetRange rebuilds the object on
+    // every render, and depending on the reference would refetch in a loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSource, filters, refreshToken]);
+  }, [activeSource, filters, refreshToken, widget?.dateFrom, widget?.dateTo, widget?.period]);
 
   return { data, loading, error, source, sourceLabel, substituted };
 };

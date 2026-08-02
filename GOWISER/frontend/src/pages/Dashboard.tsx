@@ -45,6 +45,7 @@ import Inventory from './Inventory';
 import ExpensesLog from './ExpensesLog';
 import Expenses from './Expenses';
 import ExpensesCategoryList from './ExpensesCategoryList';
+import MonthlyPayables from './MonthlyPayables';
 import Logs from './Logs';
 import SOA from './SOA';
 import Invoice from './Invoice';
@@ -395,6 +396,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Inventory />;
             case 'inventory-category-list':
                 return <InventoryCategoryList />;
+            case 'monthly-payables':
+                return <MonthlyPayables />;
             case 'expenses':
                 return <Expenses />;
             case 'expenses-category':

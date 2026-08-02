@@ -57,6 +57,15 @@ export type ReportingSection =
 
 export type Granularity = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+/**
+ * What a widget's own date-range control offers.
+ *
+ * `custom` is not a granularity — it has no bucket size of its own — which is
+ * why it is a separate type rather than a fifth Granularity. useWidgetRange maps
+ * it onto daily buckets.
+ */
+export type RangePreset = Granularity | 'custom';
+
 export interface ReportingSource {
   key: string;
   label: string;
@@ -82,15 +91,19 @@ export interface DateRange {
   to: string;
 }
 
-/** Filters shared by all five sections. One object so it is one state update. */
+/**
+ * Filters shared by all five sections. One object so it is one state update.
+ *
+ * The date range is deliberately *not* here any more. It moved into each widget
+ * (see useWidgetRange), because a single page-level period made the comparison
+ * these pages exist for — this month against the twelve-month trend — impossible
+ * to draw. What is left is genuinely page-wide: which database, which branch,
+ * and the overdue ledger's own paging.
+ */
 export interface ReportingFilters {
   /** A connection key, or ALL_DATABASES to merge every one of them. */
   database: string;
-  dateFrom: string;
-  dateTo: string;
   branch: string | null;
-  /** Financial only: granularity of the long-horizon trend. */
-  period: Granularity;
   /** Financial only: the branch-collections window. */
   branchPeriod: Granularity;
   branchYear: number;
@@ -98,6 +111,19 @@ export interface ReportingFilters {
   overduePlanId: number;
   overdueBucket: string;
   overduePage: number;
+}
+
+/**
+ * A widget's own window, merged over the page filters at request time.
+ *
+ * `period` drives trend bucketing where a section has a trend; sections that do
+ * not simply ignore it, as the backend already does for every parameter a
+ * section does not use.
+ */
+export interface WidgetQuery {
+  dateFrom: string;
+  dateTo: string;
+  period?: Granularity;
 }
 
 // ── Shared row shapes ──────────────────────────────────────────────────
@@ -147,36 +173,52 @@ interface BranchScoped {
 
 // ── Subscriber analytics ───────────────────────────────────────────────
 
+/**
+ * Headline subscriber counts, in this portal's reported vocabulary.
+ *
+ * `pending` is gone: an application that has not been activated is not a
+ * subscriber, and the backend excludes it from every count here. `suspended` and
+ * `expired` are gone too — they are reported as `restricted` and `disconnected`,
+ * which is what management calls them. See App\Services\Reports\StatusMap.
+ */
 export interface SubscriberKpis {
   total: number;
   active: number;
   vip: number;
-  inactive: number;
-  pullout: number;
-  /** Named for what the business calls them; GOWISER stores these as Suspended and Overdue. */
   restricted: number;
   disconnected: number;
-  /** Null on GOWISER, which stores no subscription end date. */
+  /** Null on a schema that stores no subscription end date. */
   expiring_3day: number | null;
   expiring_7day: number | null;
   new_30day: number;
-  /** GOWISER only: accounts carrying a balance, and what they owe. */
-  in_arrears?: number;
-  receivables?: number;
+}
+
+/** The four counters in the summary header at the top of the module. */
+export interface BillingSummary {
+  active: number;
+  vip: number;
+  inactive: number;
+  pullout: number;
+  total: number;
 }
 
 export interface StatusCounts {
   total: number;
   active: number;
   vip: number;
-  inactive: number;
-  pullout: number;
   restricted: number;
   disconnected: number;
-  /** Every status the data actually holds, including ones not named above. */
+  inactive: number;
+  pullout: number;
+  /** Every reported status, largest first. Excluded statuses are already gone. */
   by_status: Record<string, number>;
+  /** The source system's own vocabulary, before mapping. */
+  raw: Record<string, number>;
+  /** How many rows were dropped as not-a-subscriber, so the gap is explainable. */
+  excluded: number;
 }
 
+/** One row of the complete barangay table — every barangay, not a top ten. */
 export interface BarangayRow {
   barangay: string;
   municipality: string;
@@ -186,7 +228,18 @@ export interface BarangayRow {
   vip: number;
   inactive: number;
   pullout: number;
+  restricted: number;
+  disconnected: number;
 }
+
+/** Columns the barangay table can be sorted on. */
+export type BarangaySort =
+  | 'barangay'
+  | 'active'
+  | 'vip'
+  | 'inactive'
+  | 'pullout'
+  | 'total';
 
 export interface OverdueRow extends SourceTagged {
   id: string;
@@ -221,13 +274,16 @@ export interface OverdueLedger {
 
 export interface SubscriberAnalyticsData extends SectionBase, BranchScoped {
   kpi: SubscriberKpis;
+  billing_summary?: BillingSummary;
   status: StatusCounts;
   plans: LabelledCount[];
-  top_barangays: BarangayRow[];
+  /** Every barangay. Replaced the capped `top_barangays`. */
+  barangays: BarangayRow[];
   growth: { new_in_range: number; expected_mrc: number | null };
   overdue: OverdueLedger;
   /** GOWISER only: live session states. */
   sessions?: LabelledCount[];
+  masked?: string[];
 }
 
 // ── Financial ──────────────────────────────────────────────────────────
@@ -274,15 +330,96 @@ export interface SummaryPeriod {
   ratio_pct: number | null;
 }
 
-export interface RecentPayment extends SourceTagged {
-  id: string;
-  or_number: string;
-  account_number: string;
-  subscriber: string;
+/** One collection channel: Cash, PNB or Xendit (plus an Other residue). */
+export interface IncomeChannel {
+  key: 'cash' | 'pnb' | 'xendit' | 'other';
+  label: string;
+  count: number;
+  total: number;
+  share_pct: number;
+  /** The raw payment methods that rolled into this channel, for tracing. */
+  methods: string[];
+}
+
+/**
+ * One executive measure.
+ *
+ * `basis` is not decoration. Three of the four are projections, and a projection
+ * shown with the same authority as a measurement is the commonest way a
+ * dashboard misleads — so the assumption travels with the number and the UI
+ * prints it.
+ */
+export interface ExecutiveMetric {
+  label: string;
+  value: number | null;
+  basis: string;
+  at_risk_accounts?: number;
+  at_risk_factor?: number;
+}
+
+export interface ExecutiveMetrics {
+  prospective_revenue: ExecutiveMetric;
+  arpu: ExecutiveMetric;
+  collection_efficiency: ExecutiveMetric;
+  projected_churn_loss: ExecutiveMetric;
+}
+
+export interface ExpenseNature {
+  label: string;
+  total: number;
+  count: number;
+  share_pct: number;
+  rows: LabelledTotal[];
+}
+
+export interface OpexCapex {
+  opex: ExpenseNature;
+  capex: ExpenseNature;
+  total: number;
+}
+
+export type Recurrence = 'recurring' | 'non_recurring';
+
+/**
+ * One payable obligation for a month.
+ *
+ * The cost side comes live from the monitored database; the settlement side —
+ * `is_paid` and everything under it — is MONITOR's own record, because MONITOR
+ * never writes to a source system. `variance` surfaces a disagreement between
+ * the two rather than resolving it.
+ */
+export interface PayableRow extends SourceTagged {
+  ref: string;
+  label: string;
+  type: string;
+  recurrence: Recurrence;
+  nature: 'opex' | 'capex';
   amount: number;
-  method: string;
-  status: string;
-  payment_date: string | null;
+  count: number;
+  period_type: string | null;
+  last_booked_at: string | null;
+
+  is_paid: boolean;
+  paid_on: string | null;
+  paid_amount: number | null;
+  reference: string | null;
+  note: string | null;
+  updated_by: string | null;
+  variance: number | null;
+}
+
+export interface PayablesLedger {
+  month: string;
+  month_label: string;
+  source: string | null;
+  rows: PayableRow[];
+  totals: Record<
+    'recurring' | 'non_recurring' | 'paid' | 'unpaid',
+    { count: number; amount: number }
+  >;
+  outstanding: number;
+  /** Always 'monitor': the tick lives here, not in the operating system. */
+  settlement_scope: string;
 }
 
 export interface FinancialData extends SectionBase, BranchScoped {
@@ -291,15 +428,17 @@ export interface FinancialData extends SectionBase, BranchScoped {
   kpi: FinancialKpi;
   series: TrendPoint[];
   trend: { period: Granularity; points: TrendPoint[] };
-  /**
-   * Income split by payment channel. Fixed keys, always all four present — `other` carries
-   * everything that is not one of the three named channels, so the parts sum to `kpi.income`.
-   */
-  by_channel: Record<'cash' | 'pnb' | 'xendit' | 'other', { amount: number; count: number }>;
   by_plan: LabelledTotal[];
   by_method: LabelledTotal[];
   by_expense_type: LabelledTotal[];
   payment_notes: LabelledTotal[];
+
+  /** Absent when the role lacks the matching widget permission — see `masked`. */
+  income_channels?: IncomeChannel[];
+  executive_metrics?: ExecutiveMetrics;
+  opex_capex?: OpexCapex;
+  payables?: PayablesLedger;
+
   by_branch: {
     period: Granularity;
     year: number;
@@ -308,7 +447,13 @@ export interface FinancialData extends SectionBase, BranchScoped {
     years: number[];
   };
   periods: SummaryPeriod[];
-  recent_payments: RecentPayment[];
+
+  /**
+   * Widget permissions the caller does not hold, so the UI can say "restricted"
+   * rather than "no data". The two mean different things and the second sends
+   * someone to check a database that is working.
+   */
+  masked?: string[];
 }
 
 // ── Operations ─────────────────────────────────────────────────────────
@@ -348,16 +493,37 @@ export interface WorkRow extends SourceTagged {
   updated_at: string | null;
 }
 
+/**
+ * Average completion time for one kind of work.
+ *
+ * `unit` matters: GOWISER stamps actual minutes on site, NETMANAGER ages a
+ * ticket in hours. Presenting both as one "turnaround" number would invite
+ * comparing quantities that are not comparable, so each row states its own.
+ */
+export interface TurnaroundByType {
+  label: string;
+  group: string | null;
+  unit: 'minutes' | 'hours';
+  closed: number;
+  average_minutes?: number | null;
+  longest_minutes?: number | null;
+  average_hours?: number | null;
+  longest_hours?: number | null;
+}
+
 export interface OperationsData extends SectionBase, BranchScoped {
   queues: WorkQueue[];
   series: WorkPoint[];
   /** One figure on NETMANAGER; split by queue on GOWISER. */
-  turnaround: Turnaround | { job_orders: Turnaround; service_orders: Turnaround };
+  turnaround?: Turnaround | { job_orders: Turnaround; service_orders: Turnaround };
+  /** Average completion time segmented by work-order type. */
+  turnaround_by_type?: TurnaroundByType[];
   recent: WorkRow[];
   has_service_orders: boolean;
   /** GOWISER only. */
   concerns?: LabelledCount[];
   repair_categories?: LabelledCount[];
+  masked?: string[];
 }
 
 // ── Tech ───────────────────────────────────────────────────────────────
@@ -448,6 +614,82 @@ export interface EmployeeData extends SectionBase, BranchScoped {
   payees: LabelledTotal[];
   /** False on GOWISER, which has no expense ledger. */
   supports_payees: boolean;
+}
+
+// ── Executive group overview (Module 5) ────────────────────────────────
+
+export interface SubscriberHealth {
+  available: boolean;
+  active_subscribers?: number;
+  vip_subscribers?: number;
+  disconnected?: number;
+  new_in_range?: number;
+  /** New in range minus disconnections — the figure that can go negative. */
+  net_growth?: number;
+  churn_rate_pct?: number | null;
+  billing_summary?: BillingSummary | null;
+  range_label?: string;
+}
+
+export interface ExecutiveFinancialSummary {
+  available: boolean;
+  /** True when the role may open this view but not read the money on it. */
+  masked?: boolean;
+  total_income?: number;
+  channels?: Record<string, { label: string; total: number; count: number; share_pct: number }>;
+  opex?: number;
+  capex?: number;
+  net?: number;
+  margin_pct?: number | null;
+  outstanding_payables?: number;
+  payables_unpaid_count?: number;
+  metrics?: ExecutiveMetrics | null;
+  range_label?: string;
+}
+
+/**
+ * Something an executive would want to be told about.
+ *
+ * Not a monitoring feed — neither source system runs one — so each alarm is
+ * derived from a condition in the operational data and carries its own `detail`
+ * saying what triggered it, rather than presenting as an SNMP trap.
+ */
+export interface SystemAlarm {
+  key: string;
+  severity: 'critical' | 'warning' | 'info';
+  label: string;
+  detail: string;
+}
+
+export interface OperationsTechSummary {
+  available: boolean;
+  open_work: number | null;
+  oldest_open_days: number | null;
+  average_turnaround: number | null;
+  turnaround_unit: 'minutes' | 'hours' | null;
+  turnaround_by_type: TurnaroundByType[];
+  technicians_live: number | null;
+  technicians_reporting: number | null;
+  alarms: SystemAlarm[];
+  alarm_count: number;
+}
+
+export interface ExecutiveOverviewData {
+  as_of: string;
+  generated_at: string;
+  range: DateRange;
+  range_label: string;
+  subscriber_health: SubscriberHealth;
+  financial_summary: ExecutiveFinancialSummary;
+  operations_tech: OperationsTechSummary;
+  databases: {
+    answered: string[];
+    answered_labels: string[];
+    failed: { key: string; label: string; error: string }[];
+    total: number;
+  };
+  /** Sections that could not be reached, named rather than shown as zero. */
+  unavailable: Record<string, string>;
 }
 
 // ── Printable ──────────────────────────────────────────────────────────

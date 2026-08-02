@@ -2,6 +2,7 @@ import api from '../config/api';
 import { requestCache } from '../utils/requestCache';
 import {
   EmployeeData,
+  ExecutiveOverviewData,
   FinancialData,
   OperationsData,
   PrintableData,
@@ -12,6 +13,7 @@ import {
   ReportingSection,
   SubscriberAnalyticsData,
   TechData,
+  WidgetQuery,
 } from '../types/reporting';
 
 /**
@@ -39,22 +41,29 @@ const clean = (params: Record<string, unknown>): Record<string, unknown> =>
   );
 
 /**
- * Builds the query for a section.
+ * Builds the query for a section, from the page filters plus the calling
+ * widget's own date range.
  *
- * Every section is sent the whole filter set even though each ignores most of
- * it. The alternative — a per-section whitelist here — is one more place to
- * forget a parameter, and the backend already validates and ignores what a
- * section does not use.
+ * The range comes from the widget rather than the page because the page-level
+ * period filter is gone — see useWidgetRange for why. Everything else is still
+ * page-wide, and every section is sent the whole set even though each ignores
+ * most of it: a per-section whitelist here would be one more place to forget a
+ * parameter, and the backend already validates and ignores what a section does
+ * not use.
  */
-const query = (source: string, filters: ReportingFilters): Record<string, unknown> =>
+const query = (
+  source: string,
+  filters: ReportingFilters,
+  widget?: WidgetQuery
+): Record<string, unknown> =>
   clean({
     // The filter wins over the app-wide selection: this control is the one the
     // user is looking at on the page.
     source: filters.database || source,
-    date_from: filters.dateFrom,
-    date_to: filters.dateTo,
+    date_from: widget?.dateFrom,
+    date_to: widget?.dateTo,
     branch: filters.branch ?? 'all',
-    period: filters.period,
+    period: widget?.period,
     branch_period: filters.branchPeriod,
     branch_year: filters.branchYear,
     overdue_search: filters.overdueSearch,
@@ -63,12 +72,22 @@ const query = (source: string, filters: ReportingFilters): Record<string, unknow
     overdue_page: filters.overduePage,
   });
 
+/**
+ * One section payload for one widget's window.
+ *
+ * The cache key is the full parameter set, which is what makes per-widget ranges
+ * affordable: every widget still on the page's default range produces an
+ * identical key and collapses into a single HTTP request. Only a widget someone
+ * has actually moved issues one of its own — and the server caches per parameter
+ * bucket too, so even that is usually free on the second viewer.
+ */
 const fetchSection = async <T,>(
   section: ReportingSection,
   source: string,
-  filters: ReportingFilters
+  filters: ReportingFilters,
+  widget?: WidgetQuery
 ): Promise<ReportingResponse<T>> => {
-  const params = query(source, filters);
+  const params = query(source, filters, widget);
 
   return requestCache.get(
     `reporting_${section}_${JSON.stringify(params)}`,
@@ -111,20 +130,42 @@ export const reportingService = {
       300000
     ),
 
-  getSubscriberAnalytics: (source: string, filters: ReportingFilters) =>
-    fetchSection<SubscriberAnalyticsData>('subscriber_analytics', source, filters),
+  getSubscriberAnalytics: (source: string, filters: ReportingFilters, widget?: WidgetQuery) =>
+    fetchSection<SubscriberAnalyticsData>('subscriber_analytics', source, filters, widget),
 
-  getFinancial: (source: string, filters: ReportingFilters) =>
-    fetchSection<FinancialData>('financial', source, filters),
+  getFinancial: (source: string, filters: ReportingFilters, widget?: WidgetQuery) =>
+    fetchSection<FinancialData>('financial', source, filters, widget),
 
-  getOperations: (source: string, filters: ReportingFilters) =>
-    fetchSection<OperationsData>('operations', source, filters),
+  getOperations: (source: string, filters: ReportingFilters, widget?: WidgetQuery) =>
+    fetchSection<OperationsData>('operations', source, filters, widget),
 
-  getTech: (source: string, filters: ReportingFilters) =>
-    fetchSection<TechData>('tech', source, filters),
+  getTech: (source: string, filters: ReportingFilters, widget?: WidgetQuery) =>
+    fetchSection<TechData>('tech', source, filters, widget),
 
-  getEmployee: (source: string, filters: ReportingFilters) =>
-    fetchSection<EmployeeData>('employee', source, filters),
+  getEmployee: (source: string, filters: ReportingFilters, widget?: WidgetQuery) =>
+    fetchSection<EmployeeData>('employee', source, filters, widget),
+
+  /**
+   * Module 5 — the consolidated C-suite summary.
+   *
+   * Not a section: composed server-side from several of them, so it has no
+   * source parameter. The role check that guards it lives in the controller, and
+   * a 403 here means the sidebar and the backend disagree — which the caller
+   * surfaces rather than swallows.
+   */
+  getExecutiveOverview: async (widget?: WidgetQuery): Promise<ExecutiveOverviewData> =>
+    requestCache.get(
+      `reporting_executive_${JSON.stringify(widget ?? {})}`,
+      async () => {
+        const response = await api.get<{ status: string; data: ExecutiveOverviewData }>(
+          '/executive/overview',
+          { params: clean({ date_from: widget?.dateFrom, date_to: widget?.dateTo }) }
+        );
+
+        return response.data.data;
+      },
+      CACHE_MS
+    ),
 
   /**
    * Line-level data for the print layouts.
@@ -154,9 +195,12 @@ export const reportingService = {
       return;
     }
 
-    // Section keys carry their filters, so clear by prefix.
+    // Section keys carry their filters and their widget's range, so clear by
+    // prefix — there is no single key to drop any more.
     (Object.keys(PATHS) as ReportingSection[]).forEach((section) =>
       requestCache.invalidatePrefix(`reporting_${section}`)
     );
+
+    requestCache.invalidatePrefix('reporting_executive');
   },
 };

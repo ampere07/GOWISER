@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { roleService } from '../services/userService';
+import { getPayableAlertCount } from '../services/monthlyPayableService';
+import pusher from '../services/pusherService';
 
 // Locked role IDs (1-8) use hardcoded allowedRoles; custom roles (9+) use permissions array
 const LOCKED_ROLE_IDS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -24,6 +26,8 @@ interface MenuItem {
   icon: React.ElementType;
   children?: MenuItem[];
   allowedRoles?: string[];
+  /** Attention count rendered as a pill. Falsy or zero renders nothing. */
+  badge?: number;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLogout, isCollapsed, userRole, roleId, organizationId, userEmail, permissions }) => {
@@ -33,6 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
   const [currentDateTime, setCurrentDateTime] = useState('');
   const [tooltipItem, setTooltipItem] = useState<{ id: string; label: string; y: number } | null>(null);
   const [fetchedPermissions, setFetchedPermissions] = useState<string[] | null>(null);
+  const [payableAlerts, setPayableAlerts] = useState(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -82,6 +87,66 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       window.removeEventListener('storage', handlePaletteUpdate);
     };
   }, []);
+
+  /**
+   * Whether this user can reach Monthly Payables at all. Gates the badge fetch so a
+   * technician's session never fires a request for a page they cannot open.
+   */
+  const canSeePayables = useMemo(() => {
+    const role = (userRole || '').toLowerCase().trim();
+    const rid = String(roleId ?? '');
+
+    if (role === 'customer' || rid === '3') return false;
+    if (role === 'administrator' || role === 'superadmin' || rid === '1' || rid === '7') return true;
+
+    // Custom roles (role_id > 8) are permission-driven.
+    if (permissions && permissions.includes('monthly-payables')) return true;
+    if (fetchedPermissions && fetchedPermissions.includes('monthly-payables')) return true;
+
+    try {
+      const authData = JSON.parse(localStorage.getItem('authData') || '{}');
+      return Array.isArray(authData.permissions) && authData.permissions.includes('monthly-payables');
+    } catch (e) {
+      return false;
+    }
+  }, [userRole, roleId, permissions, fetchedPermissions]);
+
+  /**
+   * Overdue + due-today count for the Monthly Payables badge.
+   *
+   * Refreshed three ways because none alone is sufficient: the broadcast covers other
+   * people's payments, the interval covers the midnight rollover that nothing broadcasts,
+   * and the initial call covers the first paint.
+   *
+   * Cleanup unbinds the handler but never calls pusher.unsubscribe() — the Monthly
+   * Payables page listens on this same channel, and unsubscribing would cut it off.
+   */
+  useEffect(() => {
+    if (!canSeePayables) {
+      setPayableAlerts(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = () => {
+      getPayableAlertCount().then(({ count }) => {
+        if (!cancelled && mountedRef.current) setPayableAlerts(count);
+      });
+    };
+
+    load();
+    const interval = setInterval(load, 10 * 60 * 1000);
+
+    const channel = pusher.subscribe('monthly-payables');
+    channel.bind('monthly-payables-updated', load);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      channel.unbind('monthly-payables-updated', load);
+    };
+  }, [canSeePayables]);
 
   const menuItems: MenuItem[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, allowedRoles: ['administrator', 'superadmin'] },
@@ -141,6 +206,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       icon: Wallet,
       allowedRoles: ['administrator', 'superadmin'],
       children: [
+        // Badge counts what needs attention today: anything past due, plus anything
+        // falling due today. Zero renders nothing.
+        { id: 'monthly-payables', label: 'Monthly Payables', icon: CalendarClock, allowedRoles: ['administrator', 'superadmin'], badge: payableAlerts },
         { id: 'expenses', label: 'Expenses', icon: Wallet, allowedRoles: ['administrator', 'superadmin'] },
         { id: 'expenses-category', label: 'Expenses Category', icon: Tag, allowedRoles: ['administrator', 'superadmin'] }
       ]
@@ -382,6 +450,16 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
 
   const collapsedItems = flattenForCollapsed(filteredMenuItems);
 
+  /** Rolls child badges up to the parent, so a collapsed group still shows the alert. */
+  const badgeFor = (item: MenuItem): number =>
+    (item.badge ?? 0) + (item.children?.reduce((sum, child) => sum + (child.badge ?? 0), 0) ?? 0);
+
+  const badgePill = (count: number) => (
+    <span className="ml-2 min-w-[18px] h-[18px] px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none flex-shrink-0">
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+
   // Shared active style
   const activeStyle = {
     backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : isDarkMode ? 'rgba(249, 115, 22, 0.2)' : 'rgba(249, 115, 22, 0.1)',
@@ -408,6 +486,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
           {collapsedItems.map(item => {
             const IconComponent = item.icon;
             const isActive = activeSection === item.id;
+            const badgeCount = badgeFor(item);
             return (
               <div key={item.id} className="relative group">
                 <button
@@ -427,10 +506,18 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
                   style={isActive ? activeStyle : {}}
                   title=""
                 >
-                  <IconComponent
-                    className={`h-5 w-5 ${isActive ? '' : isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}
-                    style={isActive ? { color: colorPalette?.primary || '#7c3aed' } : {}}
-                  />
+                  <div className="relative">
+                    <IconComponent
+                      className={`h-5 w-5 ${isActive ? '' : isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}
+                      style={isActive ? { color: colorPalette?.primary || '#7c3aed' } : {}}
+                    />
+                    {/* Count sits on the icon here — there is no label to sit beside. */}
+                    {badgeCount > 0 && (
+                      <span className="absolute -top-1.5 -right-2 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                        {badgeCount > 99 ? '99+' : badgeCount}
+                      </span>
+                    )}
+                  </div>
                 </button>
 
                 {/* Floating tooltip */}
@@ -490,6 +577,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     const isExpanded = expandedItems.includes(item.id);
     const isCurrentItemActive = activeSection === item.id;
     const IconComponent = item.icon;
+    // A collapsed group surfaces its children's alerts; an expanded one does not, or the
+    // same count would be shown twice.
+    const badgeCount = hasChildren && isExpanded ? (item.badge ?? 0) : badgeFor(item);
 
     return (
       <div key={item.id}>
@@ -511,13 +601,14 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
             }`}
           style={isCurrentItemActive ? activeStyle : {}}
         >
-          <div className="flex items-center">
-            <IconComponent className={`h-5 w-5 mr-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`} />
-            <span>{item.label}</span>
+          <div className="flex items-center min-w-0">
+            <IconComponent className={`h-5 w-5 mr-3 flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`} />
+            <span className="truncate">{item.label}</span>
+            {badgeCount > 0 && badgePill(badgeCount)}
           </div>
           {hasChildren && (
             <ChevronRight
-              className={`h-4 w-4 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'} transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              className={`h-4 w-4 flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'} transition-transform ${isExpanded ? 'rotate-90' : ''}`}
             />
           )}
         </button>

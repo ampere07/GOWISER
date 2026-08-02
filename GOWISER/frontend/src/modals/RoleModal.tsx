@@ -33,6 +33,7 @@ const SYSTEM_PAGES = [
   { id: 'sms-blast', label: 'SMS Blast' },
   { id: 'inventory', label: 'Inventory' },
   { id: 'inventory-category-list', label: 'Inventory Category List' },
+  { id: 'monthly-payables', label: 'Monthly Payables' },
   { id: 'promo-list', label: 'Promo' },
   { id: 'plan-list', label: 'Plan' },
   { id: 'location-list', label: 'Location' },

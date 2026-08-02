@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
   Activity,
+  Crown,
   Database,
   DollarSign,
   HardHat,
   Layers,
   LayoutDashboard,
   LogOut,
+  ScrollText,
   User,
   UserCog,
   Users,
@@ -17,7 +19,6 @@ import { useTheme } from '../hooks/useTheme';
 import { usePalette } from '../hooks/usePalette';
 import { Capability } from '../types/monitor';
 import { ReportingSection } from '../types/reporting';
-import { canView } from '../utils/permissions';
 
 export interface MenuItem {
   id: string;
@@ -37,6 +38,14 @@ export interface MenuItem {
    * falls through to whichever system can answer. See visibleMenuItems.
    */
   reportingSection?: ReportingSection;
+  /**
+   * Requires an executive role on top of the permission.
+   *
+   * The consolidated view puts every company's figures on one screen, and the
+   * backend refuses it to a non-executive role even when the module permission
+   * is held — so the menu hides it rather than offering a page that 403s.
+   */
+  executiveOnly?: boolean;
   /** Optional divider label rendered above this item. */
   group?: string;
 }
@@ -50,6 +59,16 @@ export interface MenuItem {
  * everything — failing closed is the right default for an executive portal.
  */
 export const MENU_ITEMS: MenuItem[] = [
+  // Module 5 first: the consolidated C-suite view is where an executive starts,
+  // and every module below it is the detail behind one of its panels.
+  {
+    id: 'executive-overview',
+    label: 'Group Overview',
+    icon: Crown,
+    executiveOnly: true,
+    group: 'Executive',
+  },
+
   // The five operational sections, ported from the operating systems' own
   // modules. Ordered subscribers → money → delivery → people, which is how the
   // questions actually get asked.
@@ -65,17 +84,20 @@ export const MENU_ITEMS: MenuItem[] = [
   { id: 'tech', label: 'Tech', icon: HardHat, reportingSection: 'tech' },
   { id: 'employee', label: 'Employee', icon: User, reportingSection: 'employee' },
 
-  // Executive rollups.
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, capability: 'overview', group: 'Executive' },
+  // Legacy executive rollups, still served while each is migrated onto the
+  // modules above.
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard, capability: 'overview', group: 'Legacy' },
   { id: 'operations', label: 'Operations', icon: Activity, capability: 'operations' },
   { id: 'revenue', label: 'Revenue', icon: DollarSign, capability: 'revenue' },
   { id: 'financials', label: 'Financials', icon: Wallet, capability: 'financials' },
   // Spans every source, so it does not depend on the one currently selected.
   { id: 'consolidated', label: 'All Companies', icon: Layers },
 
-  // The two sections that write, both against MONITOR's own database. Not tied to a source.
-  { id: 'databases', label: 'Databases', icon: Database, group: 'Settings' },
-  { id: 'users', label: 'Users', icon: UserCog },
+  // Administration. All three write to MONITOR's own tables only — the
+  // monitored databases stay read-only at the connection level regardless.
+  { id: 'users', label: 'User Management', icon: UserCog, group: 'Administration' },
+  { id: 'audit', label: 'Audit Trail', icon: ScrollText },
+  { id: 'databases', label: 'Databases', icon: Database },
 ];
 
 interface SidebarProps {
@@ -89,6 +111,8 @@ interface SidebarProps {
   capabilities?: Capability[];
   /** Sections that at least one configured system can answer. */
   servableSections?: ReportingSection[];
+  /** Whether the role may open the consolidated executive view. */
+  isExecutiveRole?: boolean;
 }
 
 /**
@@ -111,16 +135,20 @@ interface SidebarProps {
 export const visibleMenuItems = (
   permissions?: string[] | null,
   capabilities?: Capability[],
-  servableSections?: ReportingSection[]
+  servableSections?: ReportingSection[],
+  isExecutiveRole = false
 ): MenuItem[] => {
   if (!permissions || permissions.length === 0) {
     return [];
   }
 
   return MENU_ITEMS.filter((item) => {
-    // `<id>.view`, not a bare id: permissions now arrive as section.verb grants, so a role
-    // holding only `financial.export` does not get the Financial page in the menu.
-    if (!canView(permissions, item.id)) return false;
+    if (!permissions.includes(item.id)) return false;
+
+    // The second gate on the consolidated view. Held separately from the module
+    // permission because that view is not access a custom role should acquire
+    // sideways — the backend enforces the same rule and would 403.
+    if (item.executiveOnly && !isExecutiveRole) return false;
 
     if (item.capability && capabilities && !capabilities.includes(item.capability)) {
       return false;
@@ -148,6 +176,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   permissions,
   capabilities,
   servableSections,
+  isExecutiveRole,
 }) => {
   const isDarkMode = useTheme();
   const palette = usePalette();
@@ -172,7 +201,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const items = visibleMenuItems(permissions, capabilities, servableSections);
+  const items = visibleMenuItems(permissions, capabilities, servableSections, isExecutiveRole);
 
   const activeStyle = {
     backgroundColor: `${palette.primary}33`,

@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
 use App\Services\ReportingService;
 use App\Services\Reports\ReportPeriod;
 use App\Services\SourceRegistry;
+use App\Support\PayloadMasker;
+use App\Support\Permissions;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -25,6 +28,17 @@ class ReportingController extends Controller
 {
     /** Overdue-ledger buckets. '' means no filter. */
     private const OVERDUE_BUCKETS = ['', '7', '8_30', '30'];
+
+    /**
+     * Seconds before the same person opening the same sensitive report is
+     * recorded again.
+     *
+     * The dashboards poll every thirty seconds, so without this one open tab
+     * writes 120 audit rows an hour and the trail becomes unreadable. Fifteen
+     * minutes keeps "who looked at the payables ledger, and roughly when"
+     * answerable while leaving the log something a person can read.
+     */
+    private const VIEW_AUDIT_WINDOW = 900;
 
     public function __construct(
         private SourceRegistry $sources,
@@ -89,6 +103,18 @@ class ReportingController extends Controller
         if ($from > $to) {
             [$from, $to] = [$to, $from];
         }
+
+        // Printing puts the ledger on paper, which leaves the building — a
+        // stronger act than reading it on screen, and gated separately. The route
+        // also carries the `permission` middleware; this is the second check,
+        // because a signed document is worth two.
+        AuditLog::record(
+            $request,
+            'exported',
+            'financial-report',
+            $request->query('source'),
+            "Printable financial ledger pulled for {$from} to {$to}"
+        );
 
         return $this->section($request, 'financial', fn (string $source) => $this->reporting->printable(
             $source,
@@ -253,26 +279,41 @@ class ReportingController extends Controller
      */
     private function section(Request $request, string $section, callable $callback)
     {
+        // The module gate. Hiding a tab in the sidebar hides the tab; without
+        // this, the data behind it is still one hand-typed URL away.
+        $denied = $this->denyUnlessModule($request, $section);
+
+        if ($denied !== null) {
+            return $denied;
+        }
+
         try {
             $requested = $request->query('source');
+            $abilities = $request->user()?->permissionList() ?? [];
 
             // "all" is a filter, not a source: run the section against every
             // database that can serve it and merge. The merged payload names
             // which databases answered, so a total is never quietly short.
             if ($this->wantsEveryDatabase($requested)) {
+                $data = $this->reporting->aggregate($section, $this->params($request));
+
+                $this->recordView($request, $section, ReportingService::ALL_SOURCES);
+
                 return response()->json([
                     'status' => 'success',
                     'source' => ReportingService::ALL_SOURCES,
                     'source_label' => 'All databases',
                     'requested_source' => ReportingService::ALL_SOURCES,
                     'section' => $section,
-                    'data' => $this->reporting->aggregate($section, $this->params($request)),
+                    'data' => PayloadMasker::apply($section, $data, $abilities),
                 ]);
             }
 
             $source = $this->reporting->resolveSourceFor($section, $requested);
 
-            return $this->success($source, $callback($source), [
+            $this->recordView($request, $section, $source);
+
+            return $this->success($source, PayloadMasker::apply($section, $callback($source), $abilities), [
                 'requested_source' => $this->sources->resolveKey($requested),
                 'section' => $section,
             ]);
@@ -281,6 +322,72 @@ class ReportingController extends Controller
         } catch (\Throwable $e) {
             return $this->failure($e, $request);
         }
+    }
+
+    /**
+     * Rejects a section the caller's role does not open.
+     *
+     * Returns a response to send, or null to continue — a shape that keeps the
+     * check readable at the single call site rather than repeated in five
+     * endpoint methods where one could be forgotten.
+     */
+    private function denyUnlessModule(Request $request, string $section)
+    {
+        $module = Permissions::SECTION_MODULES[$section] ?? null;
+        $user = $request->user();
+
+        if ($module === null || ($user && $user->can_($module))) {
+            return null;
+        }
+
+        AuditLog::record(
+            $request,
+            'denied',
+            'section',
+            $section,
+            "Blocked access to the {$section} section — role lacks [{$module}]"
+        );
+
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Your role does not have access to this module.',
+            'missing' => [$module],
+        ], 403);
+    }
+
+    /**
+     * Records that an executive opened a section, and against which database.
+     *
+     * Only the sections that carry commercially sensitive figures. Logging every
+     * read of every page would bury the events worth finding — the point of the
+     * trail is that "who was looking at the payables ledger last Tuesday" has an
+     * answer, not that every keystroke has a row.
+     *
+     * The dashboards poll, so this would otherwise write a row every thirty
+     * seconds per open tab; recordView collapses repeats within the window.
+     */
+    private function recordView(Request $request, string $section, string $source): void
+    {
+        if (!in_array($section, ['financial', 'employee'], true)) {
+            return;
+        }
+
+        $user = $request->user();
+        $key = 'audit:view:' . ($user?->id ?? 0) . ':' . $section . ':' . $source;
+
+        if (cache()->get($key)) {
+            return;
+        }
+
+        cache()->put($key, true, self::VIEW_AUDIT_WINDOW);
+
+        AuditLog::record(
+            $request,
+            'viewed',
+            'section',
+            $section,
+            ucfirst(str_replace('_', ' ', $section)) . " report viewed against [{$source}]"
+        );
     }
 
     private function success(string $source, $data, array $extra = [])

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Filter, X } from 'lucide-react';
+import React from 'react';
+import { X } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
 import { ReportingBranch, ReportingFilters } from '../../types/reporting';
 import Card from './Card';
@@ -13,20 +13,25 @@ interface FilterBarProps {
   branches: ReportingBranch[];
   /** Databases that can serve this section. Hidden when fewer than two. */
   databases?: { key: string; label: string }[];
-  /** Hidden on sections with no date dimension. */
-  showRange?: boolean;
   /** Hidden on sources with no branch concept — GOWISER has none. */
   showBranch?: boolean;
   children?: React.ReactNode;
 }
 
 /**
- * The date range and branch controls shared by the five sections.
+ * The page-wide scope controls: which database, and which branch.
  *
- * The range is staged in two inputs and only applied on the filter button, which
- * mirrors the source system. That is not only fidelity: a half-typed date input
- * fires change events, so applying live would send requests for ranges like
- * 0002-01-01 while someone types a year.
+ * The date range used to live here and no longer does. One period filter over a
+ * whole page meant every panel moved together, which made the comparison these
+ * screens exist for — this month's collections against the twelve-month trend —
+ * impossible to draw. Each widget now carries its own range control in its
+ * header; see WidgetRange and useWidgetRange.
+ *
+ * What is left is genuinely page-wide. A database is a scope, not a filter, and a
+ * branch id means the same thing to every panel on the screen.
+ *
+ * The bar hides itself entirely when neither control has anything to offer — one
+ * database and no branches — rather than rendering an empty card.
  */
 const FilterBar: React.FC<FilterBarProps> = ({
   filters,
@@ -34,103 +39,46 @@ const FilterBar: React.FC<FilterBarProps> = ({
   onReset,
   branches,
   databases = [],
-  showRange = true,
   showBranch = true,
   children,
 }) => {
   const isDarkMode = useTheme();
   const controlClass = useControlClass();
 
-  const [draftFrom, setDraftFrom] = useState(filters.dateFrom);
-  const [draftTo, setDraftTo] = useState(filters.dateTo);
+  const hasDatabasePicker = databases.length > 1;
+  const hasBranchPicker = showBranch && branches.length > 0;
 
-  // Re-sync when the applied range changes from elsewhere — a reset, or a source
-  // switch that rebuilt the filters.
-  useEffect(() => {
-    setDraftFrom(filters.dateFrom);
-    setDraftTo(filters.dateTo);
-  }, [filters.dateFrom, filters.dateTo]);
-
-  const apply = () => {
-    // A reversed range is swapped rather than rejected. The backend does the
-    // same, and an error for an obvious slip is worse than just fixing it.
-    const [from, to] = draftFrom > draftTo ? [draftTo, draftFrom] : [draftFrom, draftTo];
-
-    setDraftFrom(from);
-    setDraftTo(to);
-    onChange({ dateFrom: from, dateTo: to, overduePage: 1 });
-  };
-
-  const dirty = draftFrom !== filters.dateFrom || draftTo !== filters.dateTo;
+  if (!hasDatabasePicker && !hasBranchPicker && !children) {
+    return null;
+  }
 
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2">
-        {/* First in the bar because it is the widest-reaching control: it decides
-            what the rest of the filters even apply to. */}
+        <span className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+          Scope:
+        </span>
+
+        {/* First in the bar because it is the widest-reaching control: it
+            decides what the rest of the page even applies to. */}
         <DatabaseFilter
           value={filters.database}
           onChange={(database) => onChange({ database })}
           options={databases}
         />
 
-        {showRange && (
-          <>
-            <span className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-              Period:
-            </span>
-
-            <input
-              type="date"
-              value={draftFrom}
-              max={draftTo || undefined}
-              onChange={(event) => setDraftFrom(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') apply();
-              }}
-              className={controlClass}
-              aria-label="From date"
-            />
-            <input
-              type="date"
-              value={draftTo}
-              min={draftFrom || undefined}
-              onChange={(event) => setDraftTo(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') apply();
-              }}
-              className={controlClass}
-              aria-label="To date"
-            />
-
-            <Button
-              variant="primary"
-              icon={<Filter size={14} />}
-              onClick={apply}
-              title="Apply this date range"
-              className={dirty ? 'ring-2 ring-blue-500/40' : ''}
-            />
-            <Button
-              variant="outline"
-              icon={<X size={14} />}
-              onClick={onReset}
-              title="Reset filters to month-to-date"
-            />
-          </>
-        )}
-
-        {children}
-
-        {showBranch && branches.length > 0 && (
+        {hasBranchPicker && (
           <select
             value={filters.branch ?? 'all'}
             onChange={(event) =>
               onChange({
                 branch: event.target.value === 'all' ? null : event.target.value,
+                // A branch change alters how many pages the ledger has, so
+                // page 4 of the old result is meaningless against the new one.
                 overduePage: 1,
               })
             }
-            className={`${controlClass} ml-auto`}
+            className={controlClass}
             aria-label="Filter by branch"
           >
             <option value="all">All branches</option>
@@ -141,7 +89,22 @@ const FilterBar: React.FC<FilterBarProps> = ({
             ))}
           </select>
         )}
+
+        {children}
+
+        <Button
+          variant="outline"
+          icon={<X size={14} />}
+          onClick={onReset}
+          title="Reset the page scope"
+          className="ml-auto"
+        />
       </div>
+
+      <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+        Each widget below carries its own date range. Set them independently to
+        compare one period against another on the same screen.
+      </p>
     </Card>
   );
 };

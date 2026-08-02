@@ -6,11 +6,18 @@ export interface UserData {
   role: string;
   role_id: number | null;
   /**
-   * Unrestricted role. Not a permission: it gates actions no grant can confer, such as creating
-   * an account. The server re-checks it on every such request — this only decides what is offered.
+   * The effective permission list: the role's, plus per-user grants, minus
+   * per-user denials. Computed server-side so the UI hides on exactly what the
+   * middleware enforces on — a control that appears and then 403s is worse than
+   * one that was never drawn.
    */
-  is_superadmin?: boolean;
   permissions?: string[] | null;
+  /**
+   * Whether the role itself is one the consolidated executive view is intended
+   * for. Checked in addition to the module permission, because that view puts
+   * every company's figures on one screen.
+   */
+  is_executive_role?: boolean;
 }
 
 export interface LoginResponse {

@@ -109,6 +109,105 @@ body.disable-transitions *::after {
   }
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Financial module — monochrome print
+
+   Distinct from the block above, which governs the *printable report* overlay:
+   a designed A4 document whose header bands and status colours are the point,
+   and which deliberately forces backgrounds on.
+
+   These rules govern printing the Financial *dashboard* itself, straight from
+   the browser. That output goes into a folder and gets signed, and it has three
+   problems the screen design does not:
+
+     - the dark theme prints as a page of black ink
+     - accent colours and tinted cards survive as mid-greys that make figures
+       harder to read, not easier
+     - controls that cannot be pressed on paper still take up space
+
+   So the module prints as black text on white with hairline rules, and the
+   interactive chrome is removed. Scoped to `.financial-module`, which the
+   Financial page wraps itself in, so no other screen is affected.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  .financial-module,
+  .financial-module * {
+    /* Overrides the browser default of dropping backgrounds *and* the inherited
+       exact-colour rule, so nothing prints a tint. */
+    -webkit-print-color-adjust: economy !important;
+    print-color-adjust: economy !important;
+
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  .financial-module {
+    background: #fff !important;
+  }
+
+  /* Every border to the same hairline black. Card borders, table rules and the
+     coloured left-accents on the money cards all collapse to one weight, which
+     is what makes a monochrome page read as deliberate rather than washed out. */
+  .financial-module *,
+  .financial-module *::before,
+  .financial-module *::after {
+    border-color: #000 !important;
+  }
+
+  .financial-module table {
+    border-collapse: collapse !important;
+  }
+
+  .financial-module th,
+  .financial-module td {
+    border-bottom: 1px solid #000 !important;
+  }
+
+  .financial-module thead th {
+    border-bottom-width: 2px !important;
+    font-weight: 700 !important;
+  }
+
+  /* Header repeats on every page and no row is split across a break: a ledger
+     that continues onto page two without column headings is unreadable. */
+  .financial-module thead {
+    display: table-header-group;
+  }
+
+  .financial-module tr,
+  .financial-module .print-keep {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Interactive chrome. None of it does anything on paper, and the range
+     buttons in particular leave a row of empty boxes across every card header. */
+  .financial-module button,
+  .financial-module select,
+  .financial-module input,
+  .financial-module [role='group'] {
+    display: none !important;
+  }
+
+  /* Proportion bars and status dots carry meaning through colour alone, which
+     monochrome cannot reproduce — and the number they illustrate is always in
+     the adjacent cell, so dropping them loses nothing. */
+  .financial-module [role='presentation'] {
+    display: none !important;
+  }
+
+  /* Charts render to a canvas that cannot be recoloured, so they would print as
+     the one thing on the page still in colour. The tables carry the same
+     figures. */
+  .financial-module canvas {
+    display: none !important;
+  }
+}
+
 /* A4 portrait with the reference's margins, for the Financial Report. */
 @page {
   size: A4 portrait;

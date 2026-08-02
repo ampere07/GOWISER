@@ -351,6 +351,12 @@ class ReportingService
 
         $db = $this->sources->connection($sourceKey);
 
+        // Drivers are handed a connection, not a key, but the payables ledger
+        // has to know which database it is settling for — two branches both owe
+        // rent, and one paying it does not settle the other's. Passed in params
+        // rather than widening the driver interface for one block.
+        $params['source_key'] = $sourceKey;
+
         switch ($section) {
             case 'subscriber_analytics':
                 return $driver->subscriberAnalytics($db, $params);

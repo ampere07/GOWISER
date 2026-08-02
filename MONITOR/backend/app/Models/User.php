@@ -32,6 +32,7 @@ class User extends Authenticatable
         'last_name',
         'contact_number',
         'role_id',
+        'permission_overrides',
         'darkmode',
         'last_login',
         'active',
@@ -45,14 +46,12 @@ class User extends Authenticatable
     protected $casts = [
         'active' => 'boolean',
         'last_login' => 'datetime',
+        'permission_overrides' => 'array',
     ];
 
     protected $appends = [
         'full_name',
     ];
-
-    /** Memoised expansion of the role's stored permissions. Not a database column. */
-    private ?array $effectivePermissions = null;
 
     public function getAuthPassword()
     {
@@ -77,12 +76,11 @@ class User extends Authenticatable
     }
 
     /**
-     * The role's permission list exactly as stored. Raw — may hold bare section ids from before
-     * verbs existed. Callers wanting to make an access decision want effectivePermissions().
+     * The role's own permission list, before any per-user override.
      *
      * An empty list means "no access", never "all access".
      */
-    public function permissionList(): array
+    public function rolePermissions(): array
     {
         $permissions = $this->role?->permissions;
 
@@ -90,47 +88,59 @@ class User extends Authenticatable
     }
 
     /**
-     * The stored list expanded into `section.verb` grants.
+     * Everything this user may do: the role's list, plus per-user grants, minus
+     * per-user denials.
      *
-     * Memoised per instance: this runs on every guarded request, and the answer cannot change
-     * within one request — a role edit takes effect on the next one.
+     * Deny is applied last and wins over both the grant list and the role. That
+     * ordering is what makes an override usable as a restriction — "this analyst
+     * keeps the Financial tab but not the revenue figures" — rather than only as
+     * an extension, which would leave a restriction expressible only by inventing
+     * another role.
+     *
+     * @return string[]
      */
-    public function effectivePermissions(): array
+    public function permissionList(): array
     {
-        if ($this->effectivePermissions !== null) {
-            return $this->effectivePermissions;
-        }
+        $overrides = is_array($this->permission_overrides) ? $this->permission_overrides : [];
 
-        // Delegated to the role, which is the single place that decides — including the
-        // superadmin case, where the grant list is generated from the section map rather than
-        // stored, so a section added later is covered with no migration.
-        //
-        // No role at all means no permissions: an account can sign in and see nothing, and every
-        // guard fails closed rather than guessing.
-        return $this->effectivePermissions = $this->role?->effectivePermissions() ?? [];
+        $granted = array_merge(
+            $this->rolePermissions(),
+            Permissions::sanitise($overrides['grant'] ?? [])
+        );
+
+        $denied = Permissions::sanitise($overrides['deny'] ?? []);
+
+        return array_values(array_unique(array_diff($granted, $denied)));
+    }
+
+    /** The raw override record, in the shape the management screen edits. */
+    public function overrides(): array
+    {
+        $overrides = is_array($this->permission_overrides) ? $this->permission_overrides : [];
+
+        return [
+            'grant' => Permissions::sanitise($overrides['grant'] ?? []),
+            'deny' => Permissions::sanitise($overrides['deny'] ?? []),
+        ];
+    }
+
+    /** Lower-cased role name, or 'viewer' for a user with no role attached. */
+    public function roleName(): string
+    {
+        return $this->role ? strtolower(trim($this->role->role_name)) : 'viewer';
     }
 
     /**
-     * Does this user hold the permission?
+     * Whether this user's *role* is one the consolidated executive view is
+     * intended for.
      *
-     * Accepts both `financial.export` and a bare `databases`, the latter meaning "any verb on
-     * that section" — which is what the pre-existing call sites pass.
+     * Deliberately separate from the module permission and checked in addition to
+     * it: that view puts every company's money on one screen, and a custom role
+     * should not acquire it merely by being granted a module id.
      */
-    public function can_(string $permission): bool
+    public function isExecutiveRole(): bool
     {
-        return Permissions::granted($this->effectivePermissions(), $permission);
-    }
-
-    /**
-     * Does this account hold the unrestricted role?
-     *
-     * Read from the role's flag rather than inferred from holding every permission: a role that
-     * happens to list all of them today is still an ordinary role, and should not silently gain
-     * superadmin-only powers such as creating other accounts.
-     */
-    public function isSuperadmin(): bool
-    {
-        return (bool) $this->role?->is_superadmin;
+        return in_array($this->roleName(), Permissions::EXECUTIVE_ROLES, true);
     }
 
     /**
@@ -146,4 +156,8 @@ class User extends Authenticatable
         return is_array($scope) ? $scope : null;
     }
 
+    public function can_(string $permission): bool
+    {
+        return in_array($permission, $this->permissionList(), true);
+    }
 }

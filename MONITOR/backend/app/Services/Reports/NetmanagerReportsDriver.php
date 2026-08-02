@@ -38,7 +38,12 @@ use RuntimeException;
  */
 class NetmanagerReportsDriver implements ReportsDriver
 {
-    /** Barangay league table and plan mix are both capped at ten rows. */
+    /**
+     * Plan mix is capped at ten slices — a pie chart with forty is unreadable.
+     *
+     * The barangay table used to share this cap and no longer does: it is a
+     * table, not a chart, and the coverage question it answers needs the tail.
+     */
     private const TOP_N = 10;
 
     /** Overdue ledger page size, matching $odPerPage in the source. */
@@ -91,6 +96,8 @@ class NetmanagerReportsDriver implements ReportsDriver
         $anchor = ReportPeriod::anchor($params['as_of'] ?? null);
         [$from, $to] = $this->range($params);
 
+        $status = $this->subscriberStatusCounts($db, $branch);
+
         return [
             'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
@@ -100,9 +107,17 @@ class NetmanagerReportsDriver implements ReportsDriver
             'range_label' => $this->rangeLabel($from, $to),
 
             'kpi' => $this->subscriberKpis($db, $branch, $anchor->toDateString()),
-            'status' => $this->subscriberStatusCounts($db, $branch),
+
+            // The four billing-status counters the summary header reports.
+            'billing_summary' => StatusMap::billingSummary($status['raw']),
+
+            'status' => $status,
             'plans' => $this->activePlanMix($db, $branch),
-            'top_barangays' => $this->topBarangays($db, $branch, $params),
+
+            // Every barangay, not a top ten. A league table answers "who is
+            // biggest"; management asked to see coverage, which needs the tail.
+            'barangays' => $this->barangayBreakdown($db, $branch, $params),
+
             'growth' => [
                 'new_in_range' => $this->newSubscribers($db, $from, $to, $branch),
                 'expected_mrc' => round($this->expectedMrc($db, $branch), 2),
@@ -145,6 +160,15 @@ class NetmanagerReportsDriver implements ReportsDriver
         $expectedMrc = $this->expectedMrc($db, $branch);
         $net = $revenue['total'] - $expenses['total'];
 
+        // Computed once and reused: the channel split and the OpEx/CapEx split
+        // are regroupings of these two breakdowns, not fresh queries. Querying
+        // twice risks the two halves of one page disagreeing if a row lands
+        // between them.
+        $byMethod = $this->revenueByMethod($db, $from, $to, $branch);
+        $byExpenseType = $this->expensesByType($db, $expensePeriod, $from, $to, $branch);
+
+        $base = $this->subscriberBase($db, $branch);
+
         return [
             'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
@@ -186,10 +210,36 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'points' => $this->trendSeries($db, $trendPeriod, $branch, $anchor),
             ],
 
+            // Cash / PNB / Xendit, regrouped from by_method. See IncomeChannels
+            // for why the mapping is config rather than SQL.
+            'income_channels' => IncomeChannels::summarise($byMethod),
+
+            // Prospective revenue, ARPU, collection efficiency, churn loss.
+            'executive_metrics' => ExecutiveMetrics::build(
+                $expectedMrc,
+                $revenue['total'],
+                $base['active'],
+                $base['disconnected'],
+                $base['lapsed_mrc'],
+                $this->rangeLabel($from, $to)
+            ),
+
+            // Operating against capital spending. Reported apart because netting
+            // an asset purchase against one month's income understates that month
+            // and overstates every later one.
+            'opex_capex' => ExpenseClassifier::opexCapex($byExpenseType),
+
+            // Recurring and one-off payables, with MONITOR's own settlement
+            // state joined on — the source database is never written to.
+            'payables' => PayablesLedger::build(
+                $this->sourceKey($params),
+                $to,
+                $this->payableLines($db, $expensePeriod, $from, $to, $branch)
+            ),
+
             'by_plan' => $this->revenueByPlan($db, $from, $to, $branch),
-            'by_channel' => $this->incomeByChannel($db, $from, $to, $branch),
-            'by_method' => $this->revenueByMethod($db, $from, $to, $branch),
-            'by_expense_type' => $this->expensesByType($db, $expensePeriod, $from, $to, $branch),
+            'by_method' => $byMethod,
+            'by_expense_type' => $byExpenseType,
             'payment_notes' => $this->paymentNotes($db, $from, $to, $branch),
 
             // Never scoped to the branch filter — this panel *is* the comparison.
@@ -203,9 +253,97 @@ class NetmanagerReportsDriver implements ReportsDriver
 
             // Daily / weekly / monthly / yearly side by side.
             'periods' => $this->summaryPeriods($db, $anchor, $branch),
-
-            'recent_payments' => $this->recentPayments($db, $branch),
         ];
+    }
+
+    /**
+     * The subscriber base behind the executive metrics.
+     *
+     * `lapsed_mrc` is the monthly charge carried by accounts that have already
+     * disconnected — the revenue actually at risk, rather than a headcount
+     * multiplied by an average, which would misstate it wherever plan prices
+     * differ by more than a little.
+     */
+    private function subscriberBase(ConnectionInterface $db, ?int $branch): array
+    {
+        $query = $db->table('subscribers as s')->leftJoin('plans as p', 'p.plan_id', '=', 's.plan_id');
+
+        if ($branch !== null) {
+            $query->where('s.router_id', $branch);
+        }
+
+        $row = $query
+            ->selectRaw("SUM(s.status IN ('active', 'vip')) AS active")
+            ->selectRaw("SUM(s.status IN ('expired', 'disconnected')) AS disconnected")
+            ->selectRaw(
+                "COALESCE(SUM(CASE WHEN s.status IN ('expired', 'disconnected')"
+                . ' THEN COALESCE(p.amount, 0) ELSE 0 END), 0) AS lapsed_mrc'
+            )
+            ->first();
+
+        return [
+            'active' => (int) ($row->active ?? 0),
+            'disconnected' => (int) ($row->disconnected ?? 0),
+            'lapsed_mrc' => (float) ($row->lapsed_mrc ?? 0),
+        ];
+    }
+
+    /**
+     * Payable lines for the range, one per expense type.
+     *
+     * Grouped by type rather than listed per row: an accounts-payable panel is
+     * about obligations — rent, bandwidth, payroll — and a hundred individual
+     * rows of the same recurring cost is a ledger, not a payables view. The
+     * settlement tick therefore applies to the obligation for the month, which is
+     * the unit finance actually settles.
+     */
+    private function payableLines(
+        ConnectionInterface $db,
+        string $granularity,
+        string $from,
+        string $to,
+        ?int $branch
+    ): array {
+        return $this->expenseRows($db, $granularity, $from, $to, $branch)
+            ->leftJoin('expense_types as et', 'et.type_id', '=', 'e.expense_type_id')
+            ->selectRaw("COALESCE(NULLIF(et.name, ''), '(Uncategorized)') AS label")
+            ->selectRaw('COALESCE(et.type_id, 0) AS type_id')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('SUM(e.amount) AS total')
+            ->selectRaw('MAX(e.expense_date) AS last_booked')
+            // The horizon the majority of this type's rows were booked against,
+            // which is what ExpenseClassifier trusts ahead of the type name.
+            ->selectRaw("MAX(COALESCE(e.period_type, 'daily')) AS period_type")
+            ->groupBy('label', 'type_id')
+            ->orderByRaw('SUM(e.amount) DESC')
+            ->get()
+            ->map(fn ($row) => [
+                // Stable across months so a tick keys to the obligation, not to
+                // a row id that changes every time the expense is re-entered.
+                'ref' => 'type:' . (int) $row->type_id,
+                'label' => (string) $row->label,
+                'type' => (string) $row->label,
+                'amount' => round((float) $row->total, 2),
+                'count' => (int) $row->cnt,
+                'period_type' => (string) $row->period_type,
+                'last_booked_at' => $row->last_booked,
+            ])
+            ->all();
+    }
+
+    /**
+     * Which database this driver is answering for.
+     *
+     * The drivers are handed a connection, not a key, so the key travels in the
+     * params — ReportingService puts it there. Needed because the payables
+     * settlement table is keyed per source: two branches both owe rent, and one
+     * paying it does not settle the other's.
+     */
+    private function sourceKey(array $params): string
+    {
+        $key = trim((string) ($params['source_key'] ?? ''));
+
+        return $key !== '' ? $key : 'netmanager';
     }
 
     /**
@@ -283,9 +421,51 @@ class NetmanagerReportsDriver implements ReportsDriver
             ],
             'series' => $this->installationSeries($db, $branch, $from, $to),
             'turnaround' => $this->installationTurnaround($db, $branch, $from, $to),
+
+            // Average completion time per kind of work. One queue here, so it is
+            // segmented by the installation's own status vocabulary rather than
+            // by order type — see turnaroundByType.
+            'turnaround_by_type' => $this->turnaroundByType($db, $branch, $from, $to),
+
             'recent' => $this->recentInstallations($db, $branch),
             'has_service_orders' => false,
         ];
+    }
+
+    /**
+     * Turnaround segmented by the work's own type.
+     *
+     * NETMANAGER models field work as one `installations` queue, so there is no
+     * order type to segment on — what varies is the outcome status a job closed
+     * under, and "approved in 6h, done in 40h" is a genuinely useful split. The
+     * unit is hours because this schema ages a ticket rather than stamping time
+     * on site; GOWISER measures minutes and says so in its own payload.
+     */
+    private function turnaroundByType(
+        ConnectionInterface $db,
+        ?int $branch,
+        string $from,
+        string $to
+    ): array {
+        return $this->installations($db, $branch)
+            ->whereBetween(DB::raw('DATE(i.updated_at)'), [$from, $to])
+            ->whereRaw("COALESCE(NULLIF(i.status, ''), '') IN ('Approved', 'Done', 'Completed')")
+            ->whereNotNull('i.created_at')
+            ->selectRaw("COALESCE(NULLIF(i.status, ''), 'Unspecified') AS label")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('AVG(TIMESTAMPDIFF(HOUR, i.created_at, i.updated_at)) AS avg_hours')
+            ->selectRaw('MAX(TIMESTAMPDIFF(HOUR, i.created_at, i.updated_at)) AS max_hours')
+            ->groupBy('label')
+            ->orderByRaw('COUNT(*) DESC')
+            ->get()
+            ->map(fn ($row) => [
+                'label' => (string) $row->label,
+                'closed' => (int) $row->cnt,
+                'average_hours' => $row->avg_hours !== null ? round((float) $row->avg_hours, 1) : null,
+                'longest_hours' => $row->max_hours !== null ? (int) $row->max_hours : null,
+                'unit' => 'hours',
+            ])
+            ->all();
     }
 
     /** Installations opened in the range, grouped by their current status. */
@@ -697,17 +877,15 @@ class NetmanagerReportsDriver implements ReportsDriver
         $plus7 = $anchor->copy()->addDays(7)->toDateString();
         $minus30 = $anchor->copy()->subDays(30)->startOfDay()->toDateTimeString();
 
+        // `total` counts subscribers, so pending applications are excluded — the
+        // same rule StatusMap applies to the charts, applied here so the header
+        // and the pie cannot disagree about how many subscribers there are.
         $row = $query
-            ->selectRaw('COUNT(*) AS total')
+            ->selectRaw('SUM(' . StatusMap::excludeSql('status') . ') AS total')
             ->selectRaw("SUM(status = 'active') AS active")
-            // NETMANAGER has no VIP or Pullout status of its own; the columns exist so both
-            // sources answer the same shape, and report a truthful zero rather than absent keys
-            // the frontend would have to special-case.
             ->selectRaw("SUM(status = 'vip') AS vip")
-            ->selectRaw("SUM(status = 'inactive') AS inactive")
-            ->selectRaw("SUM(status = 'pullout') AS pullout")
-            ->selectRaw("SUM(status IN ('restricted', 'suspended')) AS restricted")
-            ->selectRaw("SUM(status IN ('disconnected', 'expired')) AS disconnected")
+            ->selectRaw("SUM(status = 'suspended') AS restricted")
+            ->selectRaw("SUM(status IN ('expired', 'disconnected')) AS disconnected")
             ->selectRaw("SUM(status = 'active' AND subscription_end BETWEEN ? AND ?) AS expiring_3", [$today, $plus3])
             ->selectRaw("SUM(status = 'active' AND subscription_end BETWEEN ? AND ?) AS expiring_7", [$today, $plus7])
             ->selectRaw('SUM(created_at >= ?) AS new_30day', [$minus30])
@@ -717,8 +895,6 @@ class NetmanagerReportsDriver implements ReportsDriver
             'total' => (int) ($row->total ?? 0),
             'active' => (int) ($row->active ?? 0),
             'vip' => (int) ($row->vip ?? 0),
-            'inactive' => (int) ($row->inactive ?? 0),
-            'pullout' => (int) ($row->pullout ?? 0),
             'restricted' => (int) ($row->restricted ?? 0),
             'disconnected' => (int) ($row->disconnected ?? 0),
             'expiring_3day' => (int) ($row->expiring_3 ?? 0),
@@ -728,16 +904,25 @@ class NetmanagerReportsDriver implements ReportsDriver
     }
 
     /**
-     * Top barangays by subscriber count, with the active/expired split.
+     * Every barangay, with the billing-status split management asked for.
+     *
+     * Not a top ten. A league table answers "which barangay is biggest", which
+     * is a question nobody was asking; the coverage question needs the tail,
+     * including the barangays with three subscribers. The table is sorted client
+     * side, so no ordering is imposed here beyond a stable one.
      *
      * Grouped by barangay *and* its municipality/province: "San Roque" exists in
      * many towns and merging them would be meaningless.
+     *
+     * Pending rows are excluded by the same rule as everywhere else, so a
+     * barangay's row total matches its share of the subscriber base.
      */
-    private function topBarangays(ConnectionInterface $db, ?int $branch, array $params): array
+    private function barangayBreakdown(ConnectionInterface $db, ?int $branch, array $params): array
     {
         $query = $db->table('subscribers')
             ->whereNotNull('barangay')
-            ->where('barangay', '<>', '');
+            ->where('barangay', '<>', '')
+            ->whereRaw(StatusMap::excludeSql('status'));
 
         if ($branch !== null) {
             $query->where('router_id', $branch);
@@ -756,12 +941,14 @@ class NetmanagerReportsDriver implements ReportsDriver
         return $query
             ->selectRaw('barangay, municipality, province')
             ->selectRaw('COUNT(*) AS total')
-            ->selectRaw("SUM(status = 'active') AS active")
-            ->selectRaw("SUM(status = 'vip') AS vip")
-            ->selectRaw("SUM(status = 'inactive') AS inactive")
-            ->selectRaw("SUM(status = 'pullout') AS pullout")
+            ->selectRaw(StatusMap::bucketSql('status', 'active') . ' AS active')
+            ->selectRaw(StatusMap::bucketSql('status', 'vip') . ' AS vip')
+            ->selectRaw(StatusMap::bucketSql('status', 'inactive') . ' AS inactive')
+            ->selectRaw(StatusMap::bucketSql('status', 'pullout') . ' AS pullout')
+            ->selectRaw("SUM(status = 'suspended') AS restricted")
+            ->selectRaw("SUM(status IN ('expired', 'disconnected')) AS disconnected")
             ->groupBy('barangay', 'municipality', 'province')
-            ->orderByRaw('COUNT(*) DESC')
+            ->orderBy('barangay')
             ->get()
             ->map(fn ($row) => [
                 'barangay' => (string) $row->barangay,
@@ -772,6 +959,8 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'vip' => (int) $row->vip,
                 'inactive' => (int) $row->inactive,
                 'pullout' => (int) $row->pullout,
+                'restricted' => (int) $row->restricted,
+                'disconnected' => (int) $row->disconnected,
             ])
             ->all();
     }
@@ -871,49 +1060,6 @@ class NetmanagerReportsDriver implements ReportsDriver
         return array_values($years);
     }
 
-    /**
-     * The ten most recently recorded payments, of any status.
-     *
-     * Ordered by created_at, not payment_date: this is an activity feed, and a
-     * back-dated payment entered just now belongs at the top of it.
-     */
-    private function recentPayments(ConnectionInterface $db, ?int $branch): array
-    {
-        $query = $db->table('payments as py')
-            ->join('subscribers as s', 's.subscriber_id', '=', 'py.subscriber_id');
-
-        if ($branch !== null) {
-            $query->where('s.router_id', $branch);
-        }
-
-        return $query
-            ->select(
-                'py.payment_id',
-                'py.amount',
-                'py.method',
-                'py.payment_date',
-                'py.status',
-                'py.or_number',
-                's.account_number',
-                's.firstname',
-                's.lastname'
-            )
-            ->orderByDesc('py.created_at')
-            ->limit(10)
-            ->get()
-            ->map(fn ($row) => [
-                'id' => (string) $row->payment_id,
-                'or_number' => (string) ($row->or_number ?? ''),
-                'account_number' => (string) ($row->account_number ?? ''),
-                'subscriber' => $this->fullName($row->firstname ?? '', $row->lastname ?? ''),
-                'amount' => round((float) $row->amount, 2),
-                'method' => (string) ($row->method ?? ''),
-                'status' => (string) ($row->status ?? ''),
-                'payment_date' => $row->payment_date,
-            ])
-            ->all();
-    }
-
     /** Count, total, average and largest collection in the range. */
     private function revenueStats(ConnectionInterface $db, string $from, string $to, ?int $branch): array
     {
@@ -933,6 +1079,15 @@ class NetmanagerReportsDriver implements ReportsDriver
         ];
     }
 
+    /**
+     * Subscribers per status, in this portal's reported vocabulary.
+     *
+     * `raw` keeps the source's own values because the billing summary buckets on
+     * them and because a reader tracing a figure back to NETMANAGER needs the
+     * word that system actually stores. `by_status` is what the charts render:
+     * pending removed, suspended shown as Restricted, expired as Disconnected —
+     * see StatusMap for why each of the three.
+     */
     private function subscriberStatusCounts(ConnectionInterface $db, ?int $branch): array
     {
         $query = $db->table('subscribers as s');
@@ -943,22 +1098,30 @@ class NetmanagerReportsDriver implements ReportsDriver
 
         $rows = $query->selectRaw('status, COUNT(*) AS cnt')->groupBy('status')->get();
 
-        $byStatus = [];
-        $total = 0;
+        $raw = [];
 
         foreach ($rows as $row) {
-            $count = (int) $row->cnt;
-            $byStatus[(string) $row->status] = $count;
-            $total += $count;
+            $raw[(string) $row->status] = (int) $row->cnt;
         }
 
+        $reported = StatusMap::rewrite($raw);
+
         return [
-            'total' => $total,
-            'active' => $byStatus['active'] ?? 0,
-            'pending' => $byStatus['pending'] ?? 0,
-            'suspended' => $byStatus['suspended'] ?? 0,
-            'expired' => $byStatus['expired'] ?? 0,
-            'by_status' => $byStatus,
+            // Total counts subscribers, and a pending application is not one, so
+            // it is the total of the reported map rather than of every row.
+            'total' => array_sum($reported),
+            'active' => $reported['Active'] ?? 0,
+            'vip' => $reported['VIP'] ?? 0,
+            'restricted' => $reported['Restricted'] ?? 0,
+            'disconnected' => $reported['Disconnected'] ?? 0,
+            'inactive' => $reported['Inactive'] ?? 0,
+            'pullout' => $reported['Pullout'] ?? 0,
+            'by_status' => $reported,
+            'raw' => $raw,
+            'excluded' => array_sum(array_intersect_key(
+                $raw,
+                array_flip(array_filter(array_keys($raw), fn ($key) => StatusMap::isExcluded($key)))
+            )),
         ];
     }
 
@@ -1065,53 +1228,6 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'total' => round((float) $row->total, 2),
             ])
             ->all();
-    }
-
-    /**
-     * Channel classifier over `payments.method`. Mirrors the GOWISER driver so both sources
-     * answer the same four buckets — see PAYMENT_CHANNEL_SQL there for why GCash is caught
-     * before the cash test, and why `other` exists rather than being dropped.
-     */
-    private const PAYMENT_CHANNEL_SQL = "CASE
-        WHEN UPPER(COALESCE(py.method, '')) LIKE '%XENDIT%' THEN 'xendit'
-        WHEN UPPER(COALESCE(py.method, '')) LIKE '%PNB%' THEN 'pnb'
-        WHEN UPPER(COALESCE(py.method, '')) LIKE '%GCASH%'
-          OR UPPER(COALESCE(py.method, '')) LIKE '%G-CASH%' THEN 'other'
-        WHEN UPPER(COALESCE(py.method, '')) LIKE '%CASH%' THEN 'cash'
-        ELSE 'other'
-    END";
-
-    /** Income split across Cash, PNB and Xendit, with everything else totalled as `other`. */
-    private function incomeByChannel(ConnectionInterface $db, string $from, string $to, ?int $branch): array
-    {
-        $rows = $this->paidPayments($db, $branch)
-            ->whereBetween(DB::raw('DATE(py.payment_date)'), [$from, $to])
-            ->selectRaw(self::PAYMENT_CHANNEL_SQL . ' AS channel')
-            ->selectRaw('COUNT(*) AS cnt')
-            ->selectRaw('COALESCE(SUM(py.amount), 0) AS total')
-            ->groupBy(DB::raw(self::PAYMENT_CHANNEL_SQL))
-            ->get();
-
-        $channels = [
-            'cash' => ['amount' => 0.0, 'count' => 0],
-            'pnb' => ['amount' => 0.0, 'count' => 0],
-            'xendit' => ['amount' => 0.0, 'count' => 0],
-            'other' => ['amount' => 0.0, 'count' => 0],
-        ];
-
-        foreach ($rows as $row) {
-            $key = (string) $row->channel;
-            if (!isset($channels[$key])) {
-                continue;
-            }
-
-            $channels[$key] = [
-                'amount' => round((float) $row->total, 2),
-                'count' => (int) $row->cnt,
-            ];
-        }
-
-        return $channels;
     }
 
     private function revenueByMethod(ConnectionInterface $db, string $from, string $to, ?int $branch): array

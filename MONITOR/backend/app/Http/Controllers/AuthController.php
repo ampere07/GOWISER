@@ -130,25 +130,18 @@ class AuthController extends Controller
             'username' => $user->username,
             'email' => $user->email_address,
             'full_name' => $user->full_name,
-            'role' => $user->role ? strtolower($user->role->role_name) : 'viewer',
+            'role' => $user->roleName(),
             // Cast: MySQL hands this back as an int, SQLite as a string, and
             // the frontend types it as a number.
             'role_id' => $user->role_id !== null ? (int) $user->role_id : null,
-
-            // Sent separately from the permission list because it is not a permission: superadmin
-            // gates actions no grant can confer, such as creating an account. The UI reads this to
-            // decide what to offer; the server checks it again on every such request.
-            'is_superadmin' => $user->isSuperadmin(),
-
-            // The EXPANDED grants, not the raw stored list. The frontend gates on the same
-            // strings the middleware checks, so a button is shown exactly when the endpoint
-            // behind it would answer — and a legacy role storing a bare `financial` arrives here
-            // as financial.view + financial.export rather than something the UI cannot match.
-            'permissions' => $user->effectivePermissions(),
-
-            // Kept alongside so a role editor can still show what was actually configured,
-            // rather than the expansion of it.
-            'stored_permissions' => $user->permissionList(),
+            // The effective list — role plus per-user grants, minus per-user
+            // denials. What the frontend hides on must be what the middleware
+            // enforces on, or a control appears that every click then rejects.
+            'permissions' => $user->permissionList(),
+            // Governs the consolidated executive view, which needs an executive
+            // role on top of the module permission. Sent so the sidebar can hide
+            // the tab rather than offering a page that 403s on open.
+            'is_executive_role' => $user->isExecutiveRole(),
         ];
     }
 }

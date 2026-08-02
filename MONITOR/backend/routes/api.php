@@ -1,13 +1,17 @@
 <?php
 
+use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\DatabaseConnectionController;
+use App\Http\Controllers\Api\ExecutiveOverviewController;
 use App\Http\Controllers\Api\FinancialsController;
 use App\Http\Controllers\Api\MonitorController;
+use App\Http\Controllers\Api\PayableController;
 use App\Http\Controllers\Api\ReportingController;
 use App\Http\Controllers\Api\SiteController;
-use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\UserManagementController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SettingsColorPaletteController;
+use App\Support\Permissions;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -58,15 +62,9 @@ Route::middleware('auth')->group(function () {
  * site_connections table, so adding a site needs no deploy.
  */
 Route::middleware(['auth', 'executive'])->group(function () {
-    // Not permission-gated: the site list is what every other page's source picker is built from,
-    // and SiteController already narrows it to the role's site_scope. A user who can see no
-    // sections gets an empty list from that scoping rather than a 403 they cannot act on.
     Route::get('/sites', [SiteController::class, 'index']);
-
-    Route::get('/financials', [FinancialsController::class, 'show'])
-        ->middleware('permission:financials.view');
-    Route::get('/financials/group', [FinancialsController::class, 'group'])
-        ->middleware('permission:financials.view');
+    Route::get('/financials', [FinancialsController::class, 'show']);
+    Route::get('/financials/group', [FinancialsController::class, 'group']);
 });
 
 /*
@@ -74,23 +72,13 @@ Route::middleware(['auth', 'executive'])->group(function () {
  * until each is migrated onto the connector above.
  */
 Route::middleware(['auth', 'executive'])->prefix('monitor')->group(function () {
-    // As with /sites: the source list underpins every page's picker and carries no metrics.
     Route::get('/sources', [MonitorController::class, 'sources']);
-
-    Route::get('/overview', [MonitorController::class, 'overview'])
-        ->middleware('permission:overview.view');
-    Route::get('/operations', [MonitorController::class, 'operations'])
-        ->middleware('permission:operations.view');
-    Route::get('/revenue', [MonitorController::class, 'revenue'])
-        ->middleware('permission:revenue.view');
-    Route::get('/financials', [MonitorController::class, 'financials'])
-        ->middleware('permission:financials.view');
-    Route::get('/consolidated', [MonitorController::class, 'consolidated'])
-        ->middleware('permission:consolidated.view');
-
-    // Branch list for the Overview filter, so it follows that page's grant.
-    Route::get('/branches', [MonitorController::class, 'branches'])
-        ->middleware('permission:overview.view');
+    Route::get('/overview', [MonitorController::class, 'overview']);
+    Route::get('/operations', [MonitorController::class, 'operations']);
+    Route::get('/revenue', [MonitorController::class, 'revenue']);
+    Route::get('/financials', [MonitorController::class, 'financials']);
+    Route::get('/branches', [MonitorController::class, 'branches']);
+    Route::get('/consolidated', [MonitorController::class, 'consolidated']);
 });
 
 /*
@@ -106,31 +94,70 @@ Route::middleware(['auth', 'executive'])->prefix('monitor')->group(function () {
  * the app is pointed at NETMANAGER.
  */
 Route::middleware(['auth', 'executive'])->prefix('reporting')->group(function () {
-    // Capability and branch lookups describe what CAN be asked, not what the numbers are, and
-    // the frontend needs both before it can render any permitted section. Left ungated for the
-    // same reason as /sites.
     Route::get('/capabilities', [ReportingController::class, 'capabilities']);
     Route::get('/branches', [ReportingController::class, 'branches']);
 
-    Route::get('/subscriber-analytics', [ReportingController::class, 'subscriberAnalytics'])
-        ->middleware('permission:subscriber-analytics.view');
-    Route::get('/financial', [ReportingController::class, 'financial'])
-        ->middleware('permission:financial.view');
-    Route::get('/operations', [ReportingController::class, 'operations'])
-        ->middleware('permission:field-operations.view');
-    Route::get('/tech', [ReportingController::class, 'tech'])
-        ->middleware('permission:tech.view');
-    Route::get('/employee', [ReportingController::class, 'employee'])
-        ->middleware('permission:employee.view');
+    Route::get('/subscriber-analytics', [ReportingController::class, 'subscriberAnalytics']);
+    Route::get('/financial', [ReportingController::class, 'financial']);
+    Route::get('/operations', [ReportingController::class, 'operations']);
+    Route::get('/tech', [ReportingController::class, 'tech']);
+    Route::get('/employee', [ReportingController::class, 'employee']);
 
     // Line-level data for the three print layouts. Never cached: a printed
     // report is a record someone signs.
     //
-    // Gated on `.export`, not `.view`. Taking a report out of the portal — printing it, handing
-    // it to someone outside — is the act worth controlling separately from reading it on screen,
-    // and this endpoint returns row-level detail the dashboards only ever show aggregated.
+    // Gated separately from reading the Financial module. Printing puts the
+    // ledger on paper and out of the building, which is a stronger act than
+    // looking at it, and several roles are meant to do the second but not the
+    // first.
     Route::get('/printable', [ReportingController::class, 'printable'])
-        ->middleware('permission:financial.export');
+        ->middleware('permission:' . Permissions::ACTION_FINANCIAL_EXPORT);
+});
+
+/*
+ * Module 5 — the consolidated C-suite summary.
+ *
+ * Composed from the sections above rather than from its own SQL, so it can never
+ * disagree with the modules it summarises. The controller enforces a role check
+ * on top of the module permission: this view puts every company's figures on one
+ * page, which is not access a custom role should acquire sideways.
+ */
+Route::middleware(['auth', 'executive'])->group(function () {
+    Route::get('/executive/overview', [ExecutiveOverviewController::class, 'show']);
+});
+
+/*
+ * The write endpoints outside the Databases page.
+ *
+ * All of them write to MONITOR's own tables. The monitored databases stay
+ * read-only at the connection level in SourceRegistry::connection(), which no
+ * request can bypass — so none of these routes sit behind the 'executive'
+ * middleware, which would reject them for not being GETs.
+ *
+ * Each carries the specific permission it needs rather than a blanket admin
+ * role: approving a payable, editing a user and reading the audit trail are
+ * three different jobs and are granted independently.
+ */
+Route::middleware('auth')->group(function () {
+    Route::post('/payables/toggle', [PayableController::class, 'toggle'])
+        ->middleware('permission:' . Permissions::ACTION_PAYABLE_TOGGLE);
+
+    Route::get('/audit-logs', [AuditLogController::class, 'index'])
+        ->middleware('permission:' . Permissions::ACTION_AUDIT_VIEW);
+
+    Route::prefix('users')
+        ->middleware('permission:' . Permissions::ACTION_USERS_MANAGE)
+        ->group(function () {
+            Route::get('/', [UserManagementController::class, 'index']);
+            Route::post('/', [UserManagementController::class, 'store']);
+            Route::put('/{user}', [UserManagementController::class, 'update']);
+            Route::delete('/{user}', [UserManagementController::class, 'destroy']);
+
+            // Reshaping a role changes what everyone holding it can see, so it
+            // needs its own grant beyond being able to edit a single user.
+            Route::put('/roles/{role}', [UserManagementController::class, 'updateRole'])
+                ->middleware('permission:' . Permissions::ACTION_ROLES_MANAGE);
+        });
 });
 
 /*
@@ -145,59 +172,16 @@ Route::middleware(['auth', 'executive'])->prefix('reporting')->group(function ()
  * with no deploy. Requires the 'databases' permission specifically, because these
  * rows hold credentials for every monitored database.
  */
-/*
- * User administration.
- *
- * Writes, like Databases, and for the same reason it is allowed to: the rows belong to MONITOR's
- * own database, not to a monitored system. It sits outside the 'executive' guard because that
- * guard rejects every non-GET method by design.
- *
- * Each route names its own verb, so a role can be given sight of the user list without the
- * ability to create accounts.
- */
-Route::middleware(['auth'])->prefix('users')->group(function () {
-    Route::get('/', [UserController::class, 'index'])
-        ->middleware('permission:users.view');
-
-    // Roles are read as part of building the create form, so they follow users.view.
-    Route::get('/roles', [UserController::class, 'roles'])
-        ->middleware('permission:users.view');
-
-    // Superadmin-only, above and beyond the permission. Creating an account is the one action
-    // that manufactures access rather than exercising it, so it is gated on who the caller IS.
-    // Both guards are listed: the permission stays meaningful, and removing either still leaves
-    // the endpoint protected.
-    Route::post('/', [UserController::class, 'store'])
-        ->middleware(['permission:users.create', 'superadmin']);
-
-    // Suspending an account is an edit of its `active` flag, so it needs no route of its own —
-    // one place decides whether a change to a user is allowed.
-    Route::put('/{user}', [UserController::class, 'update'])
-        ->middleware('permission:users.edit');
-    Route::delete('/{user}', [UserController::class, 'destroy'])
-        ->middleware('permission:users.delete');
-});
-
 Route::middleware(['auth', 'db-admin'])->prefix('databases')->group(function () {
-    // EnsureDatabaseAdmin already requires the `databases` section; these add the verb, so a role
-    // can be given read-only sight of the connection list without the ability to change it.
-    Route::get('/', [DatabaseConnectionController::class, 'index'])
-        ->middleware('permission:databases.view');
-    Route::post('/', [DatabaseConnectionController::class, 'store'])
-        ->middleware('permission:databases.create');
-    Route::post('/reorder', [DatabaseConnectionController::class, 'reorder'])
-        ->middleware('permission:databases.edit');
+    Route::get('/', [DatabaseConnectionController::class, 'index']);
+    Route::post('/', [DatabaseConnectionController::class, 'store']);
+    Route::post('/reorder', [DatabaseConnectionController::class, 'reorder']);
 
-    Route::put('/{connection}', [DatabaseConnectionController::class, 'update'])
-        ->middleware('permission:databases.edit');
-    Route::delete('/{connection}', [DatabaseConnectionController::class, 'destroy'])
-        ->middleware('permission:databases.delete');
+    Route::put('/{connection}', [DatabaseConnectionController::class, 'update']);
+    Route::delete('/{connection}', [DatabaseConnectionController::class, 'destroy']);
 
     // Connectivity check and schema inspection, so an operator can confirm a
-    // connection reaches the database they meant. Reads about a connection rather than changes
-    // to one, so they follow `view` — POST here only because a test carries a body.
-    Route::post('/{connection}/test', [DatabaseConnectionController::class, 'test'])
-        ->middleware('permission:databases.view');
-    Route::get('/{connection}/introspect', [DatabaseConnectionController::class, 'introspect'])
-        ->middleware('permission:databases.view');
+    // connection reaches the database they meant.
+    Route::post('/{connection}/test', [DatabaseConnectionController::class, 'test']);
+    Route::get('/{connection}/introspect', [DatabaseConnectionController::class, 'introspect']);
 });

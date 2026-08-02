@@ -197,47 +197,60 @@ interface SliceChartProps {
   unit?: 'money' | 'count';
   height?: number;
   colors?: string[];
+  /**
+   * Draws the value on each slice. On by default: a pie whose numbers are only
+   * in the tooltip cannot be read on a wall display or in a printout, which is
+   * where these charts are actually looked at.
+   */
+  showValues?: boolean;
 }
 
 /**
- * Draws each slice's own value onto the slice.
+ * Writes each slice's value onto the slice.
  *
- * A local plugin rather than chartjs-plugin-datalabels: this is the only place a slice label is
- * wanted, and it avoids adding a dependency to a build that has to keep working offline.
+ * Hand-rolled rather than pulled from chartjs-plugin-datalabels: the whole need
+ * is one `afterDatasetsDraw` hook, and a dependency for that is a dependency to
+ * keep patched forever. Registered locally on the charts that ask for it rather
+ * than globally, so the bar and line charts are untouched.
  *
- * Slices below the share threshold are skipped — their arc is narrower than the text, so the
- * label would spill across its neighbours and misread as belonging to the wrong slice. Those
- * values stay available in the tooltip and the legend.
+ * Two rules keep it readable rather than a cloud of overlapping text:
+ *
+ *  - slices under 5% are skipped. Their labels would collide with their
+ *    neighbours' and none of the three would be legible; the tooltip and the
+ *    legend still carry them.
+ *  - the text is drawn at the arc's midpoint with a contrasting halo, so it
+ *    survives whichever palette colour it lands on.
  */
-const SLICE_LABEL_MIN_SHARE = 0.04;
-
-export const sliceValueLabels = {
-  id: 'sliceValueLabels',
+const sliceValuePlugin = (format: (value: number) => string) => ({
+  id: 'sliceValues',
   afterDatasetsDraw(chart: any) {
     const { ctx } = chart;
     const meta = chart.getDatasetMeta(0);
-    if (!meta?.data?.length) return;
+
+    if (!meta || meta.hidden) return;
 
     const values: number[] = chart.data.datasets[0]?.data ?? [];
     const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+
     if (total <= 0) return;
 
     ctx.save();
-    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+    ctx.font = '600 11px system-ui, -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     meta.data.forEach((arc: any, index: number) => {
       const value = Number(values[index] || 0);
-      if (value <= 0 || value / total < SLICE_LABEL_MIN_SHARE) return;
+
+      if (value <= 0 || value / total < 0.05) return;
 
       const { x, y } = arc.getCenterPoint();
-      const text = formatNumber(value);
+      const text = format(value);
 
-      // Drawn over whatever slice colour the caller chose, so the text carries its own
-      // contrast rather than assuming a light or dark fill.
+      // Halo first, fill second: the palette runs from near-white to deep
+      // purple and neither a light nor a dark label works on all of it.
       ctx.lineWidth = 3;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.strokeText(text, x, y);
       ctx.fillStyle = '#ffffff';
       ctx.fillText(text, x, y);
@@ -245,7 +258,7 @@ export const sliceValueLabels = {
 
     ctx.restore();
   },
-};
+});
 
 const sliceOptions = (theme: ReturnType<typeof useChartTheme>, unit: 'money' | 'count') => ({
   responsive: true,
@@ -281,6 +294,10 @@ const sliceOptions = (theme: ReturnType<typeof useChartTheme>, unit: 'money' | '
   },
 });
 
+/** The value formatter the slice labels use, matching the tooltip's. */
+const sliceFormat = (unit: 'money' | 'count') =>
+  unit === 'money' ? (value: number) => formatMoneyShort(value) : (value: number) => formatNumber(value);
+
 /** Donut, for compositions where the total itself is not the point. */
 export const DonutChart: React.FC<SliceChartProps> = ({
   labels,
@@ -288,6 +305,7 @@ export const DonutChart: React.FC<SliceChartProps> = ({
   unit = 'money',
   height = 260,
   colors = SLICE_COLORS,
+  showValues = true,
 }) => {
   const theme = useChartTheme();
 
@@ -295,7 +313,9 @@ export const DonutChart: React.FC<SliceChartProps> = ({
     <div style={{ height }} className="relative">
       <Doughnut
         options={sliceOptions(theme, unit) as any}
-        plugins={[sliceValueLabels]}
+        // Passed per-instance rather than registered globally, so the bar and
+        // line charts elsewhere are untouched by it.
+        plugins={showValues ? [sliceValuePlugin(sliceFormat(unit))] : []}
         data={{
           labels,
           datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }],
@@ -312,6 +332,7 @@ export const PieChart: React.FC<SliceChartProps> = ({
   unit = 'money',
   height = 260,
   colors = SLICE_COLORS,
+  showValues = true,
 }) => {
   const theme = useChartTheme();
 
@@ -319,6 +340,7 @@ export const PieChart: React.FC<SliceChartProps> = ({
     <div style={{ height }} className="relative">
       <Pie
         options={sliceOptions(theme, unit) as any}
+        plugins={showValues ? [sliceValuePlugin(sliceFormat(unit))] : []}
         data={{
           labels,
           datasets: [

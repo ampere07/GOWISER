@@ -2,30 +2,31 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\AuditLog;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
 
 /**
- * Per-section authorisation for the dashboards.
+ * Granular permission gate, applied per route: `permission:action.payables.toggle`.
  *
- * WHAT THIS FIXES. Until now the reporting and executive endpoints sat behind EnsureExecutiveAccess
- * alone, which checks that the session belongs to an active user and that the request is a read.
- * It never consulted the role's permissions. The sidebar hid sections a role could not see, but
- * that was presentation only: a user granted just `subscriber-analytics` could call
- * GET /api/reporting/financial directly and receive the whole financial payload. Every executive
- * figure in this app was one URL away from any authenticated account.
+ * Several ids may be listed; the caller needs *all* of them. Requiring all
+ * rather than any is the safer reading — a route that both writes and exposes
+ * money should not be reachable by holding only one of the two.
  *
- * Applied as `permission:financial.view` — the argument is the exact grant required, so the same
- * middleware gates a page and its export separately.
+ * Deliberately separate from EnsureExecutiveAccess, which answers "is this a
+ * live session issuing a read". This one answers "may this person do this
+ * specific thing", which is the question the brief's action permissions ask and
+ * which no amount of session validity settles.
  *
- * Fails closed. No session, no role, or an empty permission list all deny; an executive portal
- * should refuse rather than guess.
+ * A denial is recorded. An access attempt someone was not entitled to make is
+ * exactly the event an audit trail exists for, and it is invisible everywhere
+ * else — the frontend hides the control, so a request that reaches here at all
+ * did not come from the UI.
  */
 class EnsurePermission
 {
-    public function handle(Request $request, Closure $next, string $permission)
+    public function handle(Request $request, Closure $next, string ...$permissions)
     {
         $user = Auth::user();
 
@@ -45,22 +46,25 @@ class EnsurePermission
             ], 403);
         }
 
-        if (!$user->can_($permission)) {
-            // Logged because a denial here is either a misconfigured role or someone probing an
-            // endpoint the UI never offered them; both are worth being able to see after the fact.
-            Log::warning('Monitor permission denied', [
-                'user_id' => $user->id,
-                'username' => $user->username,
-                'required' => $permission,
-                'path' => $request->path(),
-                'ip' => $request->ip(),
-            ]);
+        $held = $user->permissionList();
+        $missing = array_values(array_diff($permissions, $held));
+
+        if ($missing !== []) {
+            AuditLog::record(
+                $request,
+                'denied',
+                'permission',
+                implode(',', $missing),
+                'Blocked ' . $request->method() . ' ' . $request->path()
+                    . ' — missing ' . implode(', ', $missing)
+            );
 
             return response()->json([
                 'status' => 'error',
-                'message' => 'You do not have permission to view this section.',
-                // Named so the frontend can show which grant is missing rather than a bare 403.
-                'required_permission' => $permission,
+                'message' => 'Your role does not permit this action.',
+                // Named so the frontend can say which permission to ask for,
+                // rather than leaving the user to guess at a flat 403.
+                'missing' => $missing,
             ], 403);
         }
 

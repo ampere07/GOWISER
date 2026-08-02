@@ -85,14 +85,17 @@ class SectionAggregator
 
         return array_merge($this->envelope($payloads, $labels), [
             'kpi' => $this->sumFields($payloads, 'kpi', [
-                'total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected',
-                'expiring_3day', 'expiring_7day', 'new_30day', 'in_arrears', 'receivables',
+                'total', 'active', 'vip', 'restricted', 'disconnected',
+                'expiring_3day', 'expiring_7day', 'new_30day',
+            ]),
+            'billing_summary' => $this->sumFields($payloads, 'billing_summary', [
+                'active', 'vip', 'inactive', 'pullout', 'total',
             ]),
             'status' => $this->mergeStatusCounts($payloads),
             // Plans and sessions count subscribers; they carry no money, so
             // countOnly keeps a meaningless `total: 0` out of the payload.
             'plans' => $this->rank($payloads, 'plans', 'count', null, null, true),
-            'top_barangays' => $this->mergeBarangays($payloads),
+            'barangays' => $this->mergeBarangays($payloads),
             'growth' => [
                 'new_in_range' => $this->sumPath($payloads, ['growth', 'new_in_range']),
                 'expected_mrc' => $this->sumPath($payloads, ['growth', 'expected_mrc']),
@@ -122,50 +125,56 @@ class SectionAggregator
 
         return array_merge(
             $this->sumFields($payloads, 'status', [
-                'total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected',
+                'total', 'active', 'vip', 'restricted', 'disconnected',
+                'inactive', 'pullout', 'excluded',
             ]),
             ['by_status' => $byStatus]
         );
     }
 
     /**
-     * The fleet-wide barangay ranking.
+     * Every barangay across the fleet.
      *
      * Keyed on barangay *and* municipality: "San Roque" exists in many towns, and
      * merging them across branches would invent a place that does not exist.
+     *
+     * No longer trimmed after merging. Each database now contributes its complete
+     * list rather than its own top ten, so the merged result is already the whole
+     * picture — and re-capping it would reintroduce exactly the truncation this
+     * table was rebuilt to remove.
      */
     private function mergeBarangays(array $payloads): array
     {
+        $columns = ['total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected'];
         $rows = [];
 
         foreach ($payloads as $payload) {
-            foreach ($payload['top_barangays'] ?? [] as $row) {
+            foreach ($payload['barangays'] ?? [] as $row) {
                 $key = strtolower(trim($row['barangay'] ?? '')) . '|' . strtolower(trim($row['municipality'] ?? ''));
 
                 if (!isset($rows[$key])) {
-                    $rows[$key] = [
-                        'barangay' => $row['barangay'] ?? '',
-                        'municipality' => $row['municipality'] ?? '',
-                        'province' => $row['province'] ?? '',
-                        'total' => 0,
-                        'active' => 0,
-                        'vip' => 0,
-                        'inactive' => 0,
-                        'pullout' => 0,
-                    ];
+                    $rows[$key] = array_merge(
+                        [
+                            'barangay' => $row['barangay'] ?? '',
+                            'municipality' => $row['municipality'] ?? '',
+                            'province' => $row['province'] ?? '',
+                        ],
+                        array_fill_keys($columns, 0)
+                    );
                 }
 
-                foreach (['total', 'active', 'vip', 'inactive', 'pullout'] as $field) {
-                    $rows[$key][$field] += (int) ($row[$field] ?? 0);
+                foreach ($columns as $column) {
+                    $rows[$key][$column] += (int) ($row[$column] ?? 0);
                 }
             }
         }
 
-        usort($rows, fn ($a, $b) => $b['total'] <=> $a['total']);
+        // Alphabetical, matching what each driver returns: the table sorts itself
+        // client-side, and imposing a ranking here would fight that.
+        usort($rows, fn ($a, $b) => strcasecmp($a['barangay'], $b['barangay']));
 
-        // Deliberately uncapped. This feeds the Barangay Analytics table, which lists the whole
-        // footprint and sorts client-side; trimming to a top ten here would silently drop the
-        // barangays someone opened the table to look up.
+        // Deliberately uncapped: trimming to a top ten here would silently drop exactly the
+        // thin-coverage barangays someone opens this table to look up.
         return array_values($rows);
     }
 
@@ -247,35 +256,6 @@ class SectionAggregator
     //  FINANCIAL
     // ═════════════════════════════════════════════════════════════════════
 
-    /**
-     * Payment channels summed across databases.
-     *
-     * A fixed-key map rather than a ranked list, so the four channels stay in a known order and
-     * a database that saw no Xendit payments contributes zero instead of removing the bucket.
-     */
-    private function mergeChannels(array $payloads): array
-    {
-        $channels = [
-            'cash' => ['amount' => 0.0, 'count' => 0],
-            'pnb' => ['amount' => 0.0, 'count' => 0],
-            'xendit' => ['amount' => 0.0, 'count' => 0],
-            'other' => ['amount' => 0.0, 'count' => 0],
-        ];
-
-        foreach ($payloads as $payload) {
-            foreach ($channels as $key => $_) {
-                $channels[$key]['amount'] += (float) ($payload['by_channel'][$key]['amount'] ?? 0);
-                $channels[$key]['count'] += (int) ($payload['by_channel'][$key]['count'] ?? 0);
-            }
-        }
-
-        foreach ($channels as $key => $channel) {
-            $channels[$key]['amount'] = round($channel['amount'], 2);
-        }
-
-        return $channels;
-    }
-
     private function financial(array $payloads, array $labels): array
     {
         $kpi = $this->sumFields($payloads, 'kpi', [
@@ -308,11 +288,15 @@ class SectionAggregator
                 'period' => $first['trend']['period'] ?? 'monthly',
                 'points' => $this->mergeTrend($payloads, fn ($payload) => $payload['trend']['points'] ?? []),
             ],
-            'by_channel' => $this->mergeChannels($payloads),
             'by_plan' => $this->rank($payloads, 'by_plan', 'total'),
             'by_method' => $this->rank($payloads, 'by_method', 'total'),
             'by_expense_type' => $this->rank($payloads, 'by_expense_type', 'total'),
             'payment_notes' => $this->rank($payloads, 'payment_notes', 'total'),
+
+            'income_channels' => $this->mergeChannels($payloads),
+            'executive_metrics' => $this->mergeExecutiveMetrics($payloads, $kpi),
+            'opex_capex' => $this->mergeOpexCapex($payloads),
+            'payables' => $this->mergePayables($payloads, $labels),
 
             // Each database's branches, tagged so two branches with the same name
             // in different databases stay distinct. Shares are recomputed against
@@ -320,13 +304,243 @@ class SectionAggregator
             'by_branch' => $this->mergeBranches($payloads, $labels),
 
             'periods' => $this->mergePeriods($payloads),
-            'recent_payments' => $this->mergeRecent(
-                $payloads,
-                $labels,
-                fn ($payload) => $payload['recent_payments'] ?? [],
-                'payment_date'
-            ),
         ]);
+    }
+
+    /**
+     * Cash / PNB / Xendit across every database.
+     *
+     * Matched on the channel key rather than the label so the three named
+     * channels stay in a fixed order and always appear, even at zero — a channel
+     * that vanishes from a three-column summary reads as a loading failure rather
+     * than as no collections.
+     */
+    private function mergeChannels(array $payloads): array
+    {
+        $channels = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['income_channels'] ?? [] as $row) {
+                $key = (string) ($row['key'] ?? '');
+
+                if ($key === '') {
+                    continue;
+                }
+
+                if (!isset($channels[$key])) {
+                    $channels[$key] = [
+                        'key' => $key,
+                        'label' => $row['label'] ?? $key,
+                        'count' => 0,
+                        'total' => 0.0,
+                        'methods' => [],
+                    ];
+                }
+
+                $channels[$key]['count'] += (int) ($row['count'] ?? 0);
+                $channels[$key]['total'] += (float) ($row['total'] ?? 0);
+                $channels[$key]['methods'] = array_unique(array_merge(
+                    $channels[$key]['methods'],
+                    $row['methods'] ?? []
+                ));
+            }
+        }
+
+        $grand = array_sum(array_column($channels, 'total'));
+
+        // Share is recomputed against the fleet total; summing per-database
+        // percentages would produce something over 100.
+        return array_values(array_map(function (array $channel) use ($grand) {
+            $channel['total'] = $this->tidy($channel['total']);
+            $channel['share_pct'] = $grand > 0 ? round($channel['total'] / $grand * 100, 1) : 0.0;
+            $channel['methods'] = array_values($channel['methods']);
+
+            return $channel;
+        }, $channels));
+    }
+
+    /**
+     * The four executive measures, recomputed from merged totals.
+     *
+     * Never averaged across databases: the mean of eight ARPUs is not the ARPU of
+     * the combined base unless every base is the same size, and it never is. Each
+     * ratio is rebuilt from the summed numerator and summed denominator, and only
+     * the absolute figures — prospective revenue, churn loss — are summed directly.
+     */
+    private function mergeExecutiveMetrics(array $payloads, array $kpi): array
+    {
+        $prospective = 0.0;
+        $churnLoss = 0.0;
+        $atRisk = 0;
+        $factor = null;
+        $rangeLabel = '';
+
+        foreach ($payloads as $payload) {
+            $metrics = $payload['executive_metrics'] ?? [];
+
+            $prospective += (float) ($metrics['prospective_revenue']['value'] ?? 0);
+            $churnLoss += (float) ($metrics['projected_churn_loss']['value'] ?? 0);
+            $atRisk += (int) ($metrics['projected_churn_loss']['at_risk_accounts'] ?? 0);
+            $factor ??= $metrics['projected_churn_loss']['at_risk_factor'] ?? null;
+            $rangeLabel = $rangeLabel !== '' ? $rangeLabel : ($payload['range_label'] ?? '');
+        }
+
+        $activeSubs = 0;
+
+        foreach ($payloads as $payload) {
+            $activeSubs += (int) ($payload['kpi']['active'] ?? 0);
+        }
+
+        $collected = (float) ($kpi['income'] ?? 0);
+
+        return [
+            'prospective_revenue' => [
+                'label' => 'Prospective Revenue',
+                'value' => $this->tidy($prospective),
+                'basis' => 'Active base at plan price, one month, every database',
+            ],
+            'arpu' => [
+                'label' => 'ARPU',
+                'value' => $activeSubs > 0 ? round($prospective / $activeSubs, 2) : null,
+                'basis' => $activeSubs > 0
+                    ? 'Combined expected MRC ÷ ' . number_format($activeSubs) . ' active subscribers'
+                    : 'No active subscribers to divide by',
+            ],
+            'collection_efficiency' => [
+                'label' => 'Collection Efficiency',
+                'value' => $prospective > 0
+                    ? min(999.0, round($collected / $prospective * 100, 1))
+                    : null,
+                'basis' => $prospective > 0
+                    ? 'Combined collections in ' . $rangeLabel . ' ÷ combined expected MRC'
+                    : 'No billable base in this scope',
+            ],
+            'projected_churn_loss' => [
+                'label' => 'Projected Churn Loss',
+                'value' => $this->tidy($churnLoss),
+                'basis' => number_format($atRisk) . ' disconnected × '
+                    . round((float) ($factor ?? 0) * 100) . '% assumed not to return, per month',
+                'at_risk_accounts' => $atRisk,
+                'at_risk_factor' => $factor,
+            ],
+        ];
+    }
+
+    /** OpEx and CapEx totals, with each side's type breakdown merged and re-ranked. */
+    private function mergeOpexCapex(array $payloads): array
+    {
+        $merged = [];
+
+        foreach (['opex', 'capex'] as $nature) {
+            $total = 0.0;
+            $count = 0;
+            $rows = [];
+
+            foreach ($payloads as $payload) {
+                $block = $payload['opex_capex'][$nature] ?? [];
+
+                $total += (float) ($block['total'] ?? 0);
+                $count += (int) ($block['count'] ?? 0);
+
+                foreach ($block['rows'] ?? [] as $row) {
+                    $label = (string) ($row['label'] ?? '');
+
+                    if (!isset($rows[$label])) {
+                        $rows[$label] = ['label' => $label, 'count' => 0, 'total' => 0.0];
+                    }
+
+                    $rows[$label]['count'] += (int) ($row['count'] ?? 0);
+                    $rows[$label]['total'] += (float) ($row['total'] ?? 0);
+                }
+            }
+
+            usort($rows, fn ($a, $b) => $b['total'] <=> $a['total']);
+
+            $merged[$nature] = [
+                'label' => $nature === 'opex' ? 'Operating Expenses' : 'Capital Expenditures',
+                'total' => $this->tidy($total),
+                'count' => $count,
+                'rows' => array_map(
+                    fn (array $row) => array_merge($row, ['total' => $this->tidy($row['total'])]),
+                    array_values($rows)
+                ),
+            ];
+        }
+
+        $grand = $merged['opex']['total'] + $merged['capex']['total'];
+
+        foreach (['opex', 'capex'] as $nature) {
+            $merged[$nature]['share_pct'] = $grand > 0
+                ? round($merged[$nature]['total'] / $grand * 100, 1)
+                : 0.0;
+        }
+
+        $merged['total'] = $this->tidy($grand);
+
+        return $merged;
+    }
+
+    /**
+     * Payables across every database, kept as separate rows.
+     *
+     * Deliberately not summed by label. Rent in one branch and rent in another
+     * are two obligations settled by two people, and merging them into one line
+     * would leave a single tick claiming both were paid. Each row therefore keeps
+     * its source, and its ref is namespaced by source so the toggle addresses the
+     * right one.
+     */
+    private function mergePayables(array $payloads, array $labels): array
+    {
+        $rows = [];
+        $totals = [
+            'recurring' => ['count' => 0, 'amount' => 0.0],
+            'non_recurring' => ['count' => 0, 'amount' => 0.0],
+            'paid' => ['count' => 0, 'amount' => 0.0],
+            'unpaid' => ['count' => 0, 'amount' => 0.0],
+        ];
+
+        $month = '';
+        $monthLabel = '';
+
+        foreach ($payloads as $key => $payload) {
+            $ledger = $payload['payables'] ?? [];
+
+            $month = $month !== '' ? $month : ($ledger['month'] ?? '');
+            $monthLabel = $monthLabel !== '' ? $monthLabel : ($ledger['month_label'] ?? '');
+
+            foreach ($ledger['rows'] ?? [] as $row) {
+                $row['source'] = $key;
+                $row['source_label'] = $labels[$key] ?? $key;
+                $rows[] = $row;
+            }
+
+            foreach ($totals as $bucket => $_) {
+                $totals[$bucket]['count'] += (int) ($ledger['totals'][$bucket]['count'] ?? 0);
+                $totals[$bucket]['amount'] += (float) ($ledger['totals'][$bucket]['amount'] ?? 0);
+            }
+        }
+
+        usort($rows, function (array $a, array $b) {
+            if (($a['is_paid'] ?? false) !== ($b['is_paid'] ?? false)) {
+                return ($a['is_paid'] ?? false) ? 1 : -1;
+            }
+
+            return ($b['amount'] ?? 0) <=> ($a['amount'] ?? 0);
+        });
+
+        foreach ($totals as $bucket => $total) {
+            $totals[$bucket]['amount'] = $this->tidy($total['amount']);
+        }
+
+        return [
+            'month' => $month,
+            'month_label' => $monthLabel,
+            'source' => null,
+            'rows' => $rows,
+            'totals' => $totals,
+            'outstanding' => $totals['unpaid']['amount'],
+            'settlement_scope' => 'monitor',
+        ];
     }
 
     /** Income/expenses/net timelines, summed on the date bucket. */
@@ -468,6 +682,7 @@ class SectionAggregator
             'queues' => $this->mergeQueues($payloads),
             'series' => $this->mergeWorkSeries($payloads),
             'turnaround' => $this->mergeTurnaround($payloads),
+            'turnaround_by_type' => $this->mergeTurnaroundByType($payloads),
             'recent' => $this->mergeRecent(
                 $payloads,
                 $labels,
@@ -478,6 +693,84 @@ class SectionAggregator
             'concerns' => $this->rank($payloads, 'concerns', 'count', 10, null, true),
             'repair_categories' => $this->rank($payloads, 'repair_categories', 'count', 10, null, true),
         ]);
+    }
+
+    /**
+     * Turnaround per work-order type across every database.
+     *
+     * Averages are weighted by the number of jobs each database closed, for the
+     * same reason weightedTurnaround exists: a branch that closed three jobs must
+     * not pull the fleet average as hard as one that closed three hundred.
+     *
+     * Types are matched on label *and* unit. GOWISER measures minutes on site and
+     * NETMANAGER measures the age of a ticket in hours, and averaging those
+     * together would produce a number that is not a duration of anything.
+     */
+    private function mergeTurnaroundByType(array $payloads): array
+    {
+        $types = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['turnaround_by_type'] ?? [] as $row) {
+                $unit = (string) ($row['unit'] ?? 'minutes');
+                $key = strtolower(trim((string) ($row['label'] ?? ''))) . '|' . $unit;
+
+                if ($key === '|' . $unit) {
+                    continue;
+                }
+
+                if (!isset($types[$key])) {
+                    $types[$key] = [
+                        'label' => $row['label'] ?? '',
+                        'group' => $row['group'] ?? null,
+                        'unit' => $unit,
+                        'closed' => 0,
+                        'weighted' => 0.0,
+                        'longest' => null,
+                    ];
+                }
+
+                $field = $unit === 'hours' ? 'average_hours' : 'average_minutes';
+                $longestField = $unit === 'hours' ? 'longest_hours' : 'longest_minutes';
+
+                $closed = (int) ($row['closed'] ?? 0);
+                $average = $row[$field] ?? null;
+                $longest = $row[$longestField] ?? null;
+
+                $types[$key]['closed'] += $closed;
+
+                if ($average !== null) {
+                    $types[$key]['weighted'] += (float) $average * $closed;
+                }
+
+                // Longest is the worst case anywhere, so a max rather than a sum.
+                if ($longest !== null) {
+                    $types[$key]['longest'] = $types[$key]['longest'] === null
+                        ? (int) $longest
+                        : max($types[$key]['longest'], (int) $longest);
+                }
+            }
+        }
+
+        $rows = [];
+
+        foreach ($types as $type) {
+            $average = $type['closed'] > 0 ? round($type['weighted'] / $type['closed'], 1) : null;
+            $unit = $type['unit'];
+
+            $rows[] = [
+                'label' => $type['label'],
+                'group' => $type['group'],
+                'unit' => $unit,
+                'closed' => $type['closed'],
+                $unit === 'hours' ? 'average_hours' : 'average_minutes' => $average,
+                $unit === 'hours' ? 'longest_hours' : 'longest_minutes' => $type['longest'],
+            ];
+        }
+
+        usort($rows, fn ($a, $b) => $b['closed'] <=> $a['closed']);
+
+        return $rows;
     }
 
     /**
