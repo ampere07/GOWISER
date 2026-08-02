@@ -141,6 +141,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     const [billsInitialTab, setBillsInitialTab] = useState<'soa' | 'invoices' | 'payments'>('soa');
     const [customerInitialSearch, setCustomerInitialSearch] = useState('');
     const [customerAutoOpenAccountNo, setCustomerAutoOpenAccountNo] = useState('');
+    // Set when a notification is clicked, so the target page opens that record's
+    // details rather than just landing on the list.
+    const [jobOrderAutoOpenId, setJobOrderAutoOpenId] = useState('');
+    const [applicationAutoOpenId, setApplicationAutoOpenId] = useState('');
+    const [revertAutoOpenId, setRevertAutoOpenId] = useState('');
+    const [serviceOrderAutoOpenId, setServiceOrderAutoOpenId] = useState('');
     const [customerAutoOpenPayModal, setCustomerAutoOpenPayModal] = useState(false);
     const [planInitialSearch, setPlanInitialSearch] = useState('');
     const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -341,7 +347,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             case 'group-management':
                 return <GroupManagement />;
             case 'application-management':
-                return <ApplicationManagement onNavigate={handleSectionChange} />;
+                return <ApplicationManagement onNavigate={handleSectionChange} autoOpenApplicationId={applicationAutoOpenId} />;
             case 'customer':
                 return <Customer initialSearchQuery={customerInitialSearch} autoOpenAccountNo={customerAutoOpenAccountNo} />;
             case 'transaction-list':
@@ -349,15 +355,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     <TransactionList onNavigate={(section, search) => handleSectionChange(section, search)} />
                 );
             case 'transactions-revert':
-                return <TransactionsRevert />;
+                return <TransactionsRevert autoOpenRevertId={revertAutoOpenId} />;
             case 'payment-portal':
                 return <PaymentPortal />;
             case 'job-order':
-                return <JobOrder />;
+                return <JobOrder autoOpenJobOrderId={jobOrderAutoOpenId} />;
             case 'work-order':
                 return <WorkOrder />;
             case 'service-order':
-                return <ServiceOrder />;
+                return <ServiceOrder autoOpenServiceOrderId={serviceOrderAutoOpenId} />;
             case 'reports':
                 return <Reports />;
             case 'commission':
@@ -451,6 +457,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             setCustomerAutoOpenAccountNo(extra || '');
         } else if (section === 'plan-list') {
             setPlanInitialSearch(extra || '');
+        } else if (section === 'job-order') {
+            // Carries the id of a job order to open, sent when a "Job Done"
+            // notification is clicked. Cleared on a plain navigation so returning to
+            // the page later does not reopen whatever was last looked at.
+            setJobOrderAutoOpenId(extra || '');
+        } else if (section === 'application-management') {
+            setApplicationAutoOpenId(extra || '');
+        } else if (section === 'transactions-revert') {
+            setRevertAutoOpenId(extra || '');
+        } else if (section === 'service-order') {
+            setServiceOrderAutoOpenId(extra || '');
         }
 
         if (window.innerWidth < 768) {

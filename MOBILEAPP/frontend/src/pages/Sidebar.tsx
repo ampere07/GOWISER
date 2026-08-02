@@ -13,6 +13,7 @@ import {
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { useNavBadgeCounts, NavBadgeCounts } from '../hooks/useNavBadgeCounts';
 
 interface SidebarProps {
   activeSection: string;
@@ -37,10 +38,63 @@ interface NavGroup {
   items: MenuItem[];
 }
 
+/**
+ * Count bubble on a bottom-bar icon.
+ *
+ * Renders nothing at zero: an empty queue is shown by the absence of a badge, and
+ * a "0" would draw the eye to the one tab with nothing to do. Anything past 99 is
+ * capped, because the bubble has to stay inside the tab.
+ */
+const NavBadge: React.FC<{ count?: number }> = ({ count }) => {
+  if (!count || count < 1) return null;
+
+  const label = count > 99 ? '99+' : String(count);
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        top: -6,
+        // Nudged further right as the label grows so the bubble stays clear of the
+        // icon instead of creeping across it.
+        right: label.length > 1 ? -14 : -8,
+        minWidth: 16,
+        height: 16,
+        borderRadius: 8,
+        paddingHorizontal: 4,
+        backgroundColor: '#ef4444',
+        alignItems: 'center',
+        justifyContent: 'center',
+        // Keeps the bubble legible where it overlaps the icon.
+        borderWidth: 1.5,
+        borderColor: '#ffffff',
+      }}
+      // One announcement for the tab rather than a stray number after the label.
+      accessibilityLabel={`${label} pending`}
+    >
+      <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '700', lineHeight: 12 }}>
+        {label}
+      </Text>
+    </View>
+  );
+};
+
 const MAX_VISIBLE_ITEMS = 4;
 const GRID_COLUMNS = 3;
 
 const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userRole, roleId }) => {
+  /**
+   * Badges are a technician feature: these tabs are that role's personal work
+   * queue, so a count on them is actionable. For an administrator the same tabs
+   * list every record in the system, where a badge in the thousands is noise.
+   */
+  // role_id 2 is Technician; 4 is Agent. The same test the Job Order page and both
+  // order contexts use to decide whether to scope a list to one technician.
+  const isTechnician =
+    (userRole || '').toLowerCase().trim() === 'technician' || String(roleId) === '2';
+
+  const badgeCounts = useNavBadgeCounts(isTechnician);
+
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [isMenuExpanded, setIsMenuExpanded] = useState(false);
   const [measuredHeight, setMeasuredHeight] = useState(300);
@@ -277,6 +331,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
           }),
         }}>
           <IconComponent size={22} color={isActive ? primaryColor : '#6b7280'} />
+          <NavBadge count={badgeCounts[item.id as keyof NavBadgeCounts]} />
         </View>
         <Text
           style={{
@@ -500,7 +555,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
                   zIndex: 10,
                 }}
               >
-                <IconComponent size={22} color={isActive ? primaryColor : '#4b5563'} />
+                {/* The icon and its badge share a wrapper so the badge anchors to the
+                    icon rather than to the whole tab, which is wider than it. */}
+                <View>
+                  <IconComponent size={22} color={isActive ? primaryColor : '#4b5563'} />
+                  <NavBadge count={badgeCounts[item.id as keyof NavBadgeCounts]} />
+                </View>
                 <Text style={{
                   width: '100%',
                   textAlign: 'center',

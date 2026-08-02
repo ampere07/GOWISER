@@ -26,6 +26,7 @@ import TransactionListDetails from './TransactionListDetails';
 import * as lcpnapService from '../services/lcpnapService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
 import apiClient from '../config/api';
+import { getOnlineStatusInfo } from '../utils/onlineStatus';
 
 // Break circular dependency with lazy loading
 const LcpNapLocationDetails = React.lazy(() => import('./LcpNapLocationDetails'));
@@ -587,27 +588,11 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     localStorage.setItem(FIELD_ORDER_KEY, JSON.stringify(fieldOrder));
   }, [fieldOrder]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || 'disconnected';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', color: 'text-green-500', hex: '#22c55e', fillColor: 'bg-green-500', hollow: false };
-    if (lower === 'offline') return { label: 'OFFLINE', color: 'text-yellow-400', hex: '#facc15', hollow: true };
-    if (lower === 'not found') return { label: 'NOT FOUND', color: 'text-red-600', hex: '#dc2626', fillColor: 'bg-red-600', hollow: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', color: 'text-gray-400', hex: '#9ca3af', fillColor: 'bg-gray-400', hollow: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', color: 'text-gray-400', hex: '#be6b33', fillColor: 'bg-orange-500', hollow: false };
-    if (lower === 'empty') return { label: 'EMPTY', color: 'text-slate-400', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), color: 'text-blue-500', hex: '#3b82f6', fillColor: 'bg-blue-500', hollow: false };
-  };
+  // Shared with the customer list so the panel and the row behind it can never
+  // disagree. This was a local copy that had drifted — it lacked the Inactive rule
+  // and the Empty guard, so an inactive account with a stale session read ONLINE
+  // here while the list correctly read OFFLINE.
+  const getStatusInfo = getOnlineStatusInfo;
 
   const fetchRelatedData = useCallback(async () => {
     const accountNo = billingRecord.accountNo || billingRecord.account_no || billingRecord.applicationId;

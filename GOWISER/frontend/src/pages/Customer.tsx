@@ -26,6 +26,7 @@ import {
   VIP_BILLING_STATUS_ID
 } from '../utils/billingFilterOptions';
 import { mergeSavedColumns, BILLING_ATTRIBUTE_COLUMN_KEYS } from '../utils/tableColumnPrefs';
+import { getOnlineStatusInfo } from '../utils/onlineStatus';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -93,7 +94,10 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     middleInitial: customerData.middleInitial,
     lastName: customerData.lastName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 1 ? 'Active' : 'Disconnected'),
+    // Falls back to 'Inactive', matching billingService's list mapper. It used to say
+    // 'Disconnected' here, which buckets differently — the same account would have
+    // read DISCONNECTED in the panel and OFFLINE in the row behind it.
+    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 1 ? 'Active' : 'Inactive'),
     balance: customerData.billingAccount?.accountBalance || 0,
     onlineStatus: customerData.onlineSessionStatus || 'Empty',
     cityId: null,
@@ -899,28 +903,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     };
   }, [cities]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || '';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (lowerStatus === 'inactive') bucket = 'offline';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', color: 'text-green-500', hex: '#22c55e', fillColor: 'bg-green-500', hollow: false };
-    if (lower === 'offline') return { label: 'OFFLINE', color: 'text-yellow-400', hex: '#facc15', hollow: true };
-    if (lower === 'not found') return { label: 'NOT FOUND', color: 'text-red-600', hex: '#dc2626', fillColor: 'bg-red-600', hollow: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', color: 'text-gray-400', hex: '#9ca3af', fillColor: 'bg-gray-400', hollow: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', color: 'text-gray-400', hex: '#be6b33', fillColor: 'bg-orange-500', hollow: false };
-    if (lower === 'empty') return { label: 'EMPTY', color: 'text-slate-400', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), color: 'text-blue-500', hex: '#3b82f6', fillColor: 'bg-blue-500', hollow: false };
-  };
+  // Shared with CustomerDetails so the row and the panel it opens always agree.
+  const getStatusInfo = getOnlineStatusInfo;
 
   const getVal = (item: BillingRecord, key: string): any => {
     switch (key) {

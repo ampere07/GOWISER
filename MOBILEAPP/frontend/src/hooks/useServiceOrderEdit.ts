@@ -143,6 +143,13 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   const [orderItems, setOrderItems] = useState<OrderItem[]>([{ itemId: '', quantity: '' }]);
   const [formData, setFormData] = useState<ServiceOrderEditFormData>(initialFormState);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /**
+   * Bumped every time a save is rejected for missing fields.
+   *
+   * A counter rather than a boolean: two failed saves in a row must both scroll,
+   * and a boolean that is already true produces no change for the view to react to.
+   */
+  const [validationFailedAt, setValidationFailedAt] = useState(0);
   const [imageFiles, setImageFiles] = useState<ImageFiles>({
     timeInFile: null,
     modemSetupFile: null,
@@ -577,6 +584,9 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     setFormData(finalData);
 
     if (!validateForm(finalData, orderItems, imageFiles, usedPorts, setErrors)) {
+      // Tells the modal to scroll to the first offending field, so the technician
+      // is not left scrolling a long form to find what the alert is about.
+      setValidationFailedAt(n => n + 1);
       Alert.alert('Error', 'Check required fields.');
       return;
     }
@@ -735,7 +745,7 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   ]);
 
   return {
-    formData, setFormData, errors, setErrors, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
+    formData, setFormData, errors, setErrors, validationFailedAt, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
     handleInputChange, handleImageUpload, handleSave: handleSaveInternal,
     activePicker, setActivePicker, searchQueries, setSearchQueries, filtered,
     orderItems, setOrderItems, activeItemIndex, setActiveItemIndex, handleItemChange,
@@ -756,8 +766,39 @@ const initialFormState: ServiceOrderEditFormData = {
   setupImage: '', routerReadingImage: '', boxReadingImage: '', portLabelImage: ''
 };
 
+/**
+ * The team chosen in the Start Timer modal, in slot order.
+ *
+ * That modal asks for Technician 1/2/3 and stores them on the service order as a
+ * `technicians` array; this form records the same three people as Visit By, Visit
+ * With and Visit With (Other). Same team, two names for it — so the positions map
+ * straight across rather than the technician re-entering them.
+ *
+ * 'None' is a real choice in slots 2 and 3 there, and is carried through verbatim:
+ * it means "nobody else attended", which is an answer.
+ */
+const startTimeVisitTeam = (raw: any): [string, string, string] => {
+  // The column is TEXT cast to array by the model, but a cached or older payload
+  // can still arrive as the raw JSON string.
+  let list: any = raw;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch { list = []; }
+  }
+
+  if (!Array.isArray(list)) return ['', '', ''];
+
+  const slot = (i: number) => (typeof list[i] === 'string' ? list[i].trim() : '');
+
+  return [slot(0), slot(1), slot(2)];
+};
+
 const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
   const normPort = (p: any) => { if (!p) return ''; const n = String(p).replace(/[^\d]/g, ''); return n ? `P${n.padStart(2, '0')}` : ''; };
+  // Pre-fill the visit team from the Start Timer selection. All three are required
+  // to save, so without this a technician who already named the team when starting
+  // has to name it again here. What the order already records always wins —
+  // re-opening a completed order must never rewrite what was actually submitted.
+  const visitTeam = startTimeVisitTeam(d.technicians);
   const formatDate = (s: string) => { if (!s) return ''; try { const d = new Date(s); return d.toISOString().split('T')[0]; } catch(e) { return s.split(' ')[0]; } };
   
   const repairCatList = ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord', 'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'];
@@ -795,7 +836,11 @@ const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
     supportStatus,
     visitStatus,
     repairCategory,
-    visitBy: d.visitBy || d.visit_by || '', visitWith: d.visitWith || d.visit_with || '', visitWithOther: d.visitWithOther || d.visit_with_other || '',
+    // visit_by_user is the actual column; the camelCase and visit_by spellings are
+    // kept for payloads that have already been through the context mapper.
+    visitBy: d.visitBy || d.visit_by_user || d.visit_by || visitTeam[0] || '',
+    visitWith: d.visitWith || d.visit_with || visitTeam[1] || '',
+    visitWithOther: d.visitWithOther || d.visit_with_other || visitTeam[2] || '',
     visitRemarks: d.visitRemarks || d.visit_remarks || '', clientSignature: d.clientSignature || d.client_signature_url || d.client_signature || '',
     timeIn: d.timeIn || d.image1_url || d.time_in || '', modemSetupImage: d.modemSetupImage || d.image2_url || d.modem_setup_image || '',
     timeOut: d.timeOut || d.image3_url || d.time_out || '', assignedEmail: d.assignedEmail || d.assigned_email || '', concern: d.concern || '',

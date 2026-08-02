@@ -277,21 +277,66 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   }, [technicians, currentUser]);
 
   /**
-   * Keep visit_by populated now that the picker is gone.
+   * The visiting team chosen in the Start Timer modal, in slot order.
    *
-   * It is still required by validateForm and still sent in the save payload, so
-   * without this the form would refuse to save citing a field that is no longer
-   * on screen. Only filled when empty: a job order that already carries a
-   * recorded Visit_By keeps it, so re-opening a completed job never rewrites it
-   * to whoever happens to be logged in.
+   * That modal asks for Technician 1/2/3 and stores them on the job order as a
+   * `technicians` array; this form records the same three people as Visit By,
+   * Visit With and Visit With (Other). Same team, two names for it — so the
+   * positions map straight across rather than the technician re-entering them.
+   *
+   * 'None' is a real choice in slots 2 and 3 of that modal, and is carried
+   * through verbatim: it means "nobody else attended", which is an answer.
+   */
+  const startTimeVisitTeam = useMemo(() => {
+    const raw = jobOrderData?.technicians;
+
+    // The column is TEXT cast to array by the model, but a cached or older
+    // payload can still arrive as the raw JSON string.
+    let list: any = raw;
+    if (typeof raw === 'string') {
+      try {
+        list = JSON.parse(raw);
+      } catch {
+        list = [];
+      }
+    }
+
+    if (!Array.isArray(list)) return ['', '', ''];
+
+    return [0, 1, 2].map(i => (typeof list[i] === 'string' ? list[i].trim() : ''));
+  }, [jobOrderData?.technicians]);
+
+  /**
+   * Pre-fill the visit team, since all three fields are required to save.
+   *
+   * Precedence, strongest first:
+   *   1. What the job order already records — re-opening a completed job must
+   *      never rewrite what was actually submitted.
+   *   2. The Start Timer selection, which is the point of this: the technician
+   *      already named the team when starting, and should not name it twice.
+   *   3. For Visit By only, the signed-in technician. Without a Start Timer
+   *      selection there is nothing else to go on, and leaving the field empty
+   *      would block the save on a value the form could work out itself.
    */
   useEffect(() => {
-    if (!isOpen || !currentTechnicianName) return;
+    if (!isOpen) return;
 
-    setFormData(prev => (
-      prev.visit_by.trim() ? prev : { ...prev, visit_by: currentTechnicianName }
-    ));
-  }, [isOpen, currentTechnicianName]);
+    setFormData(prev => {
+      const next = {
+        visit_by: prev.visit_by.trim() || startTimeVisitTeam[0] || currentTechnicianName,
+        visit_with: prev.visit_with.trim() || startTimeVisitTeam[1],
+        visit_with_other: prev.visit_with_other.trim() || startTimeVisitTeam[2],
+      };
+
+      const unchanged =
+        next.visit_by === prev.visit_by &&
+        next.visit_with === prev.visit_with &&
+        next.visit_with_other === prev.visit_with_other;
+
+      // Returning prev unchanged keeps this from re-rendering on every pass.
+      return unchanged ? prev : { ...prev, ...next };
+    });
+  }, [isOpen, currentTechnicianName, startTimeVisitTeam]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [routerModels, setRouterModels] = useState<RouterModelEntry[]>([]);
   const [lcpnaps, setLcpnaps] = useState<LCPNAP[]>([]);
@@ -1013,6 +1058,67 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     setShowModal(true);
   };
 
+  // ─── Scroll-to-first-error ───────────────────────────────────────────────
+  //
+  // The form is long enough that a failed save used to leave the technician
+  // hunting for whichever field was empty, with only "fill in all required
+  // fields" to go on. On failure the view now jumps to the topmost offending
+  // field, which is already outlined in red by its own error state.
+
+  const scrollViewRef = useRef<ScrollView>(null);
+  /** Current scroll position, tracked so a measured field can be converted to an absolute offset. */
+  const scrollOffsetRef = useRef(0);
+  /** Anchor per field key, registered by the error markup that renders beside it. */
+  const fieldAnchors = useRef<Record<string, View | null>>({});
+
+  const registerAnchor = useCallback((key: string) => (node: View | null) => {
+    // Only clears its own entry: the Done and Failed branches register some of the
+    // same keys, and an unmounting branch must not wipe the one just mounted.
+    if (node) fieldAnchors.current[key] = node;
+    else if (fieldAnchors.current[key] === null) delete fieldAnchors.current[key];
+  }, []);
+
+  /** Distance kept above the field so its label, not just its outline, is on screen. */
+  const SCROLL_ERROR_PADDING = 90;
+
+  const scrollToFirstError = useCallback((keys: string[]) => {
+    const scroller = scrollViewRef.current;
+    if (!scroller || keys.length === 0) return;
+
+    // measureInWindow rather than measureLayout: it needs no node handles and
+    // behaves the same on both React Native architectures.
+    const measure = (node: View) => new Promise<number | null>(resolve => {
+      try {
+        node.measureInWindow((_x, y) => resolve(typeof y === 'number' ? y : null));
+      } catch {
+        resolve(null);
+      }
+    });
+
+    const scrollerNode = scroller as unknown as View;
+
+    Promise.all([
+      measure(scrollerNode),
+      ...keys.map(key => {
+        const node = fieldAnchors.current[key];
+        return node ? measure(node) : Promise.resolve(null);
+      }),
+    ]).then(([scrollerY, ...fieldYs]) => {
+      if (scrollerY === null) return;
+
+      // The topmost error on screen, not the first one the validator happened to
+      // add — the order fields are checked in is not the order they are laid out.
+      const topMost = fieldYs.filter((y): y is number => y !== null).sort((a, b) => a - b)[0];
+      if (topMost === undefined) return;
+
+      const target = scrollOffsetRef.current + (topMost - scrollerY) - SCROLL_ERROR_PADDING;
+      scroller.scrollTo({ y: Math.max(0, target), animated: true });
+    }).catch(() => {
+      // A field that cannot be measured is not worth failing the save over; the
+      // red outline still marks it.
+    });
+  }, []);
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -1106,7 +1212,15 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     }
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+
+    const failed = Object.keys(newErrors);
+    if (failed.length > 0) {
+      // The anchors live inside the error blocks, which only render once these
+      // errors are in state — so measure on the next frame, not this one.
+      requestAnimationFrame(() => scrollToFirstError(failed));
+    }
+
+    return failed.length === 0;
   };
 
   const handleValidateSN = async () => {
@@ -2647,10 +2761,13 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   </View>
                 ) : (
                   <ScrollView
+                    ref={scrollViewRef}
                     style={styles.contentContainer}
                     contentContainerStyle={styles.scrollViewContent}
                     scrollEnabled={scrollEnabled}
                     keyboardShouldPersistTaps="handled"
+                    onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
+                    scrollEventThrottle={16}
                   >
                     <View style={styles.inputGroup}>
                       <View style={styles.inputGroup}>
@@ -2671,7 +2788,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           />
                         </View>
                         {errors.choosePlan && (
-                          <View style={styles.errorContainer}>
+                          <View ref={registerAnchor('choosePlan')} collapsable={false} style={styles.errorContainer}>
                             <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                               <Text style={styles.errorIconText}>!</Text>
                             </View>
@@ -2680,18 +2797,20 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                         )}
                       </View>
 
-                      <SearchablePickerTrigger
-                        label="Onsite Status"
-                        value={formData.onsiteStatus}
-                        onPress={() => setIsOnsiteStatusPickerOpen(true)}
-                        error={errors.onsiteStatus}
-                        isDarkMode={isDarkMode}
-                        required={true}
-                        placeholder="Select Onsite Status..."
-                      />
+                      <View ref={registerAnchor('onsiteStatus')} collapsable={false}>
+                        <SearchablePickerTrigger
+                          label="Onsite Status"
+                          value={formData.onsiteStatus}
+                          onPress={() => setIsOnsiteStatusPickerOpen(true)}
+                          error={errors.onsiteStatus}
+                          isDarkMode={isDarkMode}
+                          required={true}
+                          placeholder="Select Onsite Status..."
+                        />
+                      </View>
 
                       <View style={styles.inputGroup}>
-                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>Region</Text>
+                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>Region<Text style={styles.required}>*</Text></Text>
                         <TextInput
                           value={formData.region}
                           editable={false}
@@ -2699,14 +2818,22 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           style={[styles.textInput, {
                             opacity: 0.75,
                             backgroundColor: isDarkMode ? '#374151' : '#f3f4f6',
-                            borderColor: isDarkMode ? '#4b5563' : '#d1d5db',
+                            borderColor: errors.region ? '#ef4444' : (isDarkMode ? '#4b5563' : '#d1d5db'),
                             color: isDarkMode ? '#d1d5db' : '#4b5563'
                           }]}
                         />
+                        {errors.region && (
+                          <View ref={registerAnchor('region')} collapsable={false} style={styles.errorContainer}>
+                            <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
+                              <Text style={styles.errorIconText}>!</Text>
+                            </View>
+                            <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.region}</Text>
+                          </View>
+                        )}
                       </View>
 
                       <View style={styles.inputGroup}>
-                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>City</Text>
+                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>City<Text style={styles.required}>*</Text></Text>
                         <TextInput
                           value={formData.city}
                           editable={false}
@@ -2714,14 +2841,22 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           style={[styles.textInput, {
                             opacity: 0.75,
                             backgroundColor: isDarkMode ? '#374151' : '#f3f4f6',
-                            borderColor: isDarkMode ? '#4b5563' : '#d1d5db',
+                            borderColor: errors.city ? '#ef4444' : (isDarkMode ? '#4b5563' : '#d1d5db'),
                             color: isDarkMode ? '#d1d5db' : '#4b5563'
                           }]}
                         />
+                        {errors.city && (
+                          <View ref={registerAnchor('city')} collapsable={false} style={styles.errorContainer}>
+                            <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
+                              <Text style={styles.errorIconText}>!</Text>
+                            </View>
+                            <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.city}</Text>
+                          </View>
+                        )}
                       </View>
 
                       <View style={styles.inputGroup}>
-                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>Barangay</Text>
+                        <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>Barangay<Text style={styles.required}>*</Text></Text>
                         <TextInput
                           value={formData.barangay}
                           editable={false}
@@ -2729,10 +2864,18 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           style={[styles.textInput, {
                             opacity: 0.75,
                             backgroundColor: isDarkMode ? '#374151' : '#f3f4f6',
-                            borderColor: isDarkMode ? '#4b5563' : '#d1d5db',
+                            borderColor: errors.barangay ? '#ef4444' : (isDarkMode ? '#4b5563' : '#d1d5db'),
                             color: isDarkMode ? '#d1d5db' : '#4b5563'
                           }]}
                         />
+                        {errors.barangay && (
+                          <View ref={registerAnchor('barangay')} collapsable={false} style={styles.errorContainer}>
+                            <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
+                              <Text style={styles.errorIconText}>!</Text>
+                            </View>
+                            <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.barangay}</Text>
+                          </View>
+                        )}
                       </View>
 
 
@@ -2767,7 +2910,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               )}
                             </View>
                             {errors.dateInstalled && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('dateInstalled')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -2802,7 +2945,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.usageType && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('usageType')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -2869,7 +3012,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.connectionType && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('connectionType')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -2902,7 +3045,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Text>
                             </View>
                             {errors.routerModel && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('routerModel')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -2952,7 +3095,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               />
                             </View>
                             {errors.modemSN && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('modemSN')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -2983,7 +3126,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                 }]}
                               />
                               {errors.techInput && (
-                                <View style={styles.errorContainer}>
+                                <View ref={registerAnchor('techInput')} collapsable={false} style={styles.errorContainer}>
                                   <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                     <Text style={styles.errorIconText}>!</Text>
                                   </View>
@@ -3014,7 +3157,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                 }]}
                               />
                               {errors.ip && (
-                                <View style={styles.errorContainer}>
+                                <View ref={registerAnchor('ip')} collapsable={false} style={styles.errorContainer}>
                                   <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                     <Text style={styles.errorIconText}>!</Text>
                                   </View>
@@ -3050,7 +3193,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
                                 </Pressable>
                                 {errors.lcpnap && (
-                                  <View style={styles.errorContainer}>
+                                  <View ref={registerAnchor('lcpnap')} collapsable={false} style={styles.errorContainer}>
                                     <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                       <Text style={styles.errorIconText}>!</Text>
                                     </View>
@@ -3085,7 +3228,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   </Pressable>
                                 </View>
                                 {errors.port && (
-                                  <View style={styles.errorContainer}>
+                                  <View ref={registerAnchor('port')} collapsable={false} style={styles.errorContainer}>
                                     <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                       <Text style={styles.errorIconText}>!</Text>
                                     </View>
@@ -3120,7 +3263,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   </Pressable>
                                 </View>
                                 {errors.vlan && (
-                                  <View style={styles.errorContainer}>
+                                  <View ref={registerAnchor('vlan')} collapsable={false} style={styles.errorContainer}>
                                     <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                       <Text style={styles.errorIconText}>!</Text>
                                     </View>
@@ -3131,9 +3274,46 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             </View>
                           )}
 
-                          {/* Visit By is intentionally not rendered: the signed-in technician IS the
-                              person who made the visit, so formData.visit_by is filled from the session
-                              (see currentTechnicianName) rather than being pickable here. */}
+                          {/* Pre-filled from the Start Timer selection (Technician 1), falling back
+                              to the signed-in technician. Editable, because the person who starts the
+                              timer is not always the one who ends up leading the visit. */}
+                          <View style={styles.inputGroup}>
+                            <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
+                              Visit By<Text style={styles.required}>*</Text>
+                            </Text>
+                            <View>
+                              <Pressable
+                                onPress={() => {
+                                  setActiveTechField('visit_by');
+                                  setIsTechMiniModalVisible(true);
+                                }}
+                                style={[styles.searchContainer, {
+                                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                                  borderColor: errors.visit_by ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+                                  paddingVertical: 12
+                                }]}
+                              >
+                                <Search size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                                <Text style={{
+                                  flex: 1,
+                                  paddingHorizontal: 12,
+                                  color: formData.visit_by ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
+                                  fontSize: 14
+                                }}>
+                                  {formData.visit_by || "Select Visit By..."}
+                                </Text>
+                                <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                              </Pressable>
+                            </View>
+                            {errors.visit_by && (
+                              <View ref={registerAnchor('visit_by')} collapsable={false} style={styles.errorContainer}>
+                                <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
+                                  <Text style={styles.errorIconText}>!</Text>
+                                </View>
+                                <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.visit_by}</Text>
+                              </View>
+                            )}
+                          </View>
 
                           <View style={styles.inputGroup}>
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
@@ -3164,7 +3344,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.visit_with && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('visit_with')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3202,7 +3382,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.visit_with_other && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('visit_with_other')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3228,7 +3408,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               }]}
                             />
                             {errors.onsiteRemarks && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('onsiteRemarks')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3237,67 +3417,79 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             )}
                           </View>
 
-                          <ImagePreview
-                            imageUrl={imagePreviews.boxReadingImage}
-                            label="Box Reading Image"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('boxReadingImage', file)}
-                            error={errors.boxReadingImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
-
-                          <ImagePreview
-                            imageUrl={imagePreviews.routerReadingImage}
-                            label="Router Reading Image"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('routerReadingImage', file)}
-                            error={errors.routerReadingImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
-
-                          {(formData.connectionType === 'Antenna' || formData.connectionType === 'Local') && (
+                          <View ref={registerAnchor('boxReadingImage')} collapsable={false}>
                             <ImagePreview
-                              imageUrl={imagePreviews.portLabelImage}
-                              label="Port Label Image"
+                              imageUrl={imagePreviews.boxReadingImage}
+                              label="Box Reading Image"
                               required={true}
-                              onUpload={(file) => handleImageUpload('portLabelImage', file)}
-                              error={errors.portLabelImage}
+                              onUpload={(file) => handleImageUpload('boxReadingImage', file)}
+                              error={errors.boxReadingImage}
                               colorPrimary={colorPalette?.primary || '#7c3aed'}
                               jobOrderName={jobOrderIdentifier}
                             />
+                          </View>
+
+                          <View ref={registerAnchor('routerReadingImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.routerReadingImage}
+                              label="Router Reading Image"
+                              required={true}
+                              onUpload={(file) => handleImageUpload('routerReadingImage', file)}
+                              error={errors.routerReadingImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
+
+                          {(formData.connectionType === 'Antenna' || formData.connectionType === 'Local') && (
+                            <View ref={registerAnchor('portLabelImage')} collapsable={false}>
+                              <ImagePreview
+                                imageUrl={imagePreviews.portLabelImage}
+                                label="Port Label Image"
+                                required={true}
+                                onUpload={(file) => handleImageUpload('portLabelImage', file)}
+                                error={errors.portLabelImage}
+                                colorPrimary={colorPalette?.primary || '#7c3aed'}
+                                jobOrderName={jobOrderIdentifier}
+                              />
+                            </View>
                           )}
 
-                          <ImagePreview
-                            imageUrl={imagePreviews.clientTaggingImage}
-                            label="Client Tagging"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('clientTaggingImage', file)}
-                            error={errors.clientTaggingImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
+                          <View ref={registerAnchor('clientTaggingImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.clientTaggingImage}
+                              label="Client Tagging"
+                              required={true}
+                              onUpload={(file) => handleImageUpload('clientTaggingImage', file)}
+                              error={errors.clientTaggingImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
 
-                          <ImagePreview
-                            imageUrl={imagePreviews.setupImage}
-                            label="Setup Image"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('setupImage', file)}
-                            error={errors.setupImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
+                          <View ref={registerAnchor('setupImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.setupImage}
+                              label="Setup Image"
+                              required={true}
+                              onUpload={(file) => handleImageUpload('setupImage', file)}
+                              error={errors.setupImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
 
-                          <ImagePreview
-                            imageUrl={imagePreviews.signedContractImage}
-                            label="Signed Contract Image"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('signedContractImage', file)}
-                            error={errors.signedContractImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
+                          <View ref={registerAnchor('signedContractImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.signedContractImage}
+                              label="Signed Contract Image"
+                              required={true}
+                              onUpload={(file) => handleImageUpload('signedContractImage', file)}
+                              error={errors.signedContractImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
 
                           <View style={styles.inputGroup}>
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
@@ -3462,7 +3654,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </View>
                             ))}
                             {errors.items && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('items')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3472,14 +3664,16 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           </View>
 
                           <View style={styles.inputGroup}>
-                            <LocationPicker
-                              value={formData.addressCoordinates}
-                              onChange={(coordinates) => handleInputChange('addressCoordinates', coordinates)}
-                              isDarkMode={isDarkMode}
-                              label="Address Coordinates"
-                              required={true}
-                              error={errors.addressCoordinates}
-                            />
+                            <View ref={registerAnchor('addressCoordinates')} collapsable={false}>
+                              <LocationPicker
+                                value={formData.addressCoordinates}
+                                onChange={(coordinates) => handleInputChange('addressCoordinates', coordinates)}
+                                isDarkMode={isDarkMode}
+                                label="Address Coordinates"
+                                required={true}
+                                error={errors.addressCoordinates}
+                              />
+                            </View>
                           </View>
                         </>
                       ) : (
@@ -3491,9 +3685,46 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                       {(formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') && (
                         <>
-                          {/* Visit By is intentionally not rendered: the signed-in technician IS the
-                              person who made the visit, so formData.visit_by is filled from the session
-                              (see currentTechnicianName) rather than being pickable here. */}
+                          {/* Pre-filled from the Start Timer selection (Technician 1), falling back
+                              to the signed-in technician. Editable, because the person who starts the
+                              timer is not always the one who ends up leading the visit. */}
+                          <View style={styles.inputGroup}>
+                            <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
+                              Visit By<Text style={styles.required}>*</Text>
+                            </Text>
+                            <View>
+                              <Pressable
+                                onPress={() => {
+                                  setActiveTechField('visit_by');
+                                  setIsTechMiniModalVisible(true);
+                                }}
+                                style={[styles.searchContainer, {
+                                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                                  borderColor: errors.visit_by ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+                                  paddingVertical: 12
+                                }]}
+                              >
+                                <Search size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                                <Text style={{
+                                  flex: 1,
+                                  paddingHorizontal: 12,
+                                  color: formData.visit_by ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
+                                  fontSize: 14
+                                }}>
+                                  {formData.visit_by || "Select Visit By..."}
+                                </Text>
+                                <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                              </Pressable>
+                            </View>
+                            {errors.visit_by && (
+                              <View ref={registerAnchor('visit_by')} collapsable={false} style={styles.errorContainer}>
+                                <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
+                                  <Text style={styles.errorIconText}>!</Text>
+                                </View>
+                                <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.visit_by}</Text>
+                              </View>
+                            )}
+                          </View>
 
                           <View style={styles.inputGroup}>
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
@@ -3524,7 +3755,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.visit_with && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('visit_with')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3562,7 +3793,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               </Pressable>
                             </View>
                             {errors.visit_with_other && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('visit_with_other')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3588,7 +3819,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               }]}
                             />
                             {errors.onsiteRemarks && (
-                              <View style={styles.errorContainer}>
+                              <View ref={registerAnchor('onsiteRemarks')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
                                   <Text style={styles.errorIconText}>!</Text>
                                 </View>
@@ -3602,15 +3833,17 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                       )}
                       {(formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') && (
                         <View style={styles.inputGroup}>
-                          <ImagePreview
-                            imageUrl={imagePreviews.proofImage}
-                            label="Proof Image"
-                            required={true}
-                            onUpload={(file) => handleImageUpload('proofImage', file)}
-                            error={errors.proofImage}
-                            colorPrimary={colorPalette?.primary || '#7c3aed'}
-                            jobOrderName={jobOrderIdentifier}
-                          />
+                          <View ref={registerAnchor('proofImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.proofImage}
+                              label="Proof Image"
+                              required={true}
+                              onUpload={(file) => handleImageUpload('proofImage', file)}
+                              error={errors.proofImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
                         </View>
                       )}
                     </View>

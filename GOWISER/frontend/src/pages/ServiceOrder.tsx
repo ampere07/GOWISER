@@ -111,7 +111,15 @@ const allColumns = [
  */
 const COLUMNS_ADDED_SINCE_LAST_RELEASE = ['barangay', 'city', 'region'];
 
-const ServiceOrderPage: React.FC = () => {
+interface ServiceOrderPageProps {
+  /**
+   * Service order to open on arrival, sent when a "Service Done" notification is
+   * clicked. Empty for ordinary navigation.
+   */
+  autoOpenServiceOrderId?: string;
+}
+
+const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrderId }) => {
   const calculateDuration = (start?: string | null, end?: string | null): string => {
     if (!start || !end) return '-';
     try {
@@ -1117,6 +1125,33 @@ const ServiceOrderPage: React.FC = () => {
   const handleRowClick = (serviceOrder: ServiceOrder) => {
     setSelectedServiceOrder(serviceOrder);
   };
+
+  /**
+   * Open the service order a notification pointed at.
+   *
+   * Goes through handleRowClick so it opens exactly as a real click does. Tracked
+   * by id so it fires once: without this, closing the panel would reopen it on the
+   * next render and the list could never be reached again.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenServiceOrderId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenServiceOrderId) return;
+
+    const target = serviceOrders.find(order => String(order.id) === String(autoOpenServiceOrderId));
+
+    // Wait for the list rather than fetching separately, so the opened record is the
+    // same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenServiceOrderId;
+    handleRowClick(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenServiceOrderId, serviceOrders]);
 
   const handleToggleColumn = (columnKey: string) => {
     setVisibleColumns(prev => {

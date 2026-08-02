@@ -132,7 +132,9 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                         </Pressable>
                     </View>
                 ) : (
-                    <View className={`w-24 h-24 rounded-lg border-2 border-dashed flex items-center justify-center ${isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
+                    <View className={`w-24 h-24 rounded-lg border-2 border-dashed flex items-center justify-center ${error
+                        ? 'border-red-500'
+                        : isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
                         }`}>
                         <ImageIcon size={40} color={isDarkMode ? '#4b5563' : '#9ca3af'} />
                     </View>
@@ -141,9 +143,11 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                 {/* Upload Button */}
                 <Pressable
                     onPress={() => setModalVisible(true)}
-                    className={`flex-1 flex-row items-center justify-center space-x-2 py-3 px-4 rounded-lg border border-dashed ${isDarkMode
-                        ? 'border-gray-600 bg-gray-800'
-                        : 'border-gray-300 bg-gray-50'
+                    className={`flex-1 flex-row items-center justify-center space-x-2 py-3 px-4 rounded-lg border border-dashed ${error
+                        ? 'border-red-500'
+                        : isDarkMode
+                            ? 'border-gray-600 bg-gray-800'
+                            : 'border-gray-300 bg-gray-50'
                         }`}
                 >
                     <Camera size={20} color={isDarkMode ? '#9ca3af' : '#6b7280'} />

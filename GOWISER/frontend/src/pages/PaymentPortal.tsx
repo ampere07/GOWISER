@@ -15,6 +15,7 @@ import { paymentMethodService, PaymentMethod } from '../services/paymentMethodSe
 import PaymentPortalFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/PaymentPortalFunnelFilter';
 import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -37,9 +38,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lastName: customerData.lastName,
     middleInitial: customerData.middleInitial,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',

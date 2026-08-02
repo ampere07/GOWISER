@@ -56,9 +56,14 @@ const allColumns = [
 
 interface ApplicationManagementProps {
   onNavigate?: (section: string, extra?: string) => void;
+  /**
+   * Application to open on arrival, sent when an "Application" notification is
+   * clicked. Empty for ordinary navigation.
+   */
+  autoOpenApplicationId?: string;
 }
 
-const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate }) => {
+const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate, autoOpenApplicationId }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [currentUserOrgId, setCurrentUserOrgId] = useState<number | null>(() => {
     try {
@@ -860,6 +865,36 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       setCurrentPage(newPage);
     }
   };
+
+  /**
+   * Open the application a notification pointed at.
+   *
+   * Goes through handleRowClick so the details panel opens exactly as it does on a
+   * real click, including the presence broadcast — a record opened this way should
+   * not be invisible to whoever else is looking at it.
+   *
+   * Tracked by id so it fires once: without this, closing the panel would reopen it
+   * on the next render and the user could never get back to the list.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenApplicationId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenApplicationId) return;
+
+    const target = applications.find(app => String(app.id) === String(autoOpenApplicationId));
+
+    // The list loads in pages; wait for it rather than fetching separately, so the
+    // opened record is the same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenApplicationId;
+    handleRowClick(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenApplicationId, applications]);
 
   const handleRowClick = async (application: Application) => {
     // If we were already viewing something else, broadcast that we stopped

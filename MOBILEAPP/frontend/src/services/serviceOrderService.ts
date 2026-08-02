@@ -42,6 +42,8 @@ export interface ServiceOrderData {
   priority_level?: string;
   visit_by_user?: string;
   visit_with?: string;
+  /** Was missing from this type, which is why the context could never load it. */
+  visit_with_other?: string;
   visit_remarks?: string;
   support_remarks?: string;
   service_charge?: number;

@@ -10,10 +10,59 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 interface HeaderProps {
   onToggleSidebar?: () => void;
   onSearch?: (query: string) => void;
-  onNavigate?: (section: string) => void;
+  onNavigate?: (section: string, extra?: string) => void;
   onLogout?: () => void;
   activeSection?: string;
 }
+
+/**
+ * How each notification kind presents itself.
+ *
+ * Lookup tables rather than nested ternaries: the feed has grown to four kinds and
+ * adding a fifth should be one row here, not another branch in three places.
+ * `application` is the fallback because it is the oldest kind and the only one that
+ * an older payload can arrive without a `type` at all.
+ */
+const NOTIFICATION_BADGES: Record<string, { label: string; className: string }> = {
+  job_order_done: {
+    label: 'Job Done',
+    className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+  },
+  service_order_done: {
+    label: 'Service Done',
+    className: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  // Amber: the one kind that asks the reader to decide something rather than
+  // reporting something that already happened.
+  transaction_revert: {
+    label: 'Revert',
+    className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+  },
+  application: {
+    label: 'Application',
+    className: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400',
+  },
+};
+
+const badgeLabelFor = (type?: string) => NOTIFICATION_BADGES[type || 'application']?.label ?? 'Notification';
+const badgeStyleFor = (type?: string) =>
+  (NOTIFICATION_BADGES[type || 'application'] ?? NOTIFICATION_BADGES.application).className;
+
+/** The one-line description under the customer name. */
+const summaryFor = (notification: AppNotification): string => {
+  switch (notification.type) {
+    case 'job_order_done':
+      return 'Completed onsite work';
+    case 'service_order_done':
+      // The concern, so what the visit was about is visible without opening it.
+      return notification.plan_name ? `Visit done · ${notification.plan_name}` : 'Completed service visit';
+    case 'transaction_revert':
+      // The amount, so the size of what is being undone is visible without opening it.
+      return `Revert requested · ${notification.plan_name}`;
+    default:
+      return `Plan: ${notification.plan_name}`;
+  }
+};
 
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, onLogout, activeSection }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
@@ -404,6 +453,33 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }
   };
 
+  /**
+   * Open the record a notification is about.
+   *
+   * The consolidated feed carries the row id in `id`, keyed by `type` — an
+   * application id or a job order id — so each kind routes to its own section and
+   * hands the id along as the section payload. Same mechanism Customer already
+   * uses to auto-open an account from elsewhere in the app.
+   *
+   * The panel closes first: the details panel it opens would otherwise appear
+   * behind this dropdown.
+   */
+  const handleNotificationClick = (notification: AppNotification) => {
+    setShowNotifications(false);
+
+    if (!onNavigate || !notification.id) return;
+
+    if (notification.type === 'job_order_done') {
+      onNavigate('job-order', String(notification.id));
+    } else if (notification.type === 'service_order_done') {
+      onNavigate('service-order', String(notification.id));
+    } else if (notification.type === 'transaction_revert') {
+      onNavigate('transactions-revert', String(notification.id));
+    } else {
+      onNavigate('application-management', String(notification.id));
+    }
+  };
+
   const handleClearAll = () => {
 
     // Always update the time to "now"
@@ -677,19 +753,20 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   notifications.map((notification) => (
                     <div
                       key={`${notification.type}-${notification.id}`}
+                      onClick={() => handleNotificationClick(notification)}
                       className={`p-4 border-b ${isDarkMode ? 'border-gray-700 hover:bg-gray-750' : 'border-gray-200 hover:bg-gray-50'
                         } transition-colors cursor-pointer`}
                     >
                       <div className="flex justify-between items-start mb-1">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${notification.type === 'job_order_done'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                          : 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400'
-                          }`}
-                          style={notification.type === 'job_order_done' ? {} : {
+                        <span
+                          className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeStyleFor(notification.type)}`}
+                          // Only Application follows the palette; the rest carry a fixed
+                          // colour so a status reads the same whatever the theme is set to.
+                          style={notification.type && notification.type !== 'application' ? {} : {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(124, 58, 237, 0.2)',
                             color: colorPalette?.primary || '#7c3aed'
                           }}>
-                          {notification.type === 'job_order_done' ? 'Job Done' : 'Application'}
+                          {badgeLabelFor(notification.type)}
                         </span>
                         <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                           {notification.formatted_date}
@@ -701,7 +778,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                       </div>
                       <div className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                         }`}>
-                        {notification.type === 'job_order_done' ? 'Completed onsite work' : `Plan: ${notification.plan_name}`}
+                        {summaryFor(notification)}
                       </div>
                     </div>
                   ))

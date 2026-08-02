@@ -7,6 +7,7 @@ import { BillingDetailRecord } from '../types/billing';
 import apiClient from '../config/api';
 
 import { useSOAStore } from '../store/soaStore';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const CustomerDetails = React.lazy(() => import('./CustomerDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
@@ -41,9 +42,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lastName: customerData.lastName,
     middleInitial: customerData.middleInitial,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',

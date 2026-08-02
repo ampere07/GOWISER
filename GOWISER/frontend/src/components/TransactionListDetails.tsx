@@ -22,6 +22,7 @@ import ReceiptPreviewModal from '../modals/ReceiptPreviewModal';
 import { ReceiptData } from '../utils/receiptTemplates';
 import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 // Company details printed in the Official Receipt header. These are static registration
 // details (not stored in settings), so edit them here if the company info ever changes.
@@ -136,9 +137,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lastName: customerData.lastName,
     middleInitial: customerData.middleInitial,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',

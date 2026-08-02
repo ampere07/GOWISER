@@ -5,6 +5,7 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
 import { CircleArrowRight, Loader } from 'lucide-react';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const CustomerDetails = React.lazy(() => import('./CustomerDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
@@ -20,9 +21,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lastName: customerData.lastName,
     middleInitial: customerData.middleInitial,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',

@@ -32,6 +32,11 @@ interface ServiceOrder {
     visitBy: string;
     visitWith: string;
     visitWithOther: string;
+    /**
+     * The team chosen in the Start Timer modal, in slot order. The edit form
+     * pre-fills Visit By / With / With (Other) from it.
+     */
+    technicians: string[] | null;
     visitRemarks: string;
     modifiedBy: string;
     modifiedDate: string;
@@ -129,7 +134,8 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         visitStatus: order.visit_status || '',
         visitBy: order.visit_by_user || '',
         visitWith: order.visit_with || '',
-        visitWithOther: '',
+        visitWithOther: order.visit_with_other || '',
+        technicians: order.technicians ?? null,
         visitRemarks: order.visit_remarks || '',
         modifiedBy: order.updated_by_user || '',
         modifiedDate: order.updated_at || '',

@@ -110,7 +110,15 @@ const allColumns = [
   { key: 'duration', label: 'Duration', width: 'min-w-28' }
 ];
 
-const JobOrderPage: React.FC = () => {
+interface JobOrderPageProps {
+  /**
+   * Job order to open on arrival, sent when a "Job Done" notification is clicked.
+   * Empty for ordinary navigation.
+   */
+  autoOpenJobOrderId?: string;
+}
+
+const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [currentUserOrgId, setCurrentUserOrgId] = useState<number | null>(() => {
     try {
@@ -1227,6 +1235,38 @@ const JobOrderPage: React.FC = () => {
       }
     }
   };
+
+  /**
+   * Open the job order a notification pointed at.
+   *
+   * Goes through handleRowClick so the details panel opens exactly as it does on a
+   * real click, including the presence broadcast — a record opened this way should
+   * not be invisible to whoever else is looking at it.
+   *
+   * Tracked by id so it fires once: without this, closing the panel would reopen it
+   * on the next render, and the technician could never get back to the list.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenJobOrderId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenJobOrderId) return;
+
+    const target = accessibleJobOrders.find(order => String(order.id) === String(autoOpenJobOrderId));
+
+    // The list loads in pages; wait for it rather than fetching separately, so the
+    // opened record is the same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenJobOrderId;
+    handleRowClick(target);
+    // handleRowClick is stable enough for this purpose and adding it would re-run
+    // the effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenJobOrderId, accessibleJobOrders]);
 
   const handleCloseDetails = async () => {
     if (selectedJobOrder) {

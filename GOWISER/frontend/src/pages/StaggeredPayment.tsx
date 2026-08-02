@@ -12,6 +12,7 @@ import pusher from '../services/pusherService';
 import apiClient from '../config/api';
 import SessionExpiredModal from '../components/SessionExpiredModal';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -24,9 +25,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',

@@ -14,7 +14,15 @@ const hexToRgba = (hex: string, opacity: number) => {
     return result ? `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${opacity})` : hex;
 };
 
-const TransactionsRevert: React.FC = () => {
+interface TransactionsRevertProps {
+    /**
+     * Revert request to open on arrival, sent when a "Revert" notification is
+     * clicked. Empty for ordinary navigation.
+     */
+    autoOpenRevertId?: string;
+}
+
+const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertId }) => {
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const {
         revertRequests,
@@ -195,6 +203,36 @@ const TransactionsRevert: React.FC = () => {
             console.error('[Presence] Failed to broadcast viewing:', err);
         }
     };
+
+    /**
+     * Open the revert request a notification pointed at.
+     *
+     * Goes through handleRowClick so it opens exactly as a real click does,
+     * including the presence broadcast — a superadmin reviewing a revert should be
+     * visible to anyone else looking at the same one.
+     *
+     * Tracked by id so it fires once: without this, closing the panel would reopen
+     * it on the next render and the list could never be reached again.
+     */
+    const autoOpenedIdRef = React.useRef<string | null>(null);
+
+    useEffect(() => {
+        if (!autoOpenRevertId) {
+            autoOpenedIdRef.current = null;
+            return;
+        }
+        if (autoOpenedIdRef.current === autoOpenRevertId) return;
+
+        const target = revertRequests.find(r => String(r.id) === String(autoOpenRevertId));
+
+        // Wait for the list rather than fetching separately, so the opened record is
+        // the same object the list holds and stays in sync with refreshes.
+        if (!target) return;
+
+        autoOpenedIdRef.current = autoOpenRevertId;
+        handleRowClick(target);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoOpenRevertId, revertRequests]);
 
     const handleRowClick = (revert: TransactionRevert) => {
         // Broadcast stop viewing for previous selection if exists

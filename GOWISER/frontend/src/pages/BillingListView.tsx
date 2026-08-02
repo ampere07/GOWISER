@@ -7,6 +7,7 @@ import { getCustomerDetail, CustomerDetailData } from '../services/customerDetai
 import { BillingDetailRecord } from '../types/billing';
 import { getCities, City } from '../services/cityService';
 import { getRegions, Region } from '../services/regionService';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => {
   return {
@@ -14,9 +15,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
