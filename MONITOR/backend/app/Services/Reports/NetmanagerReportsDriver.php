@@ -210,7 +210,7 @@ class NetmanagerReportsDriver implements ReportsDriver
                 'points' => $this->trendSeries($db, $trendPeriod, $branch, $anchor),
             ],
 
-            // Cash / PNB / Xendit, regrouped from by_method. See IncomeChannels
+            // Cash / PNB / Payment Portal, regrouped from by_method. See IncomeChannels
             // for why the mapping is config rather than SQL.
             'income_channels' => IncomeChannels::summarise($byMethod),
 
@@ -1641,7 +1641,7 @@ class NetmanagerReportsDriver implements ReportsDriver
      */
     private function incomeKpi(ConnectionInterface $db, string $from, string $to, ?int $branch): array
     {
-        $isPortal = "UPPER(COALESCE(pm.remark, '')) LIKE '%PORTAL%'";
+        $isPortal = "(UPPER(COALESCE(pm.remark, '')) LIKE '%PORTAL%' OR UPPER(COALESCE(py.method, '')) LIKE '%PORTAL%' OR UPPER(COALESCE(py.method, '')) IN ('ONLINE', 'GCASH', 'MAYA', 'XENDIT', 'E-WALLET', 'EWALLET', 'PAYMENT_PORTAL', 'PAYMENT PORTAL'))";
 
         $row = $this->paidPayments($db, $branch)
             ->whereBetween(DB::raw('DATE(py.payment_date)'), [$from, $to])
@@ -1672,6 +1672,8 @@ class NetmanagerReportsDriver implements ReportsDriver
     /** Over-the-counter collections itemised by charge type. */
     private function officeCollectionsByType(ConnectionInterface $db, string $from, string $to, ?int $branch): array
     {
+        $isPortal = "(UPPER(COALESCE(pm.remark, '')) LIKE '%PORTAL%' OR UPPER(COALESCE(py.method, '')) LIKE '%PORTAL%' OR UPPER(COALESCE(py.method, '')) IN ('ONLINE', 'GCASH', 'MAYA', 'XENDIT', 'E-WALLET', 'EWALLET', 'PAYMENT_PORTAL', 'PAYMENT PORTAL'))";
+
         return $this->paidPayments($db, $branch)
             ->whereBetween(DB::raw('DATE(py.payment_date)'), [$from, $to])
             ->leftJoin('payment_types as pt', 'pt.type_id', '=', 'py.payment_type_id')
@@ -1681,7 +1683,7 @@ class NetmanagerReportsDriver implements ReportsDriver
                 '=',
                 DB::raw('UPPER(py.method COLLATE utf8mb4_unicode_ci)')
             )
-            ->whereRaw("UPPER(COALESCE(pm.remark, '')) NOT LIKE '%PORTAL%'")
+            ->whereRaw("NOT {$isPortal}")
             ->selectRaw("COALESCE(NULLIF(pt.name, ''), 'Subscription') AS label")
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(py.amount), 0) AS total')

@@ -4,7 +4,7 @@ import { useTheme } from '../hooks/useTheme';
 import { usePalette } from '../hooks/usePalette';
 import { themeService } from '../services/themeService';
 import { useMonitorStore } from '../store/monitorStore';
-import gowiserlogo from '../assets/gowiserlogo.png';
+import { useLogo } from '../hooks/useLogo';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -26,6 +26,7 @@ const Header: React.FC<HeaderProps> = ({
   isRefreshing,
   hideSourceSwitcher,
 }) => {
+  const logo = useLogo();
   const isDarkMode = useTheme();
   const palette = usePalette();
   const { sources, activeSource, setActiveSource, lastUpdated } = useMonitorStore();
@@ -50,7 +51,7 @@ const Header: React.FC<HeaderProps> = ({
 
         <div className="flex flex-col items-center space-y-1">
           <img
-            src={gowiserlogo}
+            src={logo}
             alt="GOWISER"
             className="h-10 object-contain"
             onError={(e) => {

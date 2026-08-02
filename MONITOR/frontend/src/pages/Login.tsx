@@ -3,13 +3,14 @@ import { ArrowRight, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { login } from '../services/api';
 import { UserData } from '../types/api';
 import { usePalette } from '../hooks/usePalette';
-import gowiserlogo from '../assets/gowiserlogo.png';
+import { useLogo } from '../hooks/useLogo';
 
 interface LoginProps {
   onLogin: (userData: UserData) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const logo = useLogo();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -289,7 +290,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           >
             <div className="logo-section" style={{ textAlign: 'center', marginBottom: '40px' }}>
               <img
-                src={gowiserlogo}
+                src={logo}
                 alt="GOWISER"
                 style={{
                   height: '120px',

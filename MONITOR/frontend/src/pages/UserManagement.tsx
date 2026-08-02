@@ -2,39 +2,22 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  KeyRound,
   Loader2,
-  Pencil,
   Plus,
-  ShieldCheck,
+  RefreshCw,
+  Search,
   Trash2,
-  UserCog,
+  User,
   X,
 } from 'lucide-react';
-import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
-import Card, { CardHeader, CardBody } from '../components/reporting/Card';
-import {
-  Button,
-  ErrorBanner,
-  Pill,
-  Table,
-  TableState,
-  Td,
-  Th,
-  Thead,
-  Tr,
-  useControlClass,
-} from '../components/reporting/primitives';
+import { ReportingPage } from '../components/reporting/PageLayout';
+import Card, { CardBody } from '../components/reporting/Card';
+import { Button, ErrorBanner, Pill, useControlClass } from '../components/reporting/primitives';
+import { usePalette } from '../hooks/usePalette';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import { adminService, UserManagementPayload } from '../services/adminService';
-import {
-  ManagedRole,
-  ManagedUser,
-  PermissionOption,
-  UserFormValues,
-} from '../types/rbac';
-import { ACTION } from '../types/rbac';
+import { ManagedUser, PermissionOption, UserFormValues } from '../types/rbac';
 import { formatDateTime } from '../utils/format';
 
 interface UserManagementProps {
@@ -55,12 +38,16 @@ const emptyForm = (roleId: number): UserFormValues => ({
 });
 
 /**
- * User Management & Permission Mapping.
+ * User Management.
  *
- * Two things on one screen because they are one job: assigning someone a role,
- * and — where the role is not quite the right shape — the exception on top of it.
- * Overrides exist so an exception does not have to become a new role; a portal
- * with eleven near-identical roles is one nobody can audit.
+ * Assigns a role, and — where the role is not quite the right shape — the
+ * exception on top of it. Overrides exist so an exception does not have to
+ * become a new role; a portal with eleven near-identical roles is one nobody can
+ * audit.
+ *
+ * Reshaping what a role *means* lives on the Roles screen instead: it affects
+ * everyone holding it at once, and that blast radius should not be one click
+ * away from editing a single account.
  *
  * The effective permission list shown per user is computed server-side and sent
  * back, not derived here. The deny-wins-over-grant rule is exactly the sort of
@@ -69,7 +56,11 @@ const emptyForm = (roleId: number): UserFormValues => ({
  */
 const UserManagement: React.FC<UserManagementProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
-  const { can, user: currentUser } = usePermissions();
+  const palette = usePalette();
+  const { user: currentUser } = usePermissions();
+
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
 
   const [payload, setPayload] = useState<UserManagementPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,11 +73,6 @@ const UserManagement: React.FC<UserManagementProps> = ({ refreshToken }) => {
   const [editing, setEditing] = useState<ManagedUser | null>(null);
   const [form, setForm] = useState<UserFormValues | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-
-  const [roleEditing, setRoleEditing] = useState<ManagedRole | null>(null);
-  const [rolePermissions, setRolePermissions] = useState<string[]>([]);
-
-  const canManageRoles = can(ACTION.rolesManage);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -116,6 +102,33 @@ const UserManagement: React.FC<UserManagementProps> = ({ refreshToken }) => {
         : [],
     [payload]
   );
+
+  /**
+   * The rows actually shown.
+   *
+   * Filtered client-side: the whole list is already in the payload, and a round
+   * trip to narrow a list of accounts already in memory would be slower and
+   * could briefly disagree with what is on screen.
+   */
+  const visible = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const users = payload?.users ?? [];
+
+    return users.filter((user) => {
+      if (needle) {
+        const haystack = `${user.full_name} ${user.username} ${user.email}`.toLowerCase();
+
+        if (!haystack.includes(needle)) return false;
+      }
+
+      if (filter === 'active') return user.active;
+      if (filter === 'suspended') return !user.active;
+      if (filter === 'overrides') return user.has_overrides;
+      if (filter.startsWith('role:')) return user.role_id === Number(filter.slice(5));
+
+      return true;
+    });
+  }, [payload, search, filter]);
 
   const openCreate = () => {
     setEditing(null);
@@ -192,212 +205,213 @@ const UserManagement: React.FC<UserManagementProps> = ({ refreshToken }) => {
     }
   };
 
-  const saveRole = async () => {
-    if (!roleEditing) return;
-
-    setSaving(true);
-
-    try {
-      await adminService.updateRole(roleEditing.id, rolePermissions, roleEditing.description);
-      setRoleEditing(null);
-      load();
-    } catch (err: any) {
-      const errors = err?.response?.data?.errors;
-      const first = errors ? (Object.values(errors)[0] as string[])?.[0] : null;
-
-      setError(first ?? err?.response?.data?.message ?? 'Could not update this role.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const controlClass = useControlClass();
 
   return (
     <ReportingPage>
-      <PageHeader
-        title="User Management"
-        subtitle="Executive roles, and per-user access overrides"
-        actions={
-          <Button variant="primary" icon={<Plus size={14} />} onClick={openCreate}>
-            Add user
-          </Button>
-        }
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">User Management</h1>
+          <p className={`text-sm mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+            Manage system users and permissions
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={load}
+            title="Reload users"
+            className={`rounded-lg border p-2 transition-colors ${
+              isDarkMode
+                ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          </button>
+
+          <button
+            type="button"
+            onClick={openCreate}
+            title="Add user"
+            // Brand colour rather than the generic primary: this is the one
+            // create action on the screen, and the palette exists to mark it.
+            className="rounded-lg p-2.5 text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: palette.primary }}
+          >
+            <Plus size={18} />
+          </button>
+        </div>
+      </div>
 
       {error && <ErrorBanner message={error} />}
 
+      {/* ── Search and filter ─────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="relative flex-1 min-w-[220px]">
+          <Search
+            size={16}
+            className={`absolute left-3 top-1/2 -translate-y-1/2 ${
+              isDarkMode ? 'text-gray-500' : 'text-gray-400'
+            }`}
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search name, username, email…"
+            className={`${controlClass} w-full !pl-10 !py-2.5`}
+            aria-label="Search users"
+          />
+        </span>
+
+        <select
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          className={`${controlClass} !py-2.5 min-w-[160px]`}
+          aria-label="Filter users"
+        >
+          <option value="all">All Users</option>
+          <option value="active">Active only</option>
+          <option value="suspended">Suspended only</option>
+          <option value="overrides">With custom access</option>
+          {(payload?.roles ?? []).map((role) => (
+            <option key={role.id} value={`role:${role.id}`}>
+              {role.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* ── Users ─────────────────────────────────────────────────────── */}
       <Card flush>
-        <CardHeader
-          title="Users"
-          badge={payload ? `${payload.users.length}` : undefined}
-          icon={<UserCog size={16} />}
-        />
-        <Table>
-          <Thead>
-            <Th>User</Th>
-            <Th>Role</Th>
-            <Th>Access</Th>
-            <Th>Last login</Th>
-            <Th align="right" width="120px" />
-          </Thead>
-          <tbody>
-            <TableState
-              colSpan={5}
-              loading={loading && !payload}
-              error={error}
-              empty={(payload?.users.length ?? 0) === 0}
-              emptyMessage="No users are configured."
-            />
+        {loading && !payload ? (
+          <p
+            className={`flex items-center justify-center gap-2 py-16 text-sm ${
+              isDarkMode ? 'text-gray-400' : 'text-gray-500'
+            }`}
+          >
+            <Loader2 size={15} className="animate-spin" />
+            Loading…
+          </p>
+        ) : visible.length === 0 ? (
+          <p className={`py-16 text-center text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+            {search.trim() || filter !== 'all'
+              ? 'No user matches these filters.'
+              : 'No users are configured.'}
+          </p>
+        ) : (
+          <div>
+            {visible.map((user, index) => (
+              <div
+                key={user.id}
+                // The whole row opens the editor. The row is the primary target;
+                // a pencil at the far right of a wide list is not.
+                role="button"
+                tabIndex={0}
+                onClick={() => openEdit(user)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openEdit(user);
+                  }
+                }}
+                className={`flex items-center gap-4 px-4 sm:px-5 py-3.5 cursor-pointer transition-colors ${
+                  index > 0
+                    ? isDarkMode
+                      ? 'border-t border-gray-800'
+                      : 'border-t border-gray-100'
+                    : ''
+                } ${isDarkMode ? 'hover:bg-gray-800/60' : 'hover:bg-gray-50'}`}
+              >
+                <span
+                  className={`flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center ${
+                    isDarkMode ? 'bg-gray-800 text-gray-400' : 'bg-gray-100 text-gray-500'
+                  }`}
+                >
+                  <User size={20} />
+                </span>
 
-            {(payload?.users ?? []).map((user) => (
-              <Tr key={user.id}>
-                <Td>
-                  <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={`block font-semibold truncate ${
+                      isDarkMode ? 'text-white' : 'text-gray-900'
+                    }`}
+                  >
                     {user.full_name || user.username}
                     {currentUser?.id === user.id && (
-                      <span className={`ml-1.5 text-xs font-normal ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                      <span
+                        className={`ml-1.5 text-xs font-normal ${
+                          isDarkMode ? 'text-gray-500' : 'text-gray-400'
+                        }`}
+                      >
                         (you)
                       </span>
                     )}
                   </span>
-                  <span className={`block text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                    {user.username} · {user.email}
+                  <span
+                    className={`block text-sm truncate ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}
+                  >
+                    {user.username} • {user.email}
                   </span>
-                </Td>
-                <Td>
-                  <Pill tone="info">{user.role}</Pill>
-                </Td>
-                <Td>
-                  <span className="flex flex-wrap items-center gap-1">
-                    <Pill tone={user.active ? 'success' : 'neutral'}>
-                      {user.active ? 'Active' : 'Suspended'}
-                    </Pill>
+                  <span className="flex flex-wrap items-center gap-1.5 mt-1">
+                    {!user.active && <Pill tone="neutral">Suspended</Pill>}
                     {/* Flagged rather than expanded: the point of the marker is
-                        that this account does not match its role, which is the
-                        thing an auditor scans for. */}
+                        that this account does not match its role, which is what
+                        an auditor scans a list like this for. */}
                     {user.has_overrides && (
                       <Pill tone="warning">
                         {user.overrides.grant.length > 0 && `+${user.overrides.grant.length}`}
                         {user.overrides.grant.length > 0 && user.overrides.deny.length > 0 && ' '}
-                        {user.overrides.deny.length > 0 && `−${user.overrides.deny.length}`} custom
+                        {user.overrides.deny.length > 0 && `-${user.overrides.deny.length}`} custom
                       </Pill>
                     )}
-                    <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                      {user.permissions.length} permissions
+                    <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                      {user.permissions.length} permissions ·{' '}
+                      {user.last_login ? formatDateTime(user.last_login) : 'never signed in'}
                     </span>
                   </span>
-                </Td>
-                <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {user.last_login ? formatDateTime(user.last_login) : 'never'}
-                </Td>
-                <Td align="right">
-                  <span className="inline-flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(user)}
-                      title="Edit user"
-                      className={`rounded-lg border p-1.5 transition-colors ${
-                        isDarkMode
-                          ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
-                          : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(user)}
-                      disabled={currentUser?.id === user.id}
-                      title={
-                        currentUser?.id === user.id
-                          ? 'You cannot delete your own account'
-                          : 'Delete user'
-                      }
-                      className="rounded-lg border border-red-500/40 text-red-500 p-1.5 transition-colors hover:bg-red-500/10 disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </span>
-                </Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      </Card>
+                </span>
 
-      {/* ── Roles ─────────────────────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader
-          title="Roles & Permission Map"
-          subtitle={
-            canManageRoles
-              ? 'Reshaping a role changes what everyone holding it can see'
-              : 'Read-only — your role cannot edit permission maps'
-          }
-          icon={<ShieldCheck size={16} />}
-        />
-        <Table>
-          <Thead>
-            <Th>Role</Th>
-            <Th>Description</Th>
-            <Th align="right">Users</Th>
-            <Th align="right">Permissions</Th>
-            <Th align="right" width="90px" />
-          </Thead>
-          <tbody>
-            <TableState
-              colSpan={5}
-              loading={loading && !payload}
-              empty={(payload?.roles.length ?? 0) === 0}
-              emptyMessage="No roles are configured."
-            />
-
-            {(payload?.roles ?? []).map((role) => (
-              <Tr key={role.id}>
-                <Td className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {role.name}
-                  {role.is_system && (
-                    <Pill tone="neutral" className="ml-2">
-                      system
-                    </Pill>
-                  )}
-                </Td>
-                <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {role.description || '—'}
-                </Td>
-                <Td align="right" className="tabular-nums">
-                  {role.user_count ?? 0}
-                </Td>
-                <Td align="right" className="tabular-nums">
-                  {role.permissions.length}
-                </Td>
-                <Td align="right">
-                  <button
-                    type="button"
-                    disabled={!canManageRoles}
-                    onClick={() => {
-                      setRoleEditing(role);
-                      setRolePermissions(role.permissions);
-                    }}
-                    title={
-                      canManageRoles ? 'Edit permission map' : 'Your role cannot edit permission maps'
-                    }
-                    className={`rounded-lg border p-1.5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                      isDarkMode
-                        ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
-                        : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                <span className="flex items-center gap-2 flex-shrink-0">
+                  <span
+                    className={`hidden sm:inline text-[11px] font-bold uppercase tracking-wide px-2.5 py-1 rounded ${
+                      isDarkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'
                     }`}
                   >
-                    <KeyRound size={13} />
+                    {user.role}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      // The row is a click target too, so this has to stop the
+                      // event or deleting would also open the editor behind it.
+                      event.stopPropagation();
+                      remove(user);
+                    }}
+                    disabled={currentUser?.id === user.id}
+                    title={
+                      currentUser?.id === user.id
+                        ? 'You cannot delete your own account'
+                        : 'Delete user'
+                    }
+                    className="rounded-lg border border-red-500/40 text-red-500 p-1.5 transition-colors hover:bg-red-500/10 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Trash2 size={14} />
                   </button>
-                </Td>
-              </Tr>
+                </span>
+              </div>
             ))}
-          </tbody>
-        </Table>
+          </div>
+        )}
       </Card>
+
+      <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+        Showing {visible.length} of {payload?.users.length ?? 0} accounts. What a role *means* is
+        edited on Roles Management; the overrides here are per-person exceptions on top of it.
+      </p>
 
       {/* ── User form ─────────────────────────────────────────────────── */}
       {form && (
@@ -497,55 +511,6 @@ const UserManagement: React.FC<UserManagementProps> = ({ refreshToken }) => {
         </Modal>
       )}
 
-      {/* ── Role permission map ───────────────────────────────────────── */}
-      {roleEditing && (
-        <Modal
-          title={`Permission map — ${roleEditing.name}`}
-          onClose={() => setRoleEditing(null)}
-          onSubmit={saveRole}
-          saving={saving}
-          error={null}
-        >
-          <p className={`text-xs mb-3 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-            Applies to every user holding this role, including{' '}
-            {roleEditing.user_count ?? 0} account{(roleEditing.user_count ?? 0) === 1 ? '' : 's'}{' '}
-            right now.
-          </p>
-
-          {payload &&
-            (['modules', 'widgets', 'actions'] as const).map((group) => (
-              <div key={group} className="mb-4">
-                <p
-                  className={`text-xs font-semibold uppercase tracking-wide mb-2 ${
-                    isDarkMode ? 'text-gray-400' : 'text-gray-500'
-                  }`}
-                >
-                  {group}
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {payload.catalogue[group].map((option) => (
-                    <label key={option.id} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={rolePermissions.includes(option.id)}
-                        onChange={(event) =>
-                          setRolePermissions((current) =>
-                            event.target.checked
-                              ? [...current, option.id]
-                              : current.filter((id) => id !== option.id)
-                          )
-                        }
-                      />
-                      <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                        {option.label}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-        </Modal>
-      )}
     </ReportingPage>
   );
 };

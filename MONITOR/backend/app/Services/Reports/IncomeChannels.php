@@ -4,7 +4,11 @@ namespace App\Services\Reports;
 
 /**
  * Splits collections into the three channels finance reconciles against:
- * Cash, PNB, and Xendit.
+ * Cash, PNB, and Payment Portal.
+
+ * "Payment Portal" is SYNC's own online collection route — the gateway behind it
+ * is an implementation detail that has changed before, so the channel is named
+ * for what finance reconciles against rather than for the current provider.
  *
  * Neither source system stores a channel column — both store a free-text payment
  * method that cashiers and gateways write in a dozen spellings. The mapping
@@ -22,7 +26,7 @@ class IncomeChannels
     public const CHANNELS = [
         'cash' => 'Cash',
         'pnb' => 'PNB',
-        'xendit' => 'Xendit',
+        'portal' => 'Payment Portal',
         'other' => 'Other',
     ];
 
@@ -40,7 +44,7 @@ class IncomeChannels
 
         return is_array($configured) && $configured !== [] ? $configured : [
             'pnb' => ['pnb', 'philippine national bank', 'bank transfer', 'bank deposit'],
-            'xendit' => ['xendit', 'portal', 'online', 'gcash', 'maya', 'paymaya', 'e-wallet', 'ewallet'],
+            'portal' => ['portal', 'xendit', 'online', 'gcash', 'maya', 'paymaya', 'e-wallet', 'ewallet'],
             'cash' => ['cash', 'over the counter', 'otc', 'walk-in', 'office'],
         ];
     }
@@ -68,6 +72,69 @@ class IncomeChannels
         }
 
         return 'other';
+    }
+
+    /**
+     * The channel summary for a schema where the portal is its own table.
+     *
+     * GOWISER settles online payments through `payment_portal_logs` and never
+     * writes them to `transactions`, so the portal channel cannot be pattern-
+     * matched out of a by-method breakdown — the rows are not in it. Passing the
+     * portal figures in explicitly is the only way to state them, and it is also
+     * strictly better: a real total instead of a guess about what "GCash" in a
+     * free-text method field meant.
+     *
+     * The counter breakdown is still classified as usual, minus the portal
+     * patterns: anything a cashier labelled "GCash" over the counter is a counter
+     * payment and belongs in Other, not silently merged into the portal's total.
+     *
+     * @param array<int,array{label:string,count:int,total:float}> $byMethod
+     * @param array{count:int,total:float}                          $portal
+     * @param string[]                                              $gateways
+     */
+    public static function withPortal(array $byMethod, array $portal, array $gateways = []): array
+    {
+        $channels = [];
+
+        foreach (self::summarise($byMethod) as $channel) {
+            // Recomputed below against a grand total that now includes the
+            // portal, so the shares still add to 100.
+            if ($channel['key'] !== 'portal') {
+                $channels[] = $channel;
+            }
+        }
+
+        $channels[] = [
+            'key' => 'portal',
+            'label' => self::CHANNELS['portal'],
+            'count' => (int) ($portal['count'] ?? 0),
+            'total' => round((float) ($portal['total'] ?? 0), 2),
+            'share_pct' => 0.0,
+            // The gateways that actually carried the money — GCash, Maya, a bank
+            // code — so an unexpected total can be traced without opening SYNC.
+            'methods' => array_values(array_unique($gateways)),
+        ];
+
+        $grand = array_sum(array_column($channels, 'total'));
+
+        return array_map(function (array $channel) use ($grand) {
+            $channel['share_pct'] = $grand > 0 ? round($channel['total'] / $grand * 100, 1) : 0.0;
+
+            return $channel;
+        }, self::ordered($channels));
+    }
+
+    /** CHANNELS order, so the three named channels always read left to right. */
+    private static function ordered(array $channels): array
+    {
+        $order = array_flip(array_keys(self::CHANNELS));
+
+        usort(
+            $channels,
+            fn (array $a, array $b) => ($order[$a['key']] ?? 99) <=> ($order[$b['key']] ?? 99)
+        );
+
+        return $channels;
     }
 
     /**

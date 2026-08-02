@@ -95,9 +95,13 @@ class FinancialsController extends Controller
     {
         Log::error('Financials dashboard failed: ' . $e->getMessage());
 
+        $detail = (config('app.debug') || request()->user()?->isAdmin())
+            ? ': ' . $e->getMessage()
+            : '';
+
         return response()->json([
             'status' => 'error',
-            'message' => config('app.debug') ? $e->getMessage() : 'Unable to reach the monitored database.',
+            'message' => 'Unable to reach the monitored database' . $detail,
         ], 500);
     }
 }

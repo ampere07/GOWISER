@@ -193,12 +193,24 @@ export interface SubscriberKpis {
   new_30day: number;
 }
 
-/** The four counters in the summary header at the top of the module. */
+/** One counter in the billing summary header. */
+export interface BillingSummaryCard {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * The summary header at the top of the module.
+ *
+ * A list rather than four fixed fields, because the cards are whatever billing
+ * statuses the source actually holds. SYNC's `billing_status` table is a lookup
+ * an operator edits: hardcoding four names meant a status SYNC uses but the list
+ * did not name vanished, while a name SYNC does not use rendered as a confident
+ * zero — which reads as "none of these" rather than "not tracked here".
+ */
 export interface BillingSummary {
-  active: number;
-  vip: number;
-  inactive: number;
-  pullout: number;
+  cards: BillingSummaryCard[];
   total: number;
 }
 
@@ -304,6 +316,10 @@ export interface FinancialKpi {
   margin_pct: number | null;
   expected_mrc: number;
   collection_rate: number;
+  daily_average?: number;
+  projected_monthly?: number;
+  days_elapsed?: number;
+  days_in_month?: number;
 }
 
 export interface BranchCollectionRow extends SourceTagged {
@@ -330,9 +346,16 @@ export interface SummaryPeriod {
   ratio_pct: number | null;
 }
 
-/** One collection channel: Cash, PNB or Xendit (plus an Other residue). */
+/**
+ * One collection channel: Cash, PNB or the Payment Portal (plus an Other
+ * residue).
+ *
+ * The portal channel is keyed and labelled for the route rather than the
+ * gateway behind it — SYNC's online collections have run through more than one
+ * provider, and naming the channel after the current one guarantees a rename.
+ */
 export interface IncomeChannel {
-  key: 'cash' | 'pnb' | 'xendit' | 'other';
+  key: 'cash' | 'pnb' | 'portal' | 'other';
   label: string;
   count: number;
   total: number;
@@ -672,6 +695,10 @@ export interface OperationsTechSummary {
   technicians_reporting: number | null;
   alarms: SystemAlarm[];
   alarm_count: number;
+  /** The date before which operational timestamps are not trusted, or null. */
+  reliable_from: string | null;
+  /** True when an age was clamped to that floor rather than measured. */
+  age_bounded: boolean;
 }
 
 export interface ExecutiveOverviewData {

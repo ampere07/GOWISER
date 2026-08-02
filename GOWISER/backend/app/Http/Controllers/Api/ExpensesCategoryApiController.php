@@ -31,6 +31,32 @@ class ExpensesCategoryApiController extends Controller
         throw new \Exception('Unauthenticated: User identification is required for this operation.');
     }
 
+    /**
+     * Dispatches the realtime notification without letting it fail the request.
+     *
+     * The category row is already committed by the time this runs, so anything thrown here
+     * turns a save that succeeded into a 500 that says it did not. That is exactly what
+     * happened when App\Events\ExpensesCategoryUpdated was missing from a deployment: the
+     * category was written, the dispatch raised "Class not found", and the caller saw a
+     * bare "Server Error" for an operation that had in fact worked.
+     *
+     * Throwable, not Exception: a missing class raises Error, which sails straight past
+     * catch(\Exception) — which is why the surrounding handler never saw it.
+     */
+    private function broadcast(array $payload): void
+    {
+        try {
+            event(new ExpensesCategoryUpdated($payload));
+        } catch (\Throwable $e) {
+            // Realtime is a nicety; the write already landed. Other clients pick the change
+            // up on their next fetch.
+            \Log::warning('ExpensesCategory broadcast failed (write was committed)', [
+                'action' => $payload['action'] ?? 'unknown',
+                'error'  => $e->getMessage(),
+            ]);
+        }
+    }
+
     private function format(ExpensesCategory $category, $expenseCount = null)
     {
         return [
@@ -137,11 +163,11 @@ class ExpensesCategoryApiController extends Controller
                 ]
             );
 
-            event(new ExpensesCategoryUpdated([
+            $this->broadcast([
                 'action' => 'created',
                 'category_id' => $category->id,
                 'name' => $category->category_name,
-            ]));
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -239,11 +265,11 @@ class ExpensesCategoryApiController extends Controller
                 ]
             );
 
-            event(new ExpensesCategoryUpdated([
+            $this->broadcast([
                 'action' => 'updated',
                 'category_id' => $category->id,
                 'name' => $category->category_name,
-            ]));
+            ]);
 
             $count = ExpensesLog::where('category_id', $category->id)->count();
 
@@ -299,11 +325,11 @@ class ExpensesCategoryApiController extends Controller
                 ]
             );
 
-            event(new ExpensesCategoryUpdated([
+            $this->broadcast([
                 'action' => 'deleted',
                 'category_id' => $id,
                 'name' => $categoryName,
-            ]));
+            ]);
 
             return response()->json([
                 'success' => true,

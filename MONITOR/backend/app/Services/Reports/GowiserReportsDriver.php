@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The GOWISER schema: customers, billing_accounts, transactions, online_status,
@@ -288,7 +289,7 @@ class GowiserReportsDriver implements ReportsDriver
         return (float) $db->table('billing_accounts as ba')
             ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
             ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
-            ->whereRaw("LOWER(COALESCE(bs.status_name, '')) = 'active'")
+            ->whereIn(DB::raw("LOWER(COALESCE(bs.status_name, ''))"), ['active', 'online'])
             ->sum(DB::raw('COALESCE(pl.price, 0)'));
     }
 
@@ -522,6 +523,11 @@ class GowiserReportsDriver implements ReportsDriver
 
         $base = $this->subscriberBase($db);
 
+        $daysElapsed = max(1, (int) Carbon::parse($from)->diffInDays(Carbon::parse($to)) + 1);
+        $daysInMonth = (int) Carbon::parse($to)->daysInMonth;
+        $dailyAverageCollection = round($revenue['total'] / $daysElapsed, 2);
+        $projectedMonthlySales = round($dailyAverageCollection * $daysInMonth, 2);
+
         return [
             'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
@@ -547,11 +553,13 @@ class GowiserReportsDriver implements ReportsDriver
                 'net' => round($net, 2),
                 'margin_pct' => $revenue['total'] > 0 ? round($net / $revenue['total'] * 100, 1) : null,
                 'expected_mrc' => round($expectedMrc, 2),
-                // Capped at 999%: a month carrying back-payments can exceed
-                // 100%, and an uncapped figure in the thousands reads as a bug.
                 'collection_rate' => $expectedMrc > 0
                     ? min(999.0, round($revenue['total'] / $expectedMrc * 100, 1))
                     : 0.0,
+                'daily_average' => $dailyAverageCollection,
+                'projected_monthly' => $projectedMonthlySales,
+                'days_elapsed' => $daysElapsed,
+                'days_in_month' => $daysInMonth,
             ],
 
             'series' => $this->dailySeries($db, $from, $to, $expensePeriod),
@@ -560,8 +568,14 @@ class GowiserReportsDriver implements ReportsDriver
                 'points' => $this->trendSeries($db, $trendPeriod, $anchor),
             ],
 
-            // Cash / PNB / Xendit, regrouped from by_method.
-            'income_channels' => IncomeChannels::summarise($byMethod),
+            // Cash and PNB are regrouped from the counter's payment methods; the
+            // Payment Portal channel is a real table, not a pattern match — see
+            // portalPayments for why it cannot be derived from `by_method`.
+            'income_channels' => IncomeChannels::withPortal(
+                $byMethod,
+                $this->portalStats($db, $from, $to),
+                $this->portalChannels($db, $from, $to)
+            ),
 
             'executive_metrics' => ExecutiveMetrics::build(
                 $expectedMrc,
@@ -682,54 +696,78 @@ class GowiserReportsDriver implements ReportsDriver
         return $key !== '' ? $key : 'gowiser';
     }
 
-    /** Count, total, average and largest collection in the range. */
+    /**
+     * Count, total, average and largest collection in the range.
+     *
+     * Both income streams: over-the-counter transactions *and* portal payments,
+     * which live in a separate table and are absent from `transactions` entirely
+     * (see portalPayments). Counting only the first understates collections by
+     * the whole online channel.
+     */
     private function revenueStats(ConnectionInterface $db, string $from, string $to): array
     {
         $row = $this->collectedTransactions($db)
             ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
-            ->selectRaw('COALESCE(AVG(t.received_payment), 0) AS avg_amount')
             ->selectRaw('COALESCE(MAX(t.received_payment), 0) AS max_amount')
             ->first();
 
-        return [
+        $counter = [
             'count' => (int) ($row->cnt ?? 0),
             'total' => (float) ($row->total ?? 0),
-            'average' => (float) ($row->avg_amount ?? 0),
             'largest' => (float) ($row->max_amount ?? 0),
+        ];
+
+        $portal = $this->portalStats($db, $from, $to);
+
+        $count = $counter['count'] + $portal['count'];
+        $total = $counter['total'] + $portal['total'];
+
+        return [
+            'count' => $count,
+            'total' => $total,
+            // Recomputed from the combined total and count rather than averaging
+            // two averages, which is only correct when both counts are equal and
+            // they never are.
+            'average' => $count > 0 ? $total / $count : 0.0,
+            'largest' => max($counter['largest'], $portal['largest']),
         ];
     }
 
     /**
      * Income split into over-the-counter and online-portal collections.
      *
-     * GOWISER has no payment_methods lookup carrying a "PORTAL" remark the way
-     * NetManager does, so the split is decided on the method name itself. Kept
-     * broad on purpose — portal payments arrive under several gateway names, and
-     * under-counting them would silently inflate office collections.
+     * The split used to be guessed from a regex over `transactions.payment_method`
+     * — "does this string look like GCash or a bank". That was wrong in both
+     * directions: portal payments are not in `transactions` at all, so the portal
+     * side matched only counter payments a cashier happened to label "GCash",
+     * while the genuine portal money was missing from the page entirely.
+     *
+     * The two tables are now the split. `transactions` is what was taken at the
+     * counter; `payment_portal_logs` is what came through the portal. No
+     * classification, no overlap, nothing to reconcile.
      */
     private function incomeKpi(ConnectionInterface $db, string $from, string $to): array
     {
-        $isPortal = "UPPER(COALESCE(t.payment_method, '')) REGEXP 'PORTAL|ONLINE|GCASH|MAYA|PAYMAYA|BANK|E-?WALLET'";
-
         $row = $this->collectedTransactions($db)
             ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
-            ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS income')
-            ->selectRaw('COUNT(*) AS cnt')
-            ->selectRaw("COALESCE(SUM(CASE WHEN {$isPortal} THEN t.received_payment ELSE 0 END), 0) AS portal_income")
-            ->selectRaw("COALESCE(SUM(CASE WHEN {$isPortal} THEN 1 ELSE 0 END), 0) AS portal_count")
-            ->selectRaw("COALESCE(SUM(CASE WHEN {$isPortal} THEN 0 ELSE t.received_payment END), 0) AS office_income")
-            ->selectRaw("COALESCE(SUM(CASE WHEN {$isPortal} THEN 0 ELSE 1 END), 0) AS office_count")
+            ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS office_income')
+            ->selectRaw('COUNT(*) AS office_count')
             ->first();
 
+        $portal = $this->portalStats($db, $from, $to);
+
+        $officeIncome = (float) ($row->office_income ?? 0);
+        $officeCount = (int) ($row->office_count ?? 0);
+
         return [
-            'income' => (float) ($row->income ?? 0),
-            'count' => (int) ($row->cnt ?? 0),
-            'portal_income' => (float) ($row->portal_income ?? 0),
-            'portal_count' => (int) ($row->portal_count ?? 0),
-            'office_income' => (float) ($row->office_income ?? 0),
-            'office_count' => (int) ($row->office_count ?? 0),
+            'income' => $officeIncome + $portal['total'],
+            'count' => $officeCount + $portal['count'],
+            'portal_income' => $portal['total'],
+            'portal_count' => $portal['count'],
+            'office_income' => $officeIncome,
+            'office_count' => $officeCount,
         ];
     }
 
@@ -935,6 +973,10 @@ class GowiserReportsDriver implements ReportsDriver
             ->get()
             ->keyBy('day');
 
+        // Portal collections live in their own table and have to be added per
+        // day, or the chart contradicts the headline figure above it.
+        $portal = $this->portalDaily($db, $from, $to);
+
         $expenses = $this->expenseRows($db, $expensePeriod, $from, $to)
             ->selectRaw("DATE_FORMAT(e.date, '%Y-%m-%d') AS day")
             ->selectRaw('SUM(e.amount) AS total')
@@ -942,10 +984,20 @@ class GowiserReportsDriver implements ReportsDriver
             ->get()
             ->keyBy('day');
 
-        $days = $income->keys()->merge($expenses->keys())->unique()->sort()->values();
+        // A day with portal income but no counter payment and no expense still
+        // has to plot, so its key joins the union.
+        $days = $income->keys()
+            ->merge(array_keys($portal))
+            ->merge($expenses->keys())
+            ->unique()
+            ->sort()
+            ->values();
 
-        return $days->map(function ($day) use ($income, $expenses) {
-            $in = round((float) ($income->get($day)->total ?? 0), 2);
+        return $days->map(function ($day) use ($income, $portal, $expenses) {
+            $in = round(
+                (float) ($income->get($day)->total ?? 0) + (float) ($portal[$day] ?? 0),
+                2
+            );
             $out = round((float) ($expenses->get($day)->total ?? 0), 2);
 
             return [
@@ -982,6 +1034,22 @@ class GowiserReportsDriver implements ReportsDriver
             ->get()
             ->keyBy('bucket');
 
+        // Portal collections, bucketed the same way so they can be added on.
+        $portalQuery = $this->portalPayments($db);
+
+        if ($from !== null) {
+            $portalQuery->whereBetween(DB::raw('DATE(ppl.date_time)'), [$from, $to]);
+        }
+
+        $portal = $portalQuery
+            ->selectRaw($bucketFor('ppl.date_time') . ' AS bucket')
+            ->selectRaw($labelFor('ppl.date_time') . ' AS label')
+            ->selectRaw('SUM(ppl.total_amount) AS total')
+            ->groupBy('bucket', 'label')
+            ->orderBy('bucket')
+            ->get()
+            ->keyBy('bucket');
+
         $expenseQuery = $db->table('expenses_logs as e')
             ->whereNull('e.deleted_at')
             ->whereIn(
@@ -1002,19 +1070,35 @@ class GowiserReportsDriver implements ReportsDriver
             ->get()
             ->keyBy('bucket');
 
-        $buckets = $income->keys()->merge($expenses->keys())->unique()->sort()->values();
+        $buckets = $income->keys()
+            ->merge($portal->keys())
+            ->merge($expenses->keys())
+            ->unique()
+            ->sort()
+            ->values();
 
         if ($granularity === 'yearly') {
             $buckets = $buckets->take(-10)->values();
         }
 
-        return $buckets->map(function ($bucket) use ($income, $expenses) {
-            $in = round((float) ($income->get($bucket)->total ?? 0), 2);
+        return $buckets->map(function ($bucket) use ($income, $portal, $expenses) {
+            $in = round(
+                (float) ($income->get($bucket)->total ?? 0)
+                    + (float) ($portal->get($bucket)->total ?? 0),
+                2
+            );
             $out = round((float) ($expenses->get($bucket)->total ?? 0), 2);
 
             return [
                 'period' => (string) $bucket,
-                'label' => (string) ($income->get($bucket)->label ?? $expenses->get($bucket)->label ?? $bucket),
+                // Any of the three may be the only source for a bucket, so the
+                // label falls through all of them before giving up on the key.
+                'label' => (string) (
+                    $income->get($bucket)->label
+                        ?? $portal->get($bucket)->label
+                        ?? $expenses->get($bucket)->label
+                        ?? $bucket
+                ),
                 'income' => $in,
                 'expenses' => $out,
                 'net' => round($in - $out, 2),
@@ -1715,6 +1799,8 @@ class GowiserReportsDriver implements ReportsDriver
 
             $total = $jobTally['total'] + $serviceTally['total'];
 
+            $area = $this->technicianDesignatedArea($db, $technician['name']);
+
             $workload[] = [
                 'id' => $technician['id'],
                 'name' => $technician['name'],
@@ -1728,12 +1814,59 @@ class GowiserReportsDriver implements ReportsDriver
                     [$jobTally['average_minutes'], $jobTally['total']],
                     [$serviceTally['average_minutes'], $serviceTally['total']]
                 ),
+                'designated_area' => $area,
             ];
         }
 
         usort($workload, fn ($a, $b) => $b['total'] <=> $a['total']);
 
         return $workload;
+    }
+
+    /**
+     * Resolves the primary barangay/area a technician is assigned to based on customer locations.
+     */
+    private function technicianDesignatedArea(ConnectionInterface $db, string $techName): string
+    {
+        try {
+            $soBarangay = $db->table('service_orders as so')
+                ->join('customers as c', 'c.id', '=', 'so.customer_id')
+                ->whereNotNull('c.barangay')
+                ->where('c.barangay', '!=', '')
+                ->where(function ($q) use ($techName) {
+                    $q->where('so.technicians', 'LIKE', "%{$techName}%")
+                      ->orWhere('so.visit_by_user', 'LIKE', "%{$techName}%");
+                })
+                ->selectRaw('c.barangay, COUNT(*) as cnt')
+                ->groupBy('c.barangay')
+                ->orderByDesc('cnt')
+                ->value('c.barangay');
+
+            if ($soBarangay) {
+                return (string) $soBarangay;
+            }
+
+            $joBarangay = $db->table('job_orders as jo')
+                ->join('customers as c', 'c.id', '=', 'jo.customer_id')
+                ->whereNotNull('c.barangay')
+                ->where('c.barangay', '!=', '')
+                ->where(function ($q) use ($techName) {
+                    $q->where('jo.technicians', 'LIKE', "%{$techName}%")
+                      ->orWhere('jo.visit_by', 'LIKE', "%{$techName}%");
+                })
+                ->selectRaw('c.barangay, COUNT(*) as cnt')
+                ->groupBy('c.barangay')
+                ->orderByDesc('cnt')
+                ->value('c.barangay');
+
+            if ($joBarangay) {
+                return (string) $joBarangay;
+            }
+        } catch (\Throwable) {
+            // Swallowed safely
+        }
+
+        return 'Field Designated Area';
     }
 
     /**
@@ -2082,6 +2215,200 @@ class GowiserReportsDriver implements ReportsDriver
                 $query->whereNull('t.status')
                     ->orWhereNotIn(DB::raw('LOWER(t.status)'), ['cancelled', 'pending', 'voided']);
             });
+    }
+
+    // ── Payment portal ───────────────────────────────────────────────────
+
+    /**
+     * Settled online collections, from SYNC's payment portal.
+     *
+     * These are a second, separate income stream and not a flavour of the first.
+     * SYNC's PaymentWorkerService settles a portal payment by distributing it
+     * across `invoices` and adjusting `billing_accounts.account_balance`, then
+     * logging it here — it never writes a `transactions` row. So a portal payment
+     * is genuinely absent from `transactions`, and any income figure built only
+     * from that table understates collections by the whole portal channel.
+     *
+     * That also means these rows can be *added* to the transaction totals without
+     * double-counting: there is no overlap between the two tables to reconcile.
+     *
+     * `total_amount` is the net the worker applied to invoices, not the gross the
+     * gateway charged — the convenience fee is deliberately excluded, because
+     * that money is the gateway's and never becomes revenue.
+     */
+    /** Resolves which payment portal table exists in the connected database. */
+    private function resolvePortalTable(ConnectionInterface $db): ?string
+    {
+        try {
+            $schema = $db->getSchemaBuilder();
+            foreach (['payment_portal', 'payment_portal_logs', 'payment_portals'] as $table) {
+                if ($schema->hasTable($table)) {
+                    return $table;
+                }
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        return null;
+    }
+
+    /** Resolves the first column from candidates that exists on table. */
+    private function resolvePortalColumn(ConnectionInterface $db, string $table, array $candidates): string
+    {
+        try {
+            $schema = $db->getSchemaBuilder();
+            foreach ($candidates as $col) {
+                if ($schema->hasColumn($table, $col)) {
+                    return $col;
+                }
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        return $candidates[0];
+    }
+
+    private function portalPayments(ConnectionInterface $db): Builder
+    {
+        $table = $this->resolvePortalTable($db);
+
+        if (!$table) {
+            return $db->table('billing_accounts as ppl')->whereRaw('1 = 0');
+        }
+
+        $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+        $amountCol = $this->resolvePortalColumn($db, $table, ['total_amount', 'amount', 'received_payment']);
+
+        $query = $db->table("{$table} as ppl")
+            ->whereNotNull("ppl.{$dateCol}")
+            ->whereNotNull("ppl.{$amountCol}");
+
+        $statusConditions = [];
+
+        try {
+            $schema = $db->getSchemaBuilder();
+
+            if ($schema->hasColumn($table, 'transaction_status')) {
+                $statusConditions[] = "UPPER(COALESCE(ppl.transaction_status, '')) IN ('PAID', 'SUCCESS', 'SUCCESSFUL', 'COMPLETED', 'SETTLED')";
+            }
+
+            if ($schema->hasColumn($table, 'status')) {
+                $statusConditions[] = "UPPER(COALESCE(ppl.status, '')) IN ('PAID', 'COMPLETED', 'SETTLED', 'PAYMENT_SUCCESS', 'SUCCESS', 'SUCCESSFUL', 'APPROVED')";
+            }
+
+            if ($schema->hasColumn($table, 'payment_status')) {
+                $statusConditions[] = "UPPER(COALESCE(ppl.payment_status, '')) IN ('PAID', 'COMPLETED', 'SETTLED', 'PAYMENT_SUCCESS', 'SUCCESS', 'SUCCESSFUL', 'APPROVED')";
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        if (!empty($statusConditions)) {
+            $query->whereRaw('(' . implode(' OR ', $statusConditions) . ')');
+        }
+
+        return $query;
+    }
+
+    /** Portal total and count for a range. */
+    private function portalStats(ConnectionInterface $db, string $from, string $to): array
+    {
+        $table = $this->resolvePortalTable($db);
+        if (!$table) {
+            return ['count' => 0, 'total' => 0.0, 'largest' => 0.0];
+        }
+
+        $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+        $amountCol = $this->resolvePortalColumn($db, $table, ['total_amount', 'amount', 'received_payment']);
+
+        $row = $this->portalPayments($db)
+            ->whereBetween(DB::raw("DATE(ppl.{$dateCol})"), [$from, $to])
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw("COALESCE(SUM(ppl.{$amountCol}), 0) AS total")
+            ->selectRaw("COALESCE(MAX(ppl.{$amountCol}), 0) AS max_amount")
+            ->first();
+
+        return [
+            'count' => (int) ($row->cnt ?? 0),
+            'total' => (float) ($row->total ?? 0),
+            'largest' => (float) ($row->max_amount ?? 0),
+        ];
+    }
+
+    /**
+     * Portal collections per day, keyed the same way the transaction series is,
+     * so the two can be summed bucket by bucket.
+     *
+     * @return array<string,float>
+     */
+    private function portalDaily(ConnectionInterface $db, string $from, string $to): array
+    {
+        $table = $this->resolvePortalTable($db);
+        if (!$table) {
+            return [];
+        }
+
+        $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+        $amountCol = $this->resolvePortalColumn($db, $table, ['total_amount', 'amount', 'received_payment']);
+
+        return $this->portalPayments($db)
+            ->whereBetween(DB::raw("DATE(ppl.{$dateCol})"), [$from, $to])
+            ->selectRaw("DATE_FORMAT(ppl.{$dateCol}, '%Y-%m-%d') AS day")
+            ->selectRaw("SUM(ppl.{$amountCol}) AS total")
+            ->groupBy('day')
+            ->pluck('total', 'day')
+            ->map(fn ($total) => (float) $total)
+            ->all();
+    }
+
+    /**
+     * Which gateway carried each portal payment — GCash, Maya, a bank code.
+     *
+     * Reported underneath the Payment Portal channel so an unexpected total can
+     * be traced without opening SYNC.
+     *
+     * @return string[]
+     */
+    private function portalChannels(ConnectionInterface $db, string $from, string $to): array
+    {
+        $table = $this->resolvePortalTable($db);
+        if (!$table) {
+            return [];
+        }
+
+        $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+
+        $channelExprs = [];
+        try {
+            $schema = $db->getSchemaBuilder();
+            if ($schema->hasColumn($table, 'payment_channel')) {
+                $channelExprs[] = "NULLIF(ppl.payment_channel, '')";
+            }
+            if ($schema->hasColumn($table, 'ewallet_type')) {
+                $channelExprs[] = "NULLIF(ppl.ewallet_type, '')";
+            }
+            if ($schema->hasColumn($table, 'method')) {
+                $channelExprs[] = "NULLIF(ppl.method, '')";
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        $channelExprs[] = "'Portal'";
+
+        $channelSql = "COALESCE(" . implode(', ', $channelExprs) . ") AS channel";
+
+        return $this->portalPayments($db)
+            ->whereBetween(DB::raw("DATE(ppl.{$dateCol})"), [$from, $to])
+            ->selectRaw($channelSql)
+            ->groupBy('channel')
+            ->orderByRaw('COUNT(*) DESC')
+            ->limit(12)
+            ->pluck('channel')
+            ->map(fn ($channel) => (string) $channel)
+            ->all();
     }
 
     /** CLOSED_STATES as a quoted SQL list. Values are class constants, not input. */

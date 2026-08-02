@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Activity,
+  ChevronDown,
   Crown,
   Database,
-  DollarSign,
   HardHat,
-  Layers,
-  LayoutDashboard,
   LogOut,
   ScrollText,
+  ShieldCheck,
+  SlidersHorizontal,
   User,
   UserCog,
   Users,
@@ -17,7 +16,6 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { usePalette } from '../hooks/usePalette';
-import { Capability } from '../types/monitor';
 import { ReportingSection } from '../types/reporting';
 
 export interface MenuItem {
@@ -25,17 +23,11 @@ export interface MenuItem {
   label: string;
   icon: React.ElementType;
   /**
-   * Section is hidden unless the active source's schema can answer it.
-   * Undefined means the section is not tied to one source.
-   */
-  capability?: Capability;
-  /**
-   * The operational sections advertise their own capability names, because they
-   * are served by a different driver set.
+   * The section this item opens, where it is one of the reporting modules.
    *
-   * Unlike `capability`, an item is *not* hidden when the active source cannot
-   * serve it — the sections do not all live in one database, and the request
-   * falls through to whichever system can answer. See visibleMenuItems.
+   * An item is *not* hidden when the active source cannot serve it — the
+   * sections do not all live in one database, and a request for one the selected
+   * system cannot answer falls through to whichever can. See visibleMenuItems.
    */
   reportingSection?: ReportingSection;
   /**
@@ -48,15 +40,22 @@ export interface MenuItem {
   executiveOnly?: boolean;
   /** Optional divider label rendered above this item. */
   group?: string;
+  /**
+   * Sub-items, for a heading that expands rather than navigates.
+   *
+   * A parent carries no page of its own — its `id` is a grouping key, never a
+   * section — so it is filtered on whether any child survived rather than on its
+   * own permission. See visibleMenuItems.
+   */
+  children?: MenuItem[];
 }
 
 /**
- * The whole navigable surface of this app. Read-only views throughout; there is
- * deliberately no management, configuration or data-entry section.
+ * The whole navigable surface of this app.
  *
- * A role's `permissions` array (from the MONITOR roles table) is matched
- * against these ids. An empty permission list shows nothing rather than
- * everything — failing closed is the right default for an executive portal.
+ * A role's `permissions` array (from the MONITOR roles table) is matched against
+ * these ids. An empty permission list shows nothing rather than everything —
+ * failing closed is the right default for an executive portal.
  */
 export const MENU_ITEMS: MenuItem[] = [
   // Module 5 first: the consolidated C-suite view is where an executive starts,
@@ -84,19 +83,24 @@ export const MENU_ITEMS: MenuItem[] = [
   { id: 'tech', label: 'Tech', icon: HardHat, reportingSection: 'tech' },
   { id: 'employee', label: 'Employee', icon: User, reportingSection: 'employee' },
 
-  // Legacy executive rollups, still served while each is migrated onto the
-  // modules above.
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, capability: 'overview', group: 'Legacy' },
-  { id: 'operations', label: 'Operations', icon: Activity, capability: 'operations' },
-  { id: 'revenue', label: 'Revenue', icon: DollarSign, capability: 'revenue' },
-  { id: 'financials', label: 'Financials', icon: Wallet, capability: 'financials' },
-  // Spans every source, so it does not depend on the one currently selected.
-  { id: 'consolidated', label: 'All Companies', icon: Layers },
-
-  // Administration. All three write to MONITOR's own tables only — the
-  // monitored databases stay read-only at the connection level regardless.
-  { id: 'users', label: 'User Management', icon: UserCog, group: 'Administration' },
+  // Administration. Every one of these writes to MONITOR's own tables only —
+  // the monitored databases stay read-only at the connection level regardless.
+  //
+  // Accounts and roles nest under one heading because they are two halves of the
+  // same job and are almost always visited together: you assign a role, then go
+  // and look at what that role actually means.
+  {
+    id: 'user-admin',
+    label: 'Users',
+    icon: Users,
+    group: 'Administration',
+    children: [
+      { id: 'users', label: 'Users Management', icon: UserCog },
+      { id: 'roles', label: 'Roles Management', icon: ShieldCheck },
+    ],
+  },
   { id: 'audit', label: 'Audit Trail', icon: ScrollText },
+  { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
   { id: 'databases', label: 'Databases', icon: Database },
 ];
 
@@ -108,7 +112,6 @@ interface SidebarProps {
   userRole: string;
   userEmail?: string;
   permissions?: string[] | null;
-  capabilities?: Capability[];
   /** Sections that at least one configured system can answer. */
   servableSections?: ReportingSection[];
   /** Whether the role may open the consolidated executive view. */
@@ -116,25 +119,23 @@ interface SidebarProps {
 }
 
 /**
- * Which sections the role may see.
+ * Which sections the role may see, as a tree.
  *
- * Two different rules, because the two families of pages behave differently:
+ * A reporting module is offered when *any* configured system can answer it, not
+ * when the currently selected one can. The money lives in NETMANAGER and the
+ * technicians in GOWISER, and a request for a section the selected system cannot
+ * serve falls through to one that can — so hiding Tech merely because the user
+ * happens to be pointed at NETMANAGER would make it unreachable, NETMANAGER
+ * being the default.
  *
- *  - An executive page is tied to the *selected* source, so it is hidden when
- *    that source's schema cannot produce it.
- *  - An operational section is not. The money lives in NETMANAGER and the
- *    technicians in GOWISER, and a request for a section the selected system
- *    cannot serve falls through to one that can. So the test is whether *any*
- *    configured system can answer it — hiding Tech merely because the user
- *    happens to be pointed at NETMANAGER would make it unreachable, since
- *    NETMANAGER is the default.
+ * Passing the list as undefined (before capabilities have loaded) skips that
+ * check rather than briefly blanking the menu.
  *
- * Passing a list as undefined (before capabilities have loaded) skips that check
- * rather than briefly blanking the menu.
+ * A parent is kept only when at least one of its children survived. An expander
+ * that opens onto nothing is worse than an absent one — it reads as a fault.
  */
 export const visibleMenuItems = (
   permissions?: string[] | null,
-  capabilities?: Capability[],
   servableSections?: ReportingSection[],
   isExecutiveRole = false
 ): MenuItem[] => {
@@ -142,17 +143,13 @@ export const visibleMenuItems = (
     return [];
   }
 
-  return MENU_ITEMS.filter((item) => {
+  const allowed = (item: MenuItem): boolean => {
     if (!permissions.includes(item.id)) return false;
 
     // The second gate on the consolidated view. Held separately from the module
     // permission because that view is not access a custom role should acquire
     // sideways — the backend enforces the same rule and would 403.
     if (item.executiveOnly && !isExecutiveRole) return false;
-
-    if (item.capability && capabilities && !capabilities.includes(item.capability)) {
-      return false;
-    }
 
     if (
       item.reportingSection &&
@@ -163,8 +160,36 @@ export const visibleMenuItems = (
     }
 
     return true;
-  });
+  };
+
+  return MENU_ITEMS.reduce<MenuItem[]>((kept, item) => {
+    if (item.children) {
+      const children = item.children.filter(allowed);
+
+      if (children.length > 0) {
+        kept.push({ ...item, children });
+      }
+
+      return kept;
+    }
+
+    if (allowed(item)) {
+      kept.push(item);
+    }
+
+    return kept;
+  }, []);
 };
+
+/**
+ * The tree flattened to the items that actually open a page.
+ *
+ * Parents are dropped: their id is a grouping key, not a section, and treating
+ * one as navigable would land the user on a blank screen. Used by Dashboard to
+ * pick a landing section and to re-check access at render.
+ */
+export const navigableItems = (items: MenuItem[]): MenuItem[] =>
+  items.flatMap((item) => item.children ?? [item]);
 
 const Sidebar: React.FC<SidebarProps> = ({
   activeSection,
@@ -174,7 +199,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   userRole,
   userEmail,
   permissions,
-  capabilities,
   servableSections,
   isExecutiveRole,
 }) => {
@@ -182,6 +206,31 @@ const Sidebar: React.FC<SidebarProps> = ({
   const palette = usePalette();
   const [currentDateTime, setCurrentDateTime] = useState('');
   const [tooltipItem, setTooltipItem] = useState<{ id: string; label: string; y: number } | null>(null);
+
+  /**
+   * Which parent groups are open.
+   *
+   * Seeded from whichever parent owns the active section, so arriving on Roles
+   * finds Users already expanded rather than the current page apparently missing
+   * from the menu.
+   */
+  const [expanded, setExpanded] = useState<string[]>(() =>
+    MENU_ITEMS.filter((item) => item.children?.some((child) => child.id === activeSection)).map(
+      (item) => item.id
+    )
+  );
+
+  // Re-open when the section changes from elsewhere — the landing redirect, or a
+  // permission change that moved the user off a page they can no longer open.
+  useEffect(() => {
+    const owner = MENU_ITEMS.find((item) =>
+      item.children?.some((child) => child.id === activeSection)
+    );
+
+    if (owner) {
+      setExpanded((current) => (current.includes(owner.id) ? current : [...current, owner.id]));
+    }
+  }, [activeSection]);
 
   useEffect(() => {
     const updateDateTime = () => {
@@ -201,12 +250,17 @@ const Sidebar: React.FC<SidebarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const items = visibleMenuItems(permissions, capabilities, servableSections, isExecutiveRole);
+  const items = visibleMenuItems(permissions, servableSections, isExecutiveRole);
+
+  const toggle = (id: string) =>
+    setExpanded((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
 
   const activeStyle = {
-    backgroundColor: `${palette.primary}33`,
+    backgroundColor: `${palette.primary}22`,
     color: palette.primary,
-    borderRightWidth: '2px',
+    borderRightWidth: '3px',
     borderRightStyle: 'solid' as const,
     borderRightColor: palette.primary,
   };
@@ -220,8 +274,10 @@ const Sidebar: React.FC<SidebarProps> = ({
         }`}
         style={{ position: 'relative' }}
       >
+        {/* A parent has no page of its own, and there is no room to expand into
+            at 56px wide — so the collapsed rail shows the leaves directly. */}
         <nav className="flex-1 py-4 overflow-y-auto overflow-x-visible scrollbar-none">
-          {items.map((item) => {
+          {navigableItems(items).map((item) => {
             const IconComponent = item.icon;
             const isActive = activeSection === item.id;
 
@@ -307,7 +363,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden scrollbar-none">
         {items.map((item, index) => {
           const IconComponent = item.icon;
-          const isActive = activeSection === item.id;
 
           // A group heading belongs to the item that declares it, but only when
           // that item is actually the first of its group left after filtering —
@@ -317,6 +372,11 @@ const Sidebar: React.FC<SidebarProps> = ({
             item.group && items.findIndex((candidate) => candidate.group === item.group) === index
               ? item.group
               : null;
+
+          const isParent = Boolean(item.children?.length);
+          const isOpen = expanded.includes(item.id);
+          const holdsActive = Boolean(item.children?.some((child) => child.id === activeSection));
+          const isActive = !isParent && activeSection === item.id;
 
           return (
             <React.Fragment key={item.id}>
@@ -330,22 +390,70 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </p>
               )}
 
-            <button
-              onClick={() => onSectionChange(item.id)}
-              className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
-                isActive
-                  ? ''
-                  : isDarkMode
-                  ? 'text-gray-300 hover:text-white hover:bg-gray-700'
-                  : 'text-gray-700 hover:text-black hover:bg-gray-100'
-              }`}
-              style={isActive ? activeStyle : {}}
-            >
-              <div className="flex items-center">
-                <IconComponent className={`h-5 w-5 mr-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`} />
-                <span>{item.label}</span>
-              </div>
-            </button>
+              <button
+                onClick={() => (isParent ? toggle(item.id) : onSectionChange(item.id))}
+                aria-expanded={isParent ? isOpen : undefined}
+                className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
+                  isActive
+                    ? ''
+                    : isDarkMode
+                    ? 'text-gray-300 hover:text-white hover:bg-gray-700'
+                    : 'text-gray-700 hover:text-black hover:bg-gray-100'
+                }`}
+                style={isActive ? activeStyle : {}}
+              >
+                <div className="flex items-center min-w-0">
+                  <IconComponent
+                    className={`h-5 w-5 mr-3 flex-shrink-0 ${
+                      isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                    }`}
+                    // A closed parent whose child is the current page still shows
+                    // the brand colour, so the active page is never invisible.
+                    style={holdsActive && !isOpen ? { color: palette.primary } : {}}
+                  />
+                  <span className="truncate">{item.label}</span>
+                </div>
+
+                {isParent && (
+                  <ChevronDown
+                    className={`h-4 w-4 flex-shrink-0 transition-transform duration-200 ${
+                      isOpen ? 'rotate-180' : ''
+                    } ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}
+                  />
+                )}
+              </button>
+
+              {isParent && isOpen && (
+                <div className={isDarkMode ? 'bg-gray-900/40' : 'bg-gray-50'}>
+                  {(item.children ?? []).map((child) => {
+                    const ChildIcon = child.icon;
+                    const childActive = activeSection === child.id;
+
+                    return (
+                      <button
+                        key={child.id}
+                        onClick={() => onSectionChange(child.id)}
+                        className={`w-full flex items-center pl-10 pr-4 py-2.5 text-sm transition-colors ${
+                          childActive
+                            ? ''
+                            : isDarkMode
+                            ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                            : 'text-gray-600 hover:text-black hover:bg-gray-100'
+                        }`}
+                        style={childActive ? activeStyle : {}}
+                      >
+                        <ChildIcon
+                          className={`h-4 w-4 mr-3 flex-shrink-0 ${
+                            isDarkMode ? 'text-gray-500' : 'text-gray-500'
+                          }`}
+                          style={childActive ? { color: palette.primary } : {}}
+                        />
+                        <span className="truncate">{child.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </React.Fragment>
           );
         })}

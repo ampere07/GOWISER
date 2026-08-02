@@ -43,12 +43,20 @@ class EmailQueueService
 
     public function queueFromTemplate(string $templateCode, array $data): ?EmailQueue
     {
-        $template = EmailTemplate::where('Template_Code', $templateCode)
-            ->where('Is_Active', true)
-            ->first();
+        // Fetched without the Is_Active filter so the two cases can be told apart. Filtering
+        // in the query collapsed them, and a template that had simply been switched off was
+        // reported as missing — at ERROR level, which put a routine configuration choice in
+        // the log next to real faults and sent people looking for a row that was there all
+        // along.
+        $template = EmailTemplate::where('Template_Code', $templateCode)->first();
 
         if (!$template) {
             Log::error('Email template not found', ['template_code' => $templateCode]);
+            return null;
+        }
+
+        if (!$template->Is_Active) {
+            Log::info('Email template is disabled; skipping send', ['template_code' => $templateCode]);
             return null;
         }
 

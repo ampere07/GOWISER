@@ -118,6 +118,32 @@ class ExpensesLogController extends Controller
         ];
     }
 
+    /**
+     * Dispatches the realtime notification without letting it fail the request.
+     *
+     * The expense row is already committed by the time this runs, so anything thrown here
+     * would turn a save that succeeded into a 500 that says it did not. App\Events\
+     * ExpensesUpdated is a separate file that has to be deployed alongside this controller;
+     * when it is missing, the dispatch raises "Class not found" and the caller sees a bare
+     * "Server Error" for an expense that was in fact recorded.
+     *
+     * Throwable, not Exception: a missing class raises Error, which sails straight past the
+     * catch(\Exception) blocks in the actions below.
+     */
+    private function broadcast(array $payload): void
+    {
+        try {
+            event(new ExpensesUpdated($payload));
+        } catch (\Throwable $e) {
+            // Realtime is a nicety; the write already landed. Other clients pick the change
+            // up on their next fetch.
+            Log::warning('Expenses broadcast failed (write was committed)', [
+                'action' => $payload['action'] ?? 'unknown',
+                'error'  => $e->getMessage(),
+            ]);
+        }
+    }
+
     private function currentUserEmail(Request $request)
     {
         if (auth()->check()) {
@@ -365,11 +391,11 @@ class ExpensesLogController extends Controller
                 ]
             );
 
-            event(new ExpensesUpdated([
+            $this->broadcast([
                 'action' => 'created',
                 'expense_id' => $expense->id,
                 'expense_type' => $expense->expense_type,
-            ]));
+            ]);
 
             return response()->json([
                 'status' => 'success',
@@ -445,11 +471,11 @@ class ExpensesLogController extends Controller
                 ]
             );
 
-            event(new ExpensesUpdated([
+            $this->broadcast([
                 'action' => 'updated',
                 'expense_id' => $expense->id,
                 'expense_type' => $expense->expense_type,
-            ]));
+            ]);
 
             return response()->json([
                 'status' => 'success',
@@ -496,7 +522,7 @@ class ExpensesLogController extends Controller
                 ]
             );
 
-            event(new ExpensesUpdated(['action' => 'deleted', 'expense_id' => $id]));
+            $this->broadcast(['action' => 'deleted', 'expense_id' => $id]);
 
             return response()->json([
                 'status' => 'success',

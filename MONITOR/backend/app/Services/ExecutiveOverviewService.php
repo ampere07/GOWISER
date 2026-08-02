@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Services\Reports\ReportPeriod;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -164,14 +165,17 @@ class ExecutiveOverviewService
         $turnaround = null;
         $turnaroundUnit = null;
 
+        $reliableFrom = $this->reliableFrom();
+        $bounded = false;
+
         if ($operations !== null) {
             foreach ($operations['queues'] ?? [] as $queue) {
                 $openWork += (int) ($queue['backlog']['open'] ?? 0);
 
-                $age = $queue['backlog']['oldest_age_days'] ?? null;
+                $age = $this->measurableAge($queue['backlog'] ?? [], $reliableFrom, $bounded);
 
                 if ($age !== null) {
-                    $oldest = $oldest === null ? (int) $age : max($oldest, (int) $age);
+                    $oldest = $oldest === null ? $age : max($oldest, $age);
                 }
             }
 
@@ -185,7 +189,12 @@ class ExecutiveOverviewService
                     'key' => 'aged-backlog',
                     'severity' => 'critical',
                     'label' => 'Aged backlog',
-                    'detail' => "Oldest open job has been waiting {$oldest} days",
+                    // Says when the clock started whenever it was clamped, so
+                    // "waiting 40 days" is never read as the job's true age.
+                    'detail' => $bounded
+                        ? "Oldest open job has been waiting {$oldest} days, counted from "
+                            . $reliableFrom->format('M j, Y')
+                        : "Oldest open job has been waiting {$oldest} days",
                 ];
             }
 
@@ -240,7 +249,59 @@ class ExecutiveOverviewService
             'technicians_reporting' => $techniciansTotal,
             'alarms' => $alarms,
             'alarm_count' => count($alarms),
+            // Surfaced so the panel can state the floor rather than leaving a
+            // reader to wonder why an obviously ancient job reports 40 days.
+            'reliable_from' => $reliableFrom?->toDateString(),
+            'age_bounded' => $bounded,
         ];
+    }
+
+    /**
+     * The date before which operational timestamps mean nothing.
+     *
+     * Null disables the floor, which is what an installation with clean history
+     * should set. See config/reporting.php for why the default is not null.
+     */
+    private function reliableFrom(): ?Carbon
+    {
+        $configured = trim((string) config('reporting.reliable_from', ''));
+
+        return $configured === '' ? null : ReportPeriod::parse($configured);
+    }
+
+    /**
+     * How long the oldest open item has genuinely been waiting.
+     *
+     * A row opened before records became reliable is aged from the floor rather
+     * than from its own timestamp: the honest claim is "open for at least this
+     * long", not a four-figure day count computed against a date that was never
+     * real. `$bounded` is set by reference so the caller can say so on screen —
+     * silently clamping a number and presenting it as measured would be the same
+     * dishonesty in the other direction.
+     */
+    private function measurableAge(array $backlog, ?Carbon $reliableFrom, bool &$bounded): ?int
+    {
+        $age = $backlog['oldest_age_days'] ?? null;
+
+        if ($age === null) {
+            return null;
+        }
+
+        if ($reliableFrom === null) {
+            return (int) $age;
+        }
+
+        $openedAt = ReportPeriod::parse(substr((string) ($backlog['oldest_opened_at'] ?? ''), 0, 10));
+
+        // No parsable open date, or one at/after the floor: the reported age
+        // stands as measured.
+        if ($openedAt !== null && $openedAt->greaterThanOrEqualTo($reliableFrom)) {
+            return (int) $age;
+        }
+
+        $bounded = true;
+
+        return (int) $reliableFrom->diffInDays(Carbon::now()->startOfDay());
     }
 
     /**

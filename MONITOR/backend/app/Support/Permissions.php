@@ -38,7 +38,9 @@ class Permissions
     public const MODULE_EMPLOYEE = 'employee';
     public const MODULE_EXECUTIVE = 'executive-overview';
     public const MODULE_USERS = 'users';
+    public const MODULE_ROLES = 'roles';
     public const MODULE_AUDIT = 'audit';
+    public const MODULE_SETTINGS = 'settings';
     public const MODULE_DATABASES = 'databases';
 
     // ── Widgets ──────────────────────────────────────────────────────────
@@ -65,6 +67,8 @@ class Permissions
     public const ACTION_USERS_MANAGE = 'action.users.manage';
     public const ACTION_ROLES_MANAGE = 'action.roles.manage';
     public const ACTION_AUDIT_VIEW = 'action.audit.view';
+    /** Change the logo and the colour palette the whole portal renders in. */
+    public const ACTION_SETTINGS_MANAGE = 'action.settings.manage';
 
     /**
      * Every module id, including the executive rollups this refactor left in
@@ -77,13 +81,10 @@ class Permissions
         self::MODULE_OPERATIONS,
         self::MODULE_TECH,
         self::MODULE_EMPLOYEE,
-        'overview',
-        'operations',
-        'revenue',
-        'financials',
-        'consolidated',
         self::MODULE_USERS,
+        self::MODULE_ROLES,
         self::MODULE_AUDIT,
+        self::MODULE_SETTINGS,
         self::MODULE_DATABASES,
     ];
 
@@ -106,6 +107,7 @@ class Permissions
         self::ACTION_USERS_MANAGE,
         self::ACTION_ROLES_MANAGE,
         self::ACTION_AUDIT_VIEW,
+        self::ACTION_SETTINGS_MANAGE,
     ];
 
     /**
@@ -136,17 +138,14 @@ class Permissions
         self::MODULE_OPERATIONS => 'Operations Analytics',
         self::MODULE_TECH => 'Tech Analytics',
         self::MODULE_EMPLOYEE => 'Employee',
-        'overview' => 'Overview (legacy)',
-        'operations' => 'Operations (legacy)',
-        'revenue' => 'Revenue (legacy)',
-        'financials' => 'Financials (legacy)',
-        'consolidated' => 'All Companies',
         self::MODULE_USERS => 'User Management',
+        self::MODULE_ROLES => 'Roles & Permissions',
         self::MODULE_AUDIT => 'Audit Trail',
+        self::MODULE_SETTINGS => 'Settings',
         self::MODULE_DATABASES => 'Databases',
 
         self::WIDGET_FINANCIAL_REVENUE => 'Revenue figures (unmasked)',
-        self::WIDGET_FINANCIAL_CHANNELS => 'Income channels (Cash / PNB / Xendit)',
+        self::WIDGET_FINANCIAL_CHANNELS => 'Income channels (Cash / PNB / Payment Portal)',
         self::WIDGET_FINANCIAL_METRICS => 'Executive financial metrics',
         self::WIDGET_FINANCIAL_OPEX => 'OpEx and CapEx',
         self::WIDGET_FINANCIAL_PAYABLES => 'Accounts payable and recurring expenses',
@@ -161,6 +160,7 @@ class Permissions
         self::ACTION_USERS_MANAGE => 'Create and edit users',
         self::ACTION_ROLES_MANAGE => 'Edit role permission maps',
         self::ACTION_AUDIT_VIEW => 'Read the audit trail',
+        self::ACTION_SETTINGS_MANAGE => 'Change the logo and colour palette',
     ];
 
     /**
@@ -185,7 +185,6 @@ class Permissions
             'permissions' => [
                 self::MODULE_EXECUTIVE, self::MODULE_SUBSCRIBERS, self::MODULE_FINANCIAL,
                 self::MODULE_OPERATIONS, self::MODULE_TECH, self::MODULE_EMPLOYEE,
-                'overview', 'operations', 'revenue', 'financials', 'consolidated',
                 self::WIDGET_FINANCIAL_REVENUE, self::WIDGET_FINANCIAL_CHANNELS,
                 self::WIDGET_FINANCIAL_METRICS, self::WIDGET_FINANCIAL_OPEX,
                 self::WIDGET_FINANCIAL_PAYABLES, self::WIDGET_SUBSCRIBER_BILLING,
@@ -228,7 +227,7 @@ class Permissions
             'permissions' => [
                 self::MODULE_EXECUTIVE, self::MODULE_SUBSCRIBERS, self::MODULE_FINANCIAL,
                 self::MODULE_OPERATIONS, self::MODULE_TECH, self::MODULE_EMPLOYEE,
-                self::MODULE_AUDIT, 'consolidated',
+                self::MODULE_AUDIT,
                 self::WIDGET_FINANCIAL_REVENUE, self::WIDGET_FINANCIAL_CHANNELS,
                 self::WIDGET_FINANCIAL_METRICS, self::WIDGET_FINANCIAL_OPEX,
                 self::WIDGET_FINANCIAL_PAYABLES, self::WIDGET_SUBSCRIBER_BILLING,
