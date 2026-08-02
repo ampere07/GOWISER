@@ -1437,6 +1437,28 @@ class TransactionController extends Controller
                     \Log::info('[TRANSACTION RECONNECT DB SKIP] Account already 1, skipping status update');
                 }
 
+                // Customer lookup for both notification paths below.
+                //
+                // Fetched here rather than inside the SMS branch: it used to be loaded only
+                // when an active Reconnect SMS template existed, but the email block further
+                // down reads the same variable. Disabling the SMS template therefore left
+                // $customerInfo undefined, and the resulting warning — which Laravel raises
+                // as an ErrorException — was swallowed by the email block's catch. The
+                // reconnect email silently stopped sending because an unrelated SMS template
+                // was switched off. One fetch, used by both, keeps them independent.
+                $customerInfo = null;
+                if (!$isAlreadyActive) {
+                    $customerInfo = DB::table('billing_accounts')
+                        ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                        ->where('billing_accounts.account_no', $accountNo)
+                        ->select(
+                            'customers.contact_number_primary',
+                            'customers.email_address',
+                            DB::raw("CONCAT(customers.first_name, ' ', IFNULL(customers.middle_initial, ''), ' ', customers.last_name) as full_name")
+                        )
+                        ->first();
+                }
+
                 // Send SMS Notification
                 if (!$isAlreadyActive) {
                     try {
@@ -1447,17 +1469,6 @@ class TransactionController extends Controller
                             ->first();
 
                         if ($smsTemplate) {
-                            // Get Customer Name and Contact Number
-                            $customerInfo = DB::table('billing_accounts')
-                                ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
-                                ->where('billing_accounts.account_no', $accountNo)
-                                ->select(
-                                'customers.contact_number_primary',
-                                'customers.email_address',
-                                DB::raw("CONCAT(customers.first_name, ' ', IFNULL(customers.middle_initial, ''), ' ', customers.last_name) as full_name")
-                            )
-                                ->first();
-
                             if ($customerInfo && !empty($customerInfo->contact_number_primary)) {
                                 // Replace variables
                                 $message = $smsTemplate->message_content;
@@ -1499,7 +1510,13 @@ class TransactionController extends Controller
                 // Send Email Notification
                 if (!$isAlreadyActive) {
                     try {
-                        $emailTemplate = \App\Models\EmailTemplate::where('Template_Code', 'RECONNECT')->first();
+                        // Is_Active matters here: EmailQueueService::queueFromTemplate() only
+                        // accepts active templates, so checking without it let a deliberately
+                        // disabled template pass this guard and then fail inside the service,
+                        // which logged it as a missing template. Same condition, both places.
+                        $emailTemplate = \App\Models\EmailTemplate::where('Template_Code', 'RECONNECT')
+                            ->where('Is_Active', true)
+                            ->first();
 
                         if ($emailTemplate && $customerInfo && !empty($customerInfo->email_address)) {
                             $emailService = app(\App\Services\EmailQueueService::class);

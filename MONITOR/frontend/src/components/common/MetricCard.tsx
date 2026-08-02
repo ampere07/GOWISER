@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTheme } from '../../hooks/useTheme';
+import { MetricTooltip } from './MetricTooltip';
 
 interface MetricCardProps {
   title: string;
@@ -11,6 +12,8 @@ interface MetricCardProps {
   loading?: boolean;
   /** Renders the value as PHP currency. */
   currency?: boolean;
+  tooltipExplanation?: string;
+  tooltipFormula?: string;
 }
 
 export const formatCurrency = (value: number): string =>
@@ -28,6 +31,8 @@ const MetricCard: React.FC<MetricCardProps> = ({
   caption,
   loading,
   currency,
+  tooltipExplanation,
+  tooltipFormula,
 }) => {
   const isDarkMode = useTheme();
 
@@ -45,13 +50,22 @@ const MetricCard: React.FC<MetricCardProps> = ({
       }`}
     >
       <div className="flex items-center justify-between mb-2">
-        <span
-          className={`text-xs sm:text-sm font-semibold uppercase tracking-wider ${
-            isDarkMode ? 'text-slate-400' : 'text-slate-500'
-          }`}
-        >
-          {title}
-        </span>
+        <div className="flex items-center">
+          <span
+            className={`text-xs sm:text-sm font-semibold uppercase tracking-wider ${
+              isDarkMode ? 'text-slate-400' : 'text-slate-500'
+            }`}
+          >
+            {title}
+          </span>
+          {tooltipExplanation && (
+            <MetricTooltip
+              title={title}
+              explanation={tooltipExplanation}
+              formula={tooltipFormula}
+            />
+          )}
+        </div>
         {icon && <div className={iconColor}>{icon}</div>}
       </div>
 

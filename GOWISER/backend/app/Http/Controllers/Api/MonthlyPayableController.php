@@ -272,9 +272,28 @@ class MonthlyPayableController extends Controller
         return response()->json($body, $code);
     }
 
+    /**
+     * MonthlyPayableUpdated is ShouldBroadcastNow and QUEUE_CONNECTION is sync, so the
+     * Pusher/Soketi call happens inline, inside the request, after the row is already
+     * committed. If Soketi is unreachable (BROADCAST_DRIVER=pusher pointed at
+     * 127.0.0.1:6001) that throws — and an unguarded throw here would turn a payment that
+     * *did* save into a 500, telling the user their payment failed when it did not.
+     *
+     * Throwable, not Exception: a transport-level TypeError in the broadcaster is an Error
+     * and would otherwise sail straight past a catch(\Exception).
+     */
     private function broadcast(string $action, array $extra = []): void
     {
-        event(new MonthlyPayableUpdated(array_merge(['action' => $action], $extra)));
+        try {
+            event(new MonthlyPayableUpdated(array_merge(['action' => $action], $extra)));
+        } catch (\Throwable $e) {
+            // Realtime is a nicety; the write already succeeded. Clients still pick the
+            // change up on their next fetch or the sidebar's 10-minute refresh.
+            Log::warning('MonthlyPayable broadcast failed (write was committed)', [
+                'action' => $action,
+                'error'  => $e->getMessage(),
+            ]);
+        }
     }
 
     // -------------------------------------------------------------- actions

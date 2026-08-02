@@ -1,18 +1,18 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
   Chart as ChartJS,
+  BarController,
   BarElement,
   CategoryScale,
   Legend,
   LinearScale,
   Tooltip,
 } from 'chart.js';
-import { Bar as BarChart } from 'react-chartjs-2';
-import { AlertTriangle, ClipboardList, Clock, HelpCircle, Timer, Wrench } from 'lucide-react';
+import { Clock, Timer } from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import FilterBar from '../components/reporting/FilterBar';
-import StatCard from '../components/reporting/StatCard';
+import DataTable from '../components/reporting/DataTable';
 import { DonutChart } from '../components/reporting/charts';
 import {
   Bar,
@@ -20,7 +20,6 @@ import {
   PanelState,
   Pill,
   Table,
-  TableState,
   Td,
   Th,
   Thead,
@@ -34,18 +33,23 @@ import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
-import { OperationsData, Turnaround, TurnaroundByType, WorkQueue } from '../types/reporting';
+import {
+  OperationsData,
+  Turnaround,
+  TurnaroundByType,
+  WorkQueue,
+  WorkRow,
+} from '../types/reporting';
 import { WIDGET } from '../types/rbac';
 import { formatDate, formatNumber, pluralise } from '../utils/format';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
+// BarController, not only BarElement — see the note in charts.tsx for why
+// omitting the controller is the trap that blanks a page rather than a panel.
+ChartJS.register(BarController, CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 interface FieldOperationsProps {
   refreshToken: number;
 }
-
-const OPENED_COLOR = '#0d6efd';
-const CLOSED_COLOR = '#198754';
 
 /**
  * Status colouring by meaning, so a pipeline reads at a glance.
@@ -77,27 +81,16 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   const { filters, update, reset, branches, databases } = useSectionFilters('operations');
 
-  // One range per widget, replacing the page-level period filter. The queue
-  // metrics and the throughput chart are the two things people actually want on
-  // different windows — "what is open right now" against "what happened last
-  // quarter" — so they get separate controls.
-  const metricsRange = useWidgetRange('monthly');
-  const throughputRange = useWidgetRange('monthly');
+  // A range per widget, on the two panels that are genuinely period-bound.
+  // The queue panels below are a statement of what is open *now* and carry no
+  // range at all — a backlog filtered to a date window is not a backlog.
   const slaRange = useWidgetRange('monthly');
   const concernsRange = useWidgetRange('monthly');
 
   const primary = useReportingSection<OperationsData>(
     reportingService.getOperations,
     filters,
-    refreshToken,
-    { dateFrom: metricsRange.range.from, dateTo: metricsRange.range.to }
-  );
-
-  const throughput_ = useReportingSection<OperationsData>(
-    reportingService.getOperations,
-    filters,
-    refreshToken,
-    { dateFrom: throughputRange.range.from, dateTo: throughputRange.range.to }
+    refreshToken
   );
 
   const sla = useReportingSection<OperationsData>(
@@ -119,93 +112,6 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
   const first = loading && !data;
 
   const queues = data?.queues ?? [];
-
-  const totalOpen = queues.reduce((sum, queue) => sum + queue.backlog.open, 0);
-
-  const oldestDays = queues.reduce<number | null>((max, queue) => {
-    const age = queue.backlog.oldest_age_days;
-    if (age === null) return max;
-    return max === null ? age : Math.max(max, age);
-  }, null);
-
-  // Counted from the metrics widget's own range, so "opened in range" means the
-  // range shown on that card and not whatever another panel happens to be on.
-  const opened = (data?.series ?? []).reduce((sum, point) => sum + point.opened, 0);
-  const closed = (data?.series ?? []).reduce((sum, point) => sum + point.closed, 0);
-
-  const grid = isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-  const tick = isDarkMode ? 'rgba(226,232,240,0.65)' : 'rgba(30,41,59,0.65)';
-
-  /**
-   * Opened vs closed per day. Counts, so the axis is integers, not currency.
-   *
-   * Memoised on the payload rather than defaulted inline: `?? []` builds a fresh
-   * array every render, which would change the chart's dependencies each time
-   * and rebuild it on every poll tick.
-   */
-  const throughputSeries = useMemo(
-    () => throughput_.data?.series ?? [],
-    [throughput_.data]
-  );
-
-  const throughput = useMemo(
-    () => ({
-      data: {
-        labels: throughputSeries.map((point) => point.label),
-        datasets: [
-          {
-            label: 'Opened',
-            data: throughputSeries.map((point) => point.opened),
-            backgroundColor: `${OPENED_COLOR}cc`,
-            borderColor: OPENED_COLOR,
-            borderWidth: 1,
-            borderRadius: 3,
-          },
-          {
-            label: 'Closed',
-            data: throughputSeries.map((point) => point.closed),
-            backgroundColor: `${CLOSED_COLOR}cc`,
-            borderColor: CLOSED_COLOR,
-            borderWidth: 1,
-            borderRadius: 3,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index' as const, intersect: false },
-        plugins: {
-          legend: {
-            position: 'top' as const,
-            labels: { color: tick, boxWidth: 12, padding: 16, font: { size: 11 } },
-          },
-          tooltip: {
-            backgroundColor: isDarkMode ? '#1e293b' : '#ffffff',
-            titleColor: isDarkMode ? '#f1f5f9' : '#0f172a',
-            bodyColor: isDarkMode ? '#f1f5f9' : '#0f172a',
-            borderColor: isDarkMode ? '#334155' : '#e2e8f0',
-            borderWidth: 1,
-            padding: 10,
-            cornerRadius: 8,
-          },
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: { color: grid },
-            // Counts are whole jobs; a "2.5 installations" gridline is nonsense.
-            ticks: { color: tick, font: { size: 10 }, precision: 0 },
-          },
-          x: {
-            grid: { display: false },
-            ticks: { color: tick, font: { size: 10 }, maxRotation: 45 },
-          },
-        },
-      },
-    }),
-    [throughputSeries, grid, tick, isDarkMode]
-  );
 
   const branchLabel = data?.branch_label;
   const showBranchLabel = branchLabel && branchLabel !== 'All branches' && branchLabel !== 'All accounts';
@@ -236,79 +142,6 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
         showBranch={branches.length > 0}
       />
 
-      {/* ── Headline ──────────────────────────────────────────────────── */}
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <div className="min-w-0">
-            <h3 className={`font-bold text-base ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              Work Queue Metrics
-            </h3>
-            <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-              Applications, Job Orders, Service Orders and Work Orders
-            </p>
-          </div>
-          <WidgetRange state={metricsRange} />
-        </div>
-
-        {/* Two of these four ignore the date range and two are bounded by it,
-            which is a genuine and confusing difference. Each carries a tooltip
-            with its precise definition rather than leaving a reader to infer it
-            from a caption. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricWithDefinition definition={SLA_DEFINITIONS.open_work}>
-            <StatCard
-              label="Open Work"
-              value={formatNumber(totalOpen)}
-              tone={totalOpen > 0 ? 'warning' : 'success'}
-              icon={<ClipboardList size={20} />}
-              loading={first}
-              caption="unresolved, all time"
-            />
-          </MetricWithDefinition>
-
-          <MetricWithDefinition definition={SLA_DEFINITIONS.oldest_open}>
-            <StatCard
-              label="Oldest Open"
-              value={oldestDays === null ? 'None' : `${formatNumber(oldestDays)}d`}
-              tone={oldestDays !== null && oldestDays > 30 ? 'danger' : 'neutral'}
-              icon={<AlertTriangle size={20} />}
-              loading={first}
-              caption={oldestDays === null ? 'nothing waiting' : 'days the longest has waited'}
-            />
-          </MetricWithDefinition>
-
-          <MetricWithDefinition definition={SLA_DEFINITIONS.opened_in_range}>
-            <StatCard
-              label="Opened in Range"
-              value={formatNumber(opened)}
-              tone="info"
-              icon={<Wrench size={20} />}
-              loading={first}
-              caption={data?.range_label}
-            />
-          </MetricWithDefinition>
-
-          <MetricWithDefinition definition={SLA_DEFINITIONS.closed_in_range}>
-            <StatCard
-              label="Closed in Range"
-              value={formatNumber(closed)}
-              tone="success"
-              icon={<Clock size={20} />}
-              loading={first}
-              // Net movement is the number that says whether the backlog is
-              // growing.
-              caption={
-                data
-                  ? closed >= opened
-                    ? `clearing faster than arriving (+${formatNumber(closed - opened)})`
-                    : `falling behind by ${formatNumber(opened - closed)}`
-                  : undefined
-              }
-            />
-          </MetricWithDefinition>
-        </div>
-      </Card>
-
       {/* ── Queues ────────────────────────────────────────────────────── */}
       {queues.length === 0 ? (
         <Card>
@@ -328,27 +161,6 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
           ))}
         </div>
       )}
-
-      {/* ── Throughput ────────────────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader
-          title="Opened vs Closed"
-          subtitle={throughput_.data?.range_label}
-          actions={<WidgetRange state={throughputRange} />}
-        />
-        <CardBody>
-          <PanelState
-            loading={throughput_.loading && !throughput_.data}
-            empty={throughputSeries.length === 0}
-            emptyMessage="No work was opened or closed in this range."
-            height={300}
-          >
-            <div style={{ height: 300 }} className="relative">
-              <BarChart options={throughput.options as any} data={throughput.data as any} />
-            </div>
-          </PanelState>
-        </CardBody>
-      </Card>
 
       {/* ── Turnaround (SLA) ──────────────────────────────────────────── */}
       <Restricted
@@ -420,62 +232,116 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
       )}
 
       {/* ── Recent work ──────────────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader title="Recent Work" subtitle="Most recently opened, newest first" />
-        <Table>
-          <Thead>
-            <Th>Status</Th>
-            <Th>Account #</Th>
-            <Th>Subscriber</Th>
-            <Th>Location</Th>
-            <Th>Plan</Th>
-            <Th>Assigned to</Th>
-            <Th align="right">Opened</Th>
-          </Thead>
-          <tbody>
-            <TableState
-              colSpan={7}
-              loading={first}
-              error={error}
-              empty={(data?.recent.length ?? 0) === 0}
-              emptyMessage="No work has been recorded yet."
-            />
-
-            {(data?.recent ?? []).map((row) => (
-              <Tr key={row.id}>
-                <Td>
-                  <span
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap"
-                    style={{ color: statusTone(row.status) }}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: statusTone(row.status) }}
-                    />
-                    {row.status || 'Unspecified'}
-                  </span>
-                </Td>
-                <Td className="font-mono text-xs text-blue-600 dark:text-blue-400">
-                  {row.account_number || '—'}
-                </Td>
-                <Td className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {row.subscriber || '—'}
-                </Td>
-                <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {row.location || '—'}
-                </Td>
-                <Td className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>{row.plan || '—'}</Td>
-                <Td className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                  {row.assignee || <span className="italic text-gray-400">unassigned</span>}
-                </Td>
-                <Td align="right" className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {formatDate(row.opened_at)}
-                </Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      </Card>
+      <DataTable<WorkRow>
+        title="Recent Work"
+        subtitle="Most recently opened, newest first"
+        rows={data?.recent ?? []}
+        rowKey={(row) => row.id}
+        loading={first}
+        error={error}
+        emptyMessage="No work has been recorded yet."
+        searchPlaceholder="Search account, subscriber…"
+        // Opened-desc keeps the panel's stated promise ("newest first") as the
+        // starting point; every column is sortable from there.
+        defaultSort="opened"
+        filters={[
+          {
+            key: 'status',
+            label: 'All statuses',
+            // Built from the rows themselves rather than a hardcoded list: both
+            // systems write free-text statuses and a new one must still filter.
+            options: Array.from(
+              new Set((data?.recent ?? []).map((row) => row.status || 'Unspecified'))
+            )
+              .sort()
+              .map((status) => ({ value: status, label: status })),
+            predicate: (row, value) => (row.status || 'Unspecified') === value,
+          },
+        ]}
+        columns={[
+          {
+            key: 'status',
+            header: 'Status',
+            value: (row) => row.status || 'Unspecified',
+            render: (row) => (
+              <span
+                className="inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap"
+                style={{ color: statusTone(row.status) }}
+              >
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: statusTone(row.status) }}
+                />
+                {row.status || 'Unspecified'}
+              </span>
+            ),
+          },
+          {
+            key: 'account',
+            header: 'Account #',
+            value: (row) => row.account_number,
+            render: (row) => (
+              <span className="font-mono text-xs text-blue-600 dark:text-blue-400">
+                {row.account_number || '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'subscriber',
+            header: 'Subscriber',
+            value: (row) => row.subscriber,
+            render: (row) => (
+              <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                {row.subscriber || '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'location',
+            header: 'Location',
+            value: (row) => row.location ?? '',
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                {row.location || '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'plan',
+            header: 'Plan',
+            value: (row) => row.plan,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                {row.plan || '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'assignee',
+            header: 'Assigned to',
+            value: (row) => row.assignee,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                {row.assignee || <span className="italic text-gray-400">unassigned</span>}
+              </span>
+            ),
+          },
+          {
+            key: 'opened',
+            header: 'Opened',
+            align: 'right',
+            // Sorts on the raw timestamp, not the rendered "Aug 02, 2026" —
+            // which would order alphabetically and put April before January.
+            value: (row) => row.opened_at ?? '',
+            searchable: false,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                {formatDate(row.opened_at)}
+              </span>
+            ),
+          },
+        ]}
+      />
 
       <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
         Backlog counts every still-open job regardless of the date range — a job opened months ago is
@@ -558,86 +424,6 @@ const QueuePanel: React.FC<{ queue: WorkQueue }> = ({ queue }) => {
         )}
       </CardBody>
     </Card>
-  );
-};
-
-/**
- * The precise meaning of each queue metric.
- *
- * Two of the four ignore the date range and two are bounded by it, which is a
- * real and confusing difference — "Open Work: 240" beside "Opened in Range: 12"
- * looks like an error until you know that the first counts every unresolved job
- * ever and the second only what arrived in the window. Written out rather than
- * implied, because a caption has room for a hint and not for a definition.
- */
-const SLA_DEFINITIONS = {
-  open_work: {
-    title: 'Open Work',
-    text: 'Total unresolved orders across every queue, regardless of when they were raised. Ignores the date range — a job opened four months ago is still open today.',
-  },
-  oldest_open: {
-    title: 'Oldest Open',
-    text: 'Days elapsed for the single longest-pending unresolved item, measured from when it was raised to today. Ignores the date range.',
-  },
-  opened_in_range: {
-    title: 'Opened in Range',
-    text: 'Orders created inside this widget’s date range, whether or not they have since been resolved.',
-  },
-  closed_in_range: {
-    title: 'Closed in Range',
-    text: 'Orders completed inside this widget’s date range, whatever date they were opened on.',
-  },
-};
-
-/**
- * Wraps a metric card with a hoverable definition marker.
- *
- * The marker sits over the card rather than inside StatCard so that component
- * stays a plain presentational tile — it is used on five pages and only this one
- * needs the definitions.
- */
-const MetricWithDefinition: React.FC<{
-  definition: { title: string; text: string };
-  children: React.ReactNode;
-}> = ({ definition, children }) => {
-  const isDarkMode = useTheme();
-  const [open, setOpen] = React.useState(false);
-
-  return (
-    <div className="relative">
-      {children}
-
-      <button
-        type="button"
-        aria-label={`What ${definition.title} means`}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
-        onClick={() => setOpen((current) => !current)}
-        className={`absolute top-2 right-2 rounded-full p-1 transition-colors ${
-          isDarkMode ? 'text-gray-600 hover:text-gray-300' : 'text-gray-300 hover:text-gray-600'
-        }`}
-      >
-        <HelpCircle size={14} />
-      </button>
-
-      {open && (
-        <div
-          role="tooltip"
-          className={`absolute z-20 top-8 right-2 w-64 rounded-lg border p-2.5 text-xs shadow-lg ${
-            isDarkMode
-              ? 'bg-gray-900 border-gray-700 text-gray-300'
-              : 'bg-white border-gray-200 text-gray-600'
-          }`}
-        >
-          <p className={`font-semibold mb-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            {definition.title}
-          </p>
-          <p className="leading-snug">{definition.text}</p>
-        </div>
-      )}
-    </div>
   );
 };
 

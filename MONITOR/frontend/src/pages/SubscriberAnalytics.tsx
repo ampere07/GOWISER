@@ -1,11 +1,20 @@
 import React from 'react';
-import { Crown, Hourglass, PackageX, UserCheck, UserMinus, UserPlus, UserX, Wifi } from 'lucide-react';
+import {
+  Crown,
+  Hourglass,
+  PackageX,
+  UserCheck,
+  UserMinus,
+  UserPlus,
+  Users,
+  UserX,
+  Wifi,
+} from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import FilterBar from '../components/reporting/FilterBar';
-import StatCard from '../components/reporting/StatCard';
+import StatCard, { Tone } from '../components/reporting/StatCard';
 import BarangayTable from '../components/reporting/BarangayTable';
-import OverdueAccountsPanel from '../components/reporting/OverdueAccountsPanel';
 import WidgetRange from '../components/reporting/WidgetRange';
 import { DonutChart } from '../components/reporting/charts';
 import { ErrorBanner, PanelState } from '../components/reporting/primitives';
@@ -46,6 +55,47 @@ const statusColor = (label: string): string =>
   STATUS_COLORS[label.toLowerCase().trim()] ?? '#adb5bd';
 
 /**
+ * Card tone and icon per status.
+ *
+ * Looked up rather than positional, because the cards are now whatever SYNC
+ * holds and in whatever order — a status this app has never seen still has to
+ * render, so both fall back rather than throwing or blanking.
+ */
+const STATUS_TONES: Record<string, Tone> = {
+  active: 'success',
+  vip: 'info',
+  restricted: 'warning',
+  disconnected: 'danger',
+  inactive: 'neutral',
+  pullout: 'danger',
+};
+
+const STATUS_ICONS: Record<string, React.ReactNode> = {
+  active: <UserCheck size={20} />,
+  vip: <Crown size={20} />,
+  restricted: <UserMinus size={20} />,
+  disconnected: <UserX size={20} />,
+  inactive: <UserMinus size={20} />,
+  pullout: <PackageX size={20} />,
+};
+
+/** One line of context per status, so a bare count is not left to interpretation. */
+const STATUS_CAPTIONS: Record<string, string> = {
+  active: 'billed and in service',
+  vip: 'priority accounts',
+  restricted: 'service limited',
+  disconnected: 'service lapsed',
+  inactive: 'closed or cancelled',
+  pullout: 'equipment recovered',
+};
+
+const statusTone = (label: string): Tone =>
+  STATUS_TONES[label.toLowerCase().trim()] ?? 'neutral';
+
+const statusIcon = (label: string): React.ReactNode =>
+  STATUS_ICONS[label.toLowerCase().trim()] ?? <Users size={20} />;
+
+/**
  * Subscriber Analytics — who the subscribers are, and which of them are a
  * problem.
  *
@@ -66,35 +116,19 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
   // as it stands rather than something that accrues over a window.
   const { filters, update, reset, branches, databases } = useSectionFilters('subscriber_analytics');
 
-  // Each widget's own window. The status and plan charts are statements of the
-  // base as it stands and are not bounded by a range at all, but growth and the
-  // barangay table are — so each gets its own control rather than one for the page.
+  // Only one widget on this page is period-bound. The billing summary, the
+  // status and plan charts and the barangay table are all statements of the base
+  // *as it stands* — filtering a headcount to a date window does not narrow it,
+  // it just makes the number wrong — so they carry no range control at all.
   const growthRange = useWidgetRange('monthly');
-  const compositionRange = useWidgetRange('monthly');
-  const barangayRange = useWidgetRange('monthly');
 
-  const primary = useReportingSection<SubscriberAnalyticsData>(
-    reportingService.getSubscriberAnalytics,
-    filters,
-    refreshToken,
-    { dateFrom: growthRange.range.from, dateTo: growthRange.range.to }
-  );
-
-  const composition = useReportingSection<SubscriberAnalyticsData>(
-    reportingService.getSubscriberAnalytics,
-    filters,
-    refreshToken,
-    { dateFrom: compositionRange.range.from, dateTo: compositionRange.range.to }
-  );
-
-  const geography = useReportingSection<SubscriberAnalyticsData>(
-    reportingService.getSubscriberAnalytics,
-    filters,
-    refreshToken,
-    { dateFrom: barangayRange.range.from, dateTo: barangayRange.range.to }
-  );
-
-  const { data, loading, error, sourceLabel, substituted } = primary;
+  const { data, loading, error, sourceLabel, substituted } =
+    useReportingSection<SubscriberAnalyticsData>(
+      reportingService.getSubscriberAnalytics,
+      filters,
+      refreshToken,
+      { dateFrom: growthRange.range.from, dateTo: growthRange.range.to }
+    );
 
   const kpi = data?.kpi;
   const billing = data?.billing_summary;
@@ -102,7 +136,9 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
 
   // Every reported status, largest first — including ones this app has never
   // seen, so a new workflow state cannot vanish from the chart.
-  const statuses = Object.entries(composition.data?.status.by_status ?? {})
+  const cards = data?.billing_summary?.cards ?? [];
+
+  const statuses = Object.entries(data?.status.by_status ?? {})
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
 
@@ -133,97 +169,47 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
       />
 
       {/* ── Billing status summary header ─────────────────────────────── */}
+      {/* One row, built from the statuses SYNC actually holds. There used to be
+          a second row of fixed Active/VIP/Restricted/Disconnected cards beneath
+          this one; it duplicated the first two and showed confident zeros for
+          two statuses SYNC does not use at all, which is worse than absent. */}
       <Restricted
         require={WIDGET.subscriberBilling}
         fallback={<RestrictedPanel title="Billing Status Summary" height={120} />}
       >
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            label="Active"
-            value={formatNumber(billing?.active)}
-            tone="success"
-            icon={<UserCheck size={20} />}
-            loading={first}
-            caption={
-              billing ? (
-                <>
-                  of <span className="font-semibold">{formatNumber(billing.total)}</span> billed
-                  accounts
-                </>
-              ) : undefined
-            }
-          />
-          <StatCard
-            label="VIP"
-            value={formatNumber(billing?.vip)}
-            tone="info"
-            icon={<Crown size={20} />}
-            loading={first}
-            caption="priority accounts"
-          />
-          <StatCard
-            label="Inactive"
-            value={formatNumber(billing?.inactive)}
-            tone="neutral"
-            icon={<UserMinus size={20} />}
-            loading={first}
-            caption="closed or cancelled"
-          />
-          <StatCard
-            label="Pullout"
-            value={formatNumber(billing?.pullout)}
-            tone="danger"
-            icon={<PackageX size={20} />}
-            loading={first}
-            caption="equipment recovered"
-          />
+          {first && cards.length === 0
+            ? [0, 1, 2, 3].map((slot) => (
+                <StatCard key={slot} label="—" value="—" tone="neutral" loading />
+              ))
+            : cards.map((card, index) => {
+                const tone = statusTone(card.label);
+
+                return (
+                  <StatCard
+                    key={card.key}
+                    label={card.label}
+                    value={formatNumber(card.count)}
+                    tone={tone}
+                    icon={statusIcon(card.label)}
+                    loading={first}
+                    caption={
+                      // Only the leading card carries the base, so the row has
+                      // one denominator rather than four repetitions of it.
+                      index === 0 && billing ? (
+                        <>
+                          of <span className="font-semibold">{formatNumber(billing.total)}</span>{' '}
+                          subscribers
+                        </>
+                      ) : (
+                        STATUS_CAPTIONS[card.label.toLowerCase()] ?? 'billing status'
+                      )
+                    }
+                  />
+                );
+              })}
         </div>
       </Restricted>
-
-      {/* ── Service state ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Active"
-          value={formatNumber(kpi?.active)}
-          tone="success"
-          icon={<UserCheck size={20} />}
-          loading={first}
-          caption={
-            kpi ? (
-              <>
-                Subscribers: <span className="font-semibold">{formatNumber(kpi.total)}</span>
-              </>
-            ) : undefined
-          }
-        />
-        <StatCard
-          label="VIP"
-          value={formatNumber(kpi?.vip)}
-          tone="info"
-          icon={<Crown size={20} />}
-          loading={first}
-          caption="priority service"
-        />
-        {/* Was "Suspended". Renamed at the source of the data, not just in this
-            label, so the chart, the table and the card cannot disagree. */}
-        <StatCard
-          label="Restricted"
-          value={formatNumber(kpi?.restricted)}
-          tone="warning"
-          icon={<UserMinus size={20} />}
-          loading={first}
-          caption="service limited"
-        />
-        {/* Was "Expired". */}
-        <StatCard
-          label="Disconnected"
-          value={formatNumber(kpi?.disconnected)}
-          tone="danger"
-          icon={<UserX size={20} />}
-          loading={first}
-          caption="service lapsed"
-        />
-      </div>
 
       {/* ── Runway and growth ─────────────────────────────────────────── */}
       <Card>
@@ -298,14 +284,10 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
       {/* ── Composition ───────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card flush>
-          <CardHeader
-            title="Subscriber Status"
-            subtitle={composition.data?.branch_label}
-            actions={<WidgetRange state={compositionRange} />}
-          />
+          <CardHeader title="Subscriber Status" subtitle={data?.branch_label} />
           <CardBody>
             <PanelState
-              loading={composition.loading && !composition.data}
+              loading={first}
               empty={statuses.length === 0}
               emptyMessage="No subscribers on file."
               height={300}
@@ -322,9 +304,9 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
               />
             </PanelState>
 
-            {(composition.data?.status.excluded ?? 0) > 0 && (
+            {(data?.status.excluded ?? 0) > 0 && (
               <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                {pluralise(composition.data?.status.excluded ?? 0, 'pending application')} excluded —
+                {pluralise(data?.status.excluded ?? 0, 'pending application')} excluded —
                 an application that has not been activated is not a subscriber.
               </p>
             )}
@@ -332,21 +314,17 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
         </Card>
 
         <Card flush>
-          <CardHeader
-            title="Active Subscribers by Plan"
-            subtitle={composition.data?.branch_label}
-            actions={<WidgetRange state={compositionRange} />}
-          />
+          <CardHeader title="Active Subscribers by Plan" subtitle={data?.branch_label} />
           <CardBody>
             <PanelState
-              loading={composition.loading && !composition.data}
-              empty={(composition.data?.plans.length ?? 0) === 0}
+              loading={first}
+              empty={(data?.plans.length ?? 0) === 0}
               emptyMessage="No active subscribers on any plan."
               height={300}
             >
               <DonutChart
-                labels={(composition.data?.plans ?? []).map((plan) => plan.label)}
-                values={(composition.data?.plans ?? []).map((plan) => plan.count)}
+                labels={(data?.plans ?? []).map((plan) => plan.label)}
+                values={(data?.plans ?? []).map((plan) => plan.count)}
                 unit="count"
                 height={300}
               />
@@ -386,40 +364,15 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
         require={WIDGET.subscriberBarangay}
         fallback={<RestrictedPanel title="Barangay Breakdown" height={240} />}
       >
-        <BarangayTable
-          rows={geography.data?.barangays ?? []}
-          loading={geography.loading && !geography.data}
-          error={geography.error}
-          actions={<WidgetRange state={barangayRange} />}
-        />
+        <BarangayTable rows={data?.barangays ?? []} loading={first} error={error} />
       </Restricted>
-
-      {/* ── Who owes ──────────────────────────────────────────────────── */}
-      <OverdueAccountsPanel
-        ledger={data?.overdue ?? null}
-        loading={first}
-        error={error}
-        onApply={({ search, planId, bucket }) =>
-          update({
-            overdueSearch: search,
-            overduePlanId: planId,
-            overdueBucket: bucket,
-            // Filters change how many pages exist, so page 4 of the old result
-            // is meaningless against the new one.
-            overduePage: 1,
-          })
-        }
-        onClear={() =>
-          update({ overdueSearch: '', overduePlanId: 0, overdueBucket: '', overduePage: 1 })
-        }
-        onPageChange={(page) => update({ overduePage: page })}
-      />
 
       <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
         Counts are as of {data?.as_of ?? 'today'}. Pending applications are excluded throughout —
         they are not subscribers. <strong>Restricted</strong> is what the operating systems record as
-        suspended, and <strong>Disconnected</strong> what they record as expired or overdue.{' '}
-        {pluralise(data?.overdue.total ?? 0, 'account')} carry a balance or a lapsed subscription.
+        suspended, and <strong>Disconnected</strong> what they record as expired or overdue. Every
+        card and slice above is built from the statuses the source system itself holds, so one added
+        in SYNC appears here without a change to this portal.
       </p>
     </ReportingPage>
   );

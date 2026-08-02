@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\FinancialsController;
 use App\Http\Controllers\Api\MonitorController;
 use App\Http\Controllers\Api\PayableController;
 use App\Http\Controllers\Api\ReportingController;
+use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\SiteController;
 use App\Http\Controllers\Api\UserManagementController;
 use App\Http\Controllers\AuthController;
@@ -48,9 +49,10 @@ Route::get('/health', function () {
 
 Route::post('/login', [AuthController::class, 'login']);
 
-// Palette is needed by the login screen, before a session exists.
+// Palette and logo are needed by the login screen, before a session exists.
 Route::get('/settings-color-palette', [SettingsColorPaletteController::class, 'index']);
 Route::get('/settings-color-palette/active', [SettingsColorPaletteController::class, 'active']);
+Route::get('/settings/logo', [SettingsController::class, 'logo']);
 
 Route::middleware('auth')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
@@ -68,17 +70,18 @@ Route::middleware(['auth', 'executive'])->group(function () {
 });
 
 /*
- * Legacy config-driven endpoints, still serving the current frontend pages
- * until each is migrated onto the connector above.
+ * The source list.
+ *
+ * All that survives of the legacy executive rollup endpoints — their pages were
+ * removed in favour of the reporting modules and the group overview, which
+ * compose the same figures from one code path instead of a second, divergent one.
+ *
+ * This one stays because it is not a rollup: it is how the app learns which
+ * databases exist and which the signed-in role may look at, which every
+ * reporting section needs before it can ask anything.
  */
 Route::middleware(['auth', 'executive'])->prefix('monitor')->group(function () {
     Route::get('/sources', [MonitorController::class, 'sources']);
-    Route::get('/overview', [MonitorController::class, 'overview']);
-    Route::get('/operations', [MonitorController::class, 'operations']);
-    Route::get('/revenue', [MonitorController::class, 'revenue']);
-    Route::get('/financials', [MonitorController::class, 'financials']);
-    Route::get('/branches', [MonitorController::class, 'branches']);
-    Route::get('/consolidated', [MonitorController::class, 'consolidated']);
 });
 
 /*
@@ -144,6 +147,23 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/audit-logs', [AuditLogController::class, 'index'])
         ->middleware('permission:' . Permissions::ACTION_AUDIT_VIEW);
+
+    /*
+     * Branding. Reading is open to any session — every page renders the logo and
+     * the palette — but changing them alters the portal for everyone, so the
+     * writes need their own grant.
+     */
+    Route::get('/settings', [SettingsController::class, 'index']);
+
+    Route::middleware('permission:' . Permissions::ACTION_SETTINGS_MANAGE)->group(function () {
+        Route::post('/settings/logo', [SettingsController::class, 'uploadLogo']);
+        Route::delete('/settings/logo', [SettingsController::class, 'deleteLogo']);
+
+        Route::post('/settings/palettes', [SettingsController::class, 'storePalette']);
+        Route::put('/settings/palettes/{palette}', [SettingsController::class, 'updatePalette']);
+        Route::post('/settings/palettes/{palette}/activate', [SettingsController::class, 'activatePalette']);
+        Route::delete('/settings/palettes/{palette}', [SettingsController::class, 'destroyPalette']);
+    });
 
     Route::prefix('users')
         ->middleware('permission:' . Permissions::ACTION_USERS_MANAGE)

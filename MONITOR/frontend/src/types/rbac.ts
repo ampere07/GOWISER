@@ -21,7 +21,9 @@ export const MODULE = {
   tech: 'tech',
   employee: 'employee',
   users: 'users',
+  roles: 'roles',
   audit: 'audit',
+  settings: 'settings',
   databases: 'databases',
 } as const;
 
@@ -48,6 +50,7 @@ export const ACTION = {
   usersManage: 'action.users.manage',
   rolesManage: 'action.roles.manage',
   auditView: 'action.audit.view',
+  settingsManage: 'action.settings.manage',
 } as const;
 
 export type PermissionId =

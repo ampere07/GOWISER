@@ -1,8 +1,8 @@
 import React from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney, formatNumber } from '../../utils/format';
-import Card, { CardHeader } from './Card';
-import { Table, TableState, Td, Th, Thead, TotalRow, Tr } from './primitives';
+import DataTable, { Column } from './DataTable';
+import { Td, TotalRow } from './primitives';
 
 export interface BreakdownRow {
   label: string;
@@ -27,14 +27,20 @@ interface BreakdownTableProps {
   showTotal?: boolean;
   /** Hides the count column for breakdowns where it means nothing. */
   hideCount?: boolean;
+  /** Rendered in the header beside the search box — usually a WidgetRange. */
+  actions?: React.ReactNode;
 }
 
 /**
- * Label / count / amount, sorted by amount.
+ * Label / count / amount, searchable and sortable on every column.
  *
  * One component behind Revenue by Plan, Revenue by Payment Method and Payment
- * Notes: three panels that are the same table with different column headings, and
- * keeping them as one is what stops them diverging.
+ * Notes: three panels that are the same table with different column headings,
+ * and keeping them as one is what stops them diverging.
+ *
+ * Sorting is on the underlying numbers rather than the rendered strings, so the
+ * amount column orders by value and not by the text of "₱1,234.00" — which would
+ * put ₱9 above ₱1,000.
  */
 const BreakdownTable: React.FC<BreakdownTableProps> = ({
   title,
@@ -47,68 +53,93 @@ const BreakdownTable: React.FC<BreakdownTableProps> = ({
   emptyMessage = 'No data for this period.',
   showTotal = false,
   hideCount = false,
+  actions,
 }) => {
   const isDarkMode = useTheme();
 
-  const columns = hideCount ? 2 : 3;
-  const total = rows.reduce((sum, row) => sum + row.total, 0);
+  const columns: Column<BreakdownRow>[] = [
+    {
+      key: 'label',
+      header: labelHeader,
+      value: (row) => row.label,
+      render: (row) => (
+        <>
+          <span className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+            {row.label}
+          </span>
+          {row.detail && (
+            <span
+              className={`block text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}
+            >
+              {row.detail}
+            </span>
+          )}
+        </>
+      ),
+    },
+    ...(hideCount
+      ? []
+      : [
+          {
+            key: 'count',
+            header: countLabel,
+            align: 'right' as const,
+            value: (row: BreakdownRow) => row.count,
+            // A count is not something anyone searches for by typing it.
+            searchable: false,
+            render: (row: BreakdownRow) => (
+              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                {formatNumber(row.count)}
+              </span>
+            ),
+          },
+        ]),
+    {
+      key: 'total',
+      header: totalLabel,
+      align: 'right',
+      value: (row) => row.total,
+      searchable: false,
+      render: (row) => (
+        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+          {formatMoney(row.total)}
+        </span>
+      ),
+    },
+  ];
 
   return (
-    <Card flush className="h-full">
-      <CardHeader title={title} />
-
-      <Table>
-        <Thead>
-          <Th>{labelHeader}</Th>
-          {!hideCount && <Th align="right">{countLabel}</Th>}
-          <Th align="right">{totalLabel}</Th>
-        </Thead>
-        <tbody>
-          <TableState
-            colSpan={columns}
-            loading={loading && rows.length === 0}
-            error={error}
-            empty={rows.length === 0}
-            emptyMessage={emptyMessage}
-          />
-
-          {rows.map((row) => (
-            <Tr key={row.label}>
-              <Td>
-                <span className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
-                  {row.label}
-                </span>
-                {row.detail && (
-                  <span className={`block text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                    {row.detail}
-                  </span>
+    <DataTable<BreakdownRow>
+      title={title}
+      columns={columns}
+      rows={rows}
+      rowKey={(row) => row.label}
+      loading={loading}
+      error={error}
+      emptyMessage={emptyMessage}
+      defaultSort="total"
+      searchPlaceholder={`Search ${labelHeader.toLowerCase()}…`}
+      actions={actions}
+      footer={
+        showTotal
+          ? (visible) => (
+              <TotalRow>
+                <Td>Total</Td>
+                {!hideCount && (
+                  <Td align="right">
+                    {formatNumber(visible.reduce((sum, row) => sum + row.count, 0))}
+                  </Td>
                 )}
-              </Td>
-              {!hideCount && (
-                <Td align="right" className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {formatNumber(row.count)}
+                {/* Totals the *visible* rows, so a filtered subtotal adds up to
+                    what is on screen rather than to a set that is not. */}
+                <Td align="right" className="text-emerald-600 dark:text-emerald-400">
+                  {formatMoney(visible.reduce((sum, row) => sum + row.total, 0))}
                 </Td>
-              )}
-              <Td align="right" className="font-semibold text-emerald-600 dark:text-emerald-400">
-                {formatMoney(row.total)}
-              </Td>
-            </Tr>
-          ))}
-
-          {showTotal && rows.length > 0 && (
-            <TotalRow>
-              <Td>Total</Td>
-              {!hideCount && (
-                <Td align="right">{formatNumber(rows.reduce((sum, row) => sum + row.count, 0))}</Td>
-              )}
-              <Td align="right" className="text-emerald-600 dark:text-emerald-400">
-                {formatMoney(total)}
-              </Td>
-            </TotalRow>
-          )}
-        </tbody>
-      </Table>
-    </Card>
+              </TotalRow>
+            )
+          : undefined
+      }
+    />
   );
 };
 

@@ -411,18 +411,36 @@ class ReportingController extends Controller
 
     private function failure(\Throwable $e, Request $request)
     {
+        $sourceKey = $request->query('source') ? trim((string) $request->query('source')) : null;
+        $sourceLabel = null;
+
+        if ($sourceKey) {
+            try {
+                $sourceLabel = $this->sources->label($sourceKey);
+            } catch (\Throwable) {
+                $sourceLabel = $sourceKey;
+            }
+        }
+
         Log::error('Reporting query failed: ' . $e->getMessage(), [
             'exception' => get_class($e),
             'endpoint' => $request->path(),
+            'source' => $sourceKey,
         ]);
+
+        $detail = (config('app.debug') || $request->user()?->isAdmin())
+            ? ': ' . $e->getMessage()
+            : '';
+
+        $prefix = $sourceLabel
+            ? "Unable to query monitored database [{$sourceLabel}]"
+            : 'Unable to reach the monitored database';
 
         return response()->json([
             'status' => 'error',
-            // Driver messages name hosts, ports and table names. Useful in
-            // development, not something to hand a browser in production.
-            'message' => config('app.debug')
-                ? $e->getMessage()
-                : 'Unable to reach the monitored database.',
+            'message' => $prefix . $detail,
+            'source' => $sourceKey,
+            'source_label' => $sourceLabel,
         ], 500);
     }
 }

@@ -137,8 +137,13 @@ return [
     |
     | Neither monitored system stores a collection channel. Both store a
     | free-text payment method that cashiers and gateways write a dozen ways, so
-    | the three channels finance reconciles against — Cash, PNB and Xendit — are
-    | derived by matching fragments of that string.
+    | the three channels finance reconciles against — Cash, PNB and the Payment
+    | Portal — are derived by matching fragments of that string.
+    |
+    | The portal channel is named for the route, not the provider: SYNC's online
+    | collections have run through more than one gateway, and a channel named
+    | after whichever is current would have to be renamed each time. 'xendit' is
+    | therefore just one of its match patterns.
     |
     | Matched case-insensitively as substrings, first channel wins, in the order
     | written here. 'pnb' therefore has to come before 'cash', or a method
@@ -152,7 +157,7 @@ return [
 
     'income_channels' => [
         'pnb' => ['pnb', 'philippine national bank', 'bank transfer', 'bank deposit', 'bank'],
-        'xendit' => ['xendit', 'portal', 'online', 'gcash', 'maya', 'paymaya', 'e-wallet', 'ewallet', 'card'],
+        'portal' => ['portal', 'xendit', 'online', 'gcash', 'maya', 'paymaya', 'e-wallet', 'ewallet', 'card'],
         'cash' => ['cash', 'over the counter', 'otc', 'walk-in', 'walkin', 'office', 'counter'],
     ],
 
@@ -225,6 +230,33 @@ return [
     'churn' => [
         'at_risk_factor' => env('REPORTING_CHURN_FACTOR', 0.6),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | The date operational records became reliable
+    |--------------------------------------------------------------------------
+    |
+    | Work orders and installations carried over from before the migration have
+    | timestamps that do not describe when anything actually happened — rows
+    | back-dated in bulk, defaults left at epoch, tickets never closed because
+    | the old system had no closing step.
+    |
+    | Left unbounded, the Executive Overview reads those as a live operational
+    | emergency: "oldest open job has been waiting 2,400 days" is arithmetic
+    | performed on a number that was never a date. An alarm nobody can act on
+    | trains people to ignore the alarm panel, which is worse than having none.
+    |
+    | So the alarm derivation treats anything older than this as unmeasurable
+    | rather than as ancient, and says so on screen. It bounds *alarms only* —
+    | the backlog counts on the Operations module still report every open row,
+    | because "how many are open" is a fair question about old data even when
+    | "for how long" is not.
+    |
+    | Set empty to disable the floor entirely.
+    |
+    */
+
+    'reliable_from' => env('REPORTING_RELIABLE_FROM', '2026-08-01'),
 
     'company' => [
         'name' => env('REPORT_COMPANY_NAME', 'GO WISER CORPORATION'),

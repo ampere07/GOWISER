@@ -4,18 +4,14 @@ import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import FilterBar from '../components/reporting/FilterBar';
 import StatCard from '../components/reporting/StatCard';
+import DataTable from '../components/reporting/DataTable';
 import {
   Bar,
   ErrorBanner,
   PanelState,
   Pill,
-  Table,
-  TableState,
   Td,
-  Th,
-  Thead,
   TotalRow,
-  Tr,
 } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice, SourceCell } from '../components/reporting/DatabaseFilter';
@@ -24,7 +20,7 @@ import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
-import { TechData, TechnicianLocation } from '../types/reporting';
+import { TechData, Technician, TechnicianLocation, TechnicianWorkload } from '../types/reporting';
 import { formatNumber, formatTime, pluralise } from '../utils/format';
 
 interface TechProps {
@@ -205,91 +201,149 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
       )}
 
       {/* ── Workload ──────────────────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader
-          title="Workload by Technician"
-          subtitle={data?.range_label}
-          badge={pluralise(workload.length, 'technician')}
-          actions={<WidgetRange state={workloadRange} />}
-        />
-        <Table>
-          <Thead>
-            {showSource && <Th>Database</Th>}
-            <Th>Technician</Th>
-            <Th align="right">Job Orders</Th>
-            <Th align="right">Service Orders</Th>
-            <Th align="right">Total</Th>
-            <Th align="right">Completed</Th>
-            <Th align="right">Avg. on site</Th>
-            <Th width="90px" />
-          </Thead>
-          <tbody>
-            <TableState
-              colSpan={showSource ? 8 : 7}
-              loading={first}
-              error={error}
-              empty={workload.length === 0}
-              emptyMessage="No technicians are on the roster in this system."
-            />
-
-            {workload.map((row) => (
-              <Tr key={row.id}>
-                {showSource && (
-                  <Td>
-                    <SourceCell label={row.source_label} />
-                  </Td>
-                )}
-                <Td className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {row.name}
-                </Td>
-                <Td align="right" className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                  {formatNumber(row.job_orders)}
-                  <span className={`ml-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                    ({formatNumber(row.job_orders_done)} done)
-                  </span>
-                </Td>
-                <Td align="right" className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                  {formatNumber(row.service_orders)}
-                  <span className={`ml-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                    ({formatNumber(row.service_orders_done)} done)
-                  </span>
-                </Td>
-                <Td align="right" className={`font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {formatNumber(row.total)}
-                </Td>
-                <Td align="right" className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                  {formatNumber(row.completed)}
-                </Td>
-                <Td align="right" className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                  {row.average_minutes === null ? '—' : `${row.average_minutes} min`}
-                </Td>
-                <Td>
-                  <Bar pct={busiest > 0 ? (row.total / busiest) * 100 : 0} color="#0d6efd" />
-                </Td>
-              </Tr>
-            ))}
-
-            {workload.length > 0 && (
-              <TotalRow>
-                {showSource && <Td />}
-                <Td>Total</Td>
-                <Td align="right">
-                  {formatNumber(workload.reduce((sum, row) => sum + row.job_orders, 0))}
-                </Td>
-                <Td align="right">
-                  {formatNumber(workload.reduce((sum, row) => sum + row.service_orders, 0))}
-                </Td>
-                <Td align="right">{formatNumber(attributed)}</Td>
-                <Td align="right" className="text-emerald-600 dark:text-emerald-400">
-                  {formatNumber(completed)}
-                </Td>
-                <Td />
-                <Td />
-              </TotalRow>
-            )}
-          </tbody>
-        </Table>
-      </Card>
+      <DataTable<TechnicianWorkload>
+        title="Workload by Technician"
+        subtitle={data?.range_label}
+        badge={pluralise(workload.length, 'technician')}
+        actions={<WidgetRange state={workloadRange} />}
+        rows={workload}
+        rowKey={(row) => row.id}
+        loading={first}
+        error={error}
+        emptyMessage="No technicians are on the roster in this system."
+        searchPlaceholder="Search technician…"
+        defaultSort="total"
+        columns={[
+          // Only in aggregate mode. It matters more here than elsewhere: two
+          // branches can employ people with the same name, and the rows are
+          // deliberately not merged.
+          ...(showSource
+            ? [
+                {
+                  key: 'source',
+                  header: 'Database',
+                  value: (row: TechnicianWorkload) => row.source_label ?? '',
+                  render: (row: TechnicianWorkload) => <SourceCell label={row.source_label} />,
+                },
+              ]
+            : []),
+          {
+            key: 'designated_area',
+            header: 'Designated Area / Barangay',
+            value: (row: TechnicianWorkload) => (row as any).designated_area ?? 'Field Designated Area',
+            render: (row: TechnicianWorkload) => (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                <MapPin size={12} className="text-indigo-500" />
+                {(row as any).designated_area || 'Field Designated Area'}
+              </span>
+            ),
+          },
+          {
+            key: 'name',
+            header: 'Technician',
+            value: (row) => row.name,
+            render: (row) => (
+              <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                {row.name}
+              </span>
+            ),
+          },
+          {
+            key: 'job_orders',
+            header: 'Job Orders',
+            align: 'right',
+            value: (row) => row.job_orders,
+            searchable: false,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                {formatNumber(row.job_orders)}
+                <span className={`ml-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                  ({formatNumber(row.job_orders_done)} done)
+                </span>
+              </span>
+            ),
+          },
+          {
+            key: 'service_orders',
+            header: 'Service Orders',
+            align: 'right',
+            value: (row) => row.service_orders,
+            searchable: false,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                {formatNumber(row.service_orders)}
+                <span className={`ml-1 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                  ({formatNumber(row.service_orders_done)} done)
+                </span>
+              </span>
+            ),
+          },
+          {
+            key: 'total',
+            header: 'Total',
+            align: 'right',
+            value: (row) => row.total,
+            searchable: false,
+            render: (row) => (
+              <span className={`font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                {formatNumber(row.total)}
+              </span>
+            ),
+          },
+          {
+            key: 'completed',
+            header: 'Completed',
+            align: 'right',
+            value: (row) => row.completed,
+            searchable: false,
+            render: (row) => (
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                {formatNumber(row.completed)}
+              </span>
+            ),
+          },
+          {
+            key: 'average',
+            header: 'Avg. on site',
+            align: 'right',
+            // Nulls sink in DataTable regardless of direction, so technicians
+            // with no timed work do not head a "slowest first" sort.
+            value: (row) => row.average_minutes,
+            searchable: false,
+            render: (row) => (
+              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                {row.average_minutes === null ? '—' : `${row.average_minutes} min`}
+              </span>
+            ),
+          },
+          {
+            key: 'bar',
+            header: '',
+            width: '90px',
+            render: (row) => (
+              <Bar pct={busiest > 0 ? (row.total / busiest) * 100 : 0} color="#0d6efd" />
+            ),
+          },
+        ]}
+        footer={(visible) => (
+          <TotalRow>
+            {showSource && <Td />}
+            <Td>Total</Td>
+            <Td align="right">
+              {formatNumber(visible.reduce((sum, row) => sum + row.job_orders, 0))}
+            </Td>
+            <Td align="right">
+              {formatNumber(visible.reduce((sum, row) => sum + row.service_orders, 0))}
+            </Td>
+            <Td align="right">{formatNumber(visible.reduce((sum, row) => sum + row.total, 0))}</Td>
+            <Td align="right" className="text-emerald-600 dark:text-emerald-400">
+              {formatNumber(visible.reduce((sum, row) => sum + row.completed, 0))}
+            </Td>
+            <Td />
+            <Td />
+          </TotalRow>
+        )}
+      />
 
       {/* ── Field positions ──────────────────────────────────────────── */}
       <Card flush>
@@ -325,45 +379,62 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
       </Card>
 
       {/* ── Roster ───────────────────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader
-          title="Roster"
-          badge={pluralise(roster.data?.roster.length ?? 0, 'technician')}
-          actions={<WidgetRange state={rosterRange} />}
-        />
-        <Table>
-          <Thead>
-            <Th width="60px">#</Th>
-            <Th>Name</Th>
-            <Th>Middle initial</Th>
-            <Th align="right">Record updated</Th>
-          </Thead>
-          <tbody>
-            <TableState
-              colSpan={4}
-              loading={roster.loading && !roster.data}
-              error={roster.error}
-              empty={(roster.data?.roster.length ?? 0) === 0}
-              emptyMessage="No technicians are registered."
-            />
-
-            {(roster.data?.roster ?? []).map((technician, index) => (
-              <Tr key={technician.id}>
-                <Td className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>{index + 1}</Td>
-                <Td className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {technician.name}
-                </Td>
-                <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {technician.initial || '—'}
-                </Td>
-                <Td align="right" className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                  {technician.updated_at ? formatTime(technician.updated_at) : '—'}
-                </Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      </Card>
+      <DataTable<Technician>
+        title="Roster"
+        badge={pluralise(roster.data?.roster.length ?? 0, 'technician')}
+        rows={roster.data?.roster ?? []}
+        rowKey={(technician) => technician.id}
+        loading={roster.loading && !roster.data}
+        error={roster.error}
+        emptyMessage="No technicians are registered."
+        searchPlaceholder="Search name…"
+        defaultSort="name"
+        defaultDescending={false}
+        columns={[
+          {
+            key: 'index',
+            header: '#',
+            width: '60px',
+            // Positional, so it renumbers with the sort rather than following
+            // rows around — a row-order marker, not an identifier.
+            render: (_technician, index) => (
+              <span className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>{index + 1}</span>
+            ),
+          },
+          {
+            key: 'name',
+            header: 'Name',
+            value: (technician) => technician.name,
+            render: (technician) => (
+              <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                {technician.name}
+              </span>
+            ),
+          },
+          {
+            key: 'initial',
+            header: 'Middle initial',
+            value: (technician) => technician.initial,
+            render: (technician) => (
+              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                {technician.initial || '—'}
+              </span>
+            ),
+          },
+          {
+            key: 'updated',
+            header: 'Record updated',
+            align: 'right',
+            value: (technician) => technician.updated_at ?? '',
+            searchable: false,
+            render: (technician) => (
+              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                {technician.updated_at ? formatTime(technician.updated_at) : '—'}
+              </span>
+            ),
+          },
+        ]}
+      />
 
       <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
         Work is attributed by matching a technician's name against the assignment fields on each job,

@@ -124,31 +124,60 @@ class StatusMap
     }
 
     /**
-     * The Billing Status summary header: Active, VIP, Inactive, Pullout.
+     * The Billing Status summary header.
+     *
+     * Driven by the statuses the source *actually holds*, not by a fixed four.
+     * SYNC's billing_status table is a lookup an operator edits, so hardcoding
+     * Active/VIP/Inactive/Pullout produced two failures at once: a status SYNC
+     * uses but this list did not name vanished from the header, and a status this
+     * list named but SYNC does not use rendered as a confident zero — which reads
+     * as "none of these" rather than "we do not track this".
+     *
+     * The four named buckets still lead when present, because that is the order
+     * management reads them in. Anything else the data holds follows, largest
+     * first, so a status added in SYNC appears here without a code change.
      *
      * @param array<string,int> $counts raw {status => count}
-     * @return array{active:int,vip:int,inactive:int,pullout:int,total:int}
+     * @return array{cards:array<int,array{key:string,label:string,count:int}>,total:int}
      */
     public static function billingSummary(array $counts): array
     {
-        $summary = ['active' => 0, 'vip' => 0, 'inactive' => 0, 'pullout' => 0];
+        $seen = [];
 
+        // Fold the raw values onto their reported labels first, so 'expired' and
+        // 'overdue' arrive as one Disconnected card rather than two.
         foreach ($counts as $raw => $count) {
-            $key = self::normalise($raw);
+            if (self::isExcluded($raw)) {
+                continue;
+            }
 
-            foreach (self::BILLING_BUCKETS as $bucket => $members) {
-                if (in_array($key, $members, true)) {
-                    $summary[$bucket] += (int) $count;
-                }
+            $label = self::label($raw);
+            $seen[$label] = ($seen[$label] ?? 0) + (int) $count;
+        }
+
+        $cards = [];
+
+        // The four the brief asks for, in that order, but only where the source
+        // actually has them.
+        foreach (['Active', 'VIP', 'Inactive', 'Pullout'] as $label) {
+            if (array_key_exists($label, $seen)) {
+                $cards[] = ['key' => strtolower($label), 'label' => $label, 'count' => $seen[$label]];
+                unset($seen[$label]);
             }
         }
 
-        // Total is the four buckets, not every row: it is the header's own
-        // subtotal, and a total larger than the parts it sits above reads as an
-        // arithmetic error rather than as a wider scope.
-        $summary['total'] = array_sum($summary);
+        arsort($seen);
 
-        return $summary;
+        foreach ($seen as $label => $count) {
+            $cards[] = ['key' => strtolower($label), 'label' => $label, 'count' => $count];
+        }
+
+        return [
+            'cards' => $cards,
+            // The sum of what is shown. A total larger than the cards under it
+            // reads as an arithmetic error rather than as a wider scope.
+            'total' => array_sum(array_column($cards, 'count')),
+        ];
     }
 
     /**

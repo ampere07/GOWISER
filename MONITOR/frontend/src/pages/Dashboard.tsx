@@ -1,11 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Sidebar, { visibleMenuItems } from './Sidebar';
+import Sidebar, { navigableItems, visibleMenuItems } from './Sidebar';
 import Header from './Header';
-import Overview from './Overview';
-import Operations from './Operations';
-import Revenue from './Revenue';
-import Financials from './Financials';
-import Consolidated from './Consolidated';
 import SubscriberAnalytics from './SubscriberAnalytics';
 import Financial from './Financial';
 import FieldOperations from './FieldOperations';
@@ -14,7 +9,9 @@ import Employee from './Employee';
 import Databases from './Databases';
 import ExecutiveOverview from './ExecutiveOverview';
 import UserManagement from './UserManagement';
+import Roles from './Roles';
 import AuditTrail from './AuditTrail';
+import Settings from './Settings';
 import { UserData } from '../types/api';
 import { PermissionContext } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
@@ -33,15 +30,12 @@ const POLL_SECONDS = Number(process.env.REACT_APP_POLL_INTERVAL || 30);
 
 const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const isDarkMode = useTheme();
-  const { sources, activeSource, setSources, markUpdated } = useMonitorStore();
+  const { activeSource, setSources, markUpdated } = useMonitorStore();
 
-  // What the currently selected database can actually report on.
-  const capabilities = sources.find((source) => source.key === activeSource)?.capabilities;
-
-  // The operational sections are served by a different driver set and advertise
-  // their own capabilities. Unlike the executive pages they are not gated on the
-  // *selected* source: the money is in NETMANAGER and the technicians are in
-  // GOWISER, so a section is offered when any configured system can answer it.
+  // The reporting sections advertise their own capabilities. A section is
+  // offered when *any* configured system can answer it, not when the selected
+  // one can: the money is in NETMANAGER and the technicians are in GOWISER, and
+  // a request falls through to whichever database holds what was asked for.
   const [reporting, setReporting] = useState<ReportingCapabilities | null>(null);
 
   const servableSections: ReportingSection[] | undefined = useMemo(() => {
@@ -52,15 +46,14 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     );
   }, [reporting]);
 
+  // Flattened to leaves: a parent in the tree is a grouping key, not a section,
+  // and landing on one would show a blank screen.
   const allowed = useMemo(
     () =>
-      visibleMenuItems(
-        user.permissions,
-        capabilities,
-        servableSections,
-        Boolean(user.is_executive_role)
+      navigableItems(
+        visibleMenuItems(user.permissions, servableSections, Boolean(user.is_executive_role))
       ),
-    [user.permissions, capabilities, servableSections, user.is_executive_role]
+    [user.permissions, servableSections, user.is_executive_role]
   );
 
   /**
@@ -108,7 +101,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         setIsRefreshing(true);
         // Manual refresh must bypass the client cache, otherwise the button
         // does nothing for up to ten seconds and looks broken.
-        monitorService.invalidate(activeSource);
+        monitorService.invalidate();
         reportingService.invalidate(activeSource);
       }
 
@@ -126,7 +119,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     const interval = setInterval(() => {
       // Polling a backgrounded tab wastes queries on a production database.
       if (document.visibilityState === 'visible') {
-        monitorService.invalidate(activeSource);
+        monitorService.invalidate();
         reportingService.invalidate(activeSource);
         triggerRefresh(false);
       }
@@ -135,9 +128,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     return () => clearInterval(interval);
   }, [activeSource, triggerRefresh]);
 
-  // Switching source can pull the current section out from under the user —
-  // NetManager reports financials only, GOWISER has no financials at all.
-  // Move them to the first section the new source supports instead of
+  // A permission or capability change can pull the current section out from
+  // under the user. Move them to the first section still available rather than
   // stranding them on a page that cannot load.
   useEffect(() => {
     if (allowed.length === 0) return;
@@ -162,19 +154,11 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   };
 
-  // The reporting sections own their database filter; the executive pages read
-  // the app-wide selection from the header.
-  const isReportingSection = [
-    'subscriber-analytics',
-    'financial',
-    'field-operations',
-    'tech',
-    'employee',
-    // Composed server-side across every database, so it has no source to switch.
-    'executive-overview',
-    'users',
-    'audit',
-  ].includes(activeSection);
+  // Every remaining section owns its own database scope — the reporting modules
+  // through their own filter, the administration screens because they read
+  // MONITOR's own tables. Nothing is left that reads the header's app-wide
+  // selection, so the source switcher stays hidden throughout.
+  const hideSourceSwitcher = true;
 
   const renderContent = () => {
     // A section the role cannot see must not render just because it is in
@@ -198,8 +182,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         return <ExecutiveOverview refreshToken={refreshToken} />;
       case 'users':
         return <UserManagement refreshToken={refreshToken} />;
+      case 'roles':
+        return <Roles refreshToken={refreshToken} />;
       case 'audit':
         return <AuditTrail refreshToken={refreshToken} />;
+      case 'settings':
+        return <Settings refreshToken={refreshToken} />;
       case 'subscriber-analytics':
         return <SubscriberAnalytics refreshToken={refreshToken} />;
       case 'financial':
@@ -210,19 +198,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         return <Tech refreshToken={refreshToken} />;
       case 'employee':
         return <Employee refreshToken={refreshToken} />;
-      case 'operations':
-        return <Operations refreshToken={refreshToken} />;
-      case 'revenue':
-        return <Revenue refreshToken={refreshToken} />;
-      case 'financials':
-        return <Financials refreshToken={refreshToken} />;
-      case 'consolidated':
-        return <Consolidated refreshToken={refreshToken} />;
       case 'databases':
-        return <Databases refreshToken={refreshToken} />;
-      case 'overview':
       default:
-        return <Overview refreshToken={refreshToken} />;
+        return <Databases refreshToken={refreshToken} />;
     }
   };
 
@@ -234,7 +212,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           onToggleSidebar={toggleSidebar}
           onRefresh={() => triggerRefresh(true)}
           isRefreshing={isRefreshing}
-          hideSourceSwitcher={isReportingSection || activeSection === 'databases'}
+          hideSourceSwitcher={hideSourceSwitcher}
         />
       </div>
 
@@ -260,7 +238,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               userRole={user.role}
               userEmail={user.email}
               permissions={user.permissions}
-              capabilities={capabilities}
               servableSections={servableSections}
               isExecutiveRole={Boolean(user.is_executive_role)}
             />

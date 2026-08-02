@@ -88,9 +88,7 @@ class SectionAggregator
                 'total', 'active', 'vip', 'restricted', 'disconnected',
                 'expiring_3day', 'expiring_7day', 'new_30day',
             ]),
-            'billing_summary' => $this->sumFields($payloads, 'billing_summary', [
-                'active', 'vip', 'inactive', 'pullout', 'total',
-            ]),
+            'billing_summary' => $this->mergeBillingSummary($payloads),
             'status' => $this->mergeStatusCounts($payloads),
             // Plans and sessions count subscribers; they carry no money, so
             // countOnly keeps a meaningless `total: 0` out of the payload.
@@ -103,6 +101,48 @@ class SectionAggregator
             'overdue' => $this->mergeOverdue($payloads, $labels),
             'sessions' => $this->rank($payloads, 'sessions', 'count', null, null, true),
         ]);
+    }
+
+    /**
+     * The billing summary across every database.
+     *
+     * Merged on the card label rather than on a fixed set of keys, because the
+     * cards are whatever statuses the sources actually hold — see
+     * StatusMap::billingSummary. Two branches on different releases can have
+     * different status lists, and a card only one of them uses must still appear
+     * with that one's count rather than being dropped for not being universal.
+     */
+    private function mergeBillingSummary(array $payloads): array
+    {
+        $counts = [];
+        $order = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['billing_summary']['cards'] ?? [] as $card) {
+                $label = (string) ($card['label'] ?? '');
+
+                if ($label === '') {
+                    continue;
+                }
+
+                // First appearance fixes the position, so the four named buckets
+                // keep the order the drivers put them in rather than being
+                // re-ranked by whichever database happens to be largest.
+                if (!array_key_exists($label, $counts)) {
+                    $counts[$label] = 0;
+                    $order[] = ['key' => $card['key'] ?? strtolower($label), 'label' => $label];
+                }
+
+                $counts[$label] += (int) ($card['count'] ?? 0);
+            }
+        }
+
+        $cards = array_map(
+            fn (array $card) => $card + ['count' => $counts[$card['label']]],
+            $order
+        );
+
+        return ['cards' => $cards, 'total' => array_sum($counts)];
     }
 
     /**
@@ -308,7 +348,7 @@ class SectionAggregator
     }
 
     /**
-     * Cash / PNB / Xendit across every database.
+     * Cash / PNB / Payment Portal across every database.
      *
      * Matched on the channel key rather than the label so the three named
      * channels stay in a fixed order and always appear, even at zero — a channel

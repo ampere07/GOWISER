@@ -39,13 +39,14 @@ import { SourceNotice, useSectionFilters } from '../components/reporting/section
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
 import { Restricted, RestrictedPanel, MaskedValue } from '../components/rbac/Restricted';
 import PrintReportOverlay from '../components/print/PrintReportOverlay';
+import { MetricTooltip } from '../components/common/MetricTooltip';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { useMonitorStore } from '../store/monitorStore';
 import { reportingService } from '../services/reportingService';
-import { ExecutiveMetric, FinancialData, IncomeChannel } from '../types/reporting';
+import { FinancialData, IncomeChannel } from '../types/reporting';
 import { ACTION, WIDGET } from '../types/rbac';
 import { UserData } from '../types/api';
 import { formatMoney, formatNumber, formatPercent, pluralise } from '../utils/format';
@@ -59,7 +60,7 @@ interface FinancialProps {
 const CHANNEL_STYLE: Record<string, { icon: React.ReactNode; color: string }> = {
   cash: { icon: <Banknote size={15} />, color: '#198754' },
   pnb: { icon: <Landmark size={15} />, color: '#0d6efd' },
-  xendit: { icon: <CreditCard size={15} />, color: '#7c3aed' },
+  portal: { icon: <CreditCard size={15} />, color: '#7c3aed' },
   other: { icon: <Wallet size={15} />, color: '#6c757d' },
 };
 
@@ -115,12 +116,7 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
     { dateFrom: channelsRange.range.from, dateTo: channelsRange.range.to }
   );
 
-  const metrics = useReportingSection<FinancialData>(
-    reportingService.getFinancial,
-    filters,
-    refreshToken,
-    { dateFrom: metricsRange.range.from, dateTo: metricsRange.range.to }
-  );
+
 
   const opex = useReportingSection<FinancialData>(reportingService.getFinancial, filters, refreshToken, {
     dateFrom: opexRange.range.from,
@@ -300,7 +296,7 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           </div>
         </Card>
 
-        {/* ── Income channels: Cash · PNB · Xendit ───────────────────────── */}
+        {/* ── Income channels: Cash · PNB · Payment Portal ──────────────── */}
         <Restricted
           require={WIDGET.financialChannels}
           fallback={<RestrictedPanel title="Income Channels" height={200} />}
@@ -308,7 +304,7 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           <Card flush>
             <CardHeader
               title="Income Channels"
-              subtitle="Cash over the counter, PNB deposits, and Xendit online collections"
+              subtitle="Cash over the counter, PNB deposits, and Payment Portal collections"
               icon={<Wallet size={16} />}
               actions={<WidgetRange state={channelsRange} />}
             />
@@ -343,40 +339,101 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           </Card>
         </Restricted>
 
-        {/* ── Executive metrics ─────────────────────────────────────────── */}
+        {/* ── Sales Projections & Performance ─────────────────────────── */}
         <Restricted
           require={WIDGET.financialMetrics}
-          fallback={<RestrictedPanel title="Executive Financial Metrics" height={160} />}
+          fallback={<RestrictedPanel title="Financial Projections & Performance" height={160} />}
         >
           <Card flush>
             <CardHeader
-              title="Executive Metrics"
-              subtitle="Forward-looking measures — each states the assumption behind it"
+              title="Sales Projections & Performance"
+              subtitle="Daily collection averages, monthly projections, and expected recurring revenue"
               icon={<TrendingDown size={16} />}
               actions={<WidgetRange state={metricsRange} />}
             />
             <CardBody>
               <PanelState
-                loading={metrics.loading && !metrics.data}
-                empty={!metrics.data?.executive_metrics}
-                emptyMessage="Not enough data to project these measures."
+                loading={headline.loading && !headline.data}
+                empty={!kpi}
+                emptyMessage="Not enough data to calculate projections."
                 height={160}
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-                  <MetricTile
-                    metric={metrics.data?.executive_metrics?.prospective_revenue}
-                    format="money"
-                  />
-                  <MetricTile metric={metrics.data?.executive_metrics?.arpu} format="money" />
-                  <MetricTile
-                    metric={metrics.data?.executive_metrics?.collection_efficiency}
-                    format="percent"
-                  />
-                  <MetricTile
-                    metric={metrics.data?.executive_metrics?.projected_churn_loss}
-                    format="money"
-                    tone="danger"
-                  />
+                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Expected MRC (Active &amp; Online)
+                      </p>
+                      <MetricTooltip
+                        title="Expected Monthly Recurring Revenue"
+                        explanation="Sum of plan prices for all active and online prepaid subscribers."
+                        formula="SUM(Active & Online Subscribers × Plan Price)"
+                      />
+                    </div>
+                    <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {formatMoney(kpi?.expected_mrc ?? 0)}
+                    </p>
+                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      active + online subscriber base
+                    </p>
+                  </div>
+
+                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Daily Sales Average
+                      </p>
+                      <MetricTooltip
+                        title="Daily Collection Average"
+                        explanation="Average total daily payments collected so far during this reporting period."
+                        formula="Total Period Income ÷ Days Elapsed"
+                      />
+                    </div>
+                    <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                      {formatMoney(kpi?.daily_average ?? 0)}
+                    </p>
+                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      over {kpi?.days_elapsed ?? 1} {pluralise(kpi?.days_elapsed ?? 1, 'day')}
+                    </p>
+                  </div>
+
+                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Monthly Projected Sales
+                      </p>
+                      <MetricTooltip
+                        title="Monthly Sales Projection"
+                        explanation="Estimated total collections for the full month based on current daily collection rate."
+                        formula="Daily Average × Total Days in Current Month"
+                      />
+                    </div>
+                    <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">
+                      {formatMoney(kpi?.projected_monthly ?? 0)}
+                    </p>
+                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      projected for {kpi?.days_in_month ?? 30} days
+                    </p>
+                  </div>
+
+                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Collection Rate
+                      </p>
+                      <MetricTooltip
+                        title="Collection Efficiency Rate"
+                        explanation="Percentage of expected monthly recurring charges collected so far."
+                        formula="(Total Income ÷ Expected MRC) × 100"
+                      />
+                    </div>
+                    <p className="text-xl font-bold text-purple-600 dark:text-purple-400 mt-1">
+                      {formatPercent(kpi?.collection_rate ?? 0)}
+                    </p>
+                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      collections vs expected MRC
+                    </p>
+                  </div>
                 </div>
               </PanelState>
             </CardBody>
@@ -661,9 +718,6 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
         <PrintReportOverlay
           open={printOpen}
           onClose={() => setPrintOpen(false)}
-          // Prints from whichever source answered this page, not the selected
-          // one, so the document matches the figures above it, and over the
-          // headline widget's range — the one the page is headed with.
           source={source || activeSource}
           dateFrom={headlineRange.range.from}
           dateTo={headlineRange.range.to}
@@ -701,8 +755,6 @@ const ChannelCard: React.FC<{ channel: IncomeChannel }> = ({ channel }) => {
         {pluralise(channel.count, 'payment')} · {formatPercent(channel.share_pct)} of income
       </p>
       {channel.methods.length > 0 && (
-        // The raw methods that rolled into this channel, so an unexpected total
-        // can be traced without opening the source system.
         <p
           className={`text-[11px] mt-1 truncate ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}
           title={channel.methods.join(', ')}
@@ -710,47 +762,6 @@ const ChannelCard: React.FC<{ channel: IncomeChannel }> = ({ channel }) => {
           {channel.methods.join(', ')}
         </p>
       )}
-    </div>
-  );
-};
-
-/**
- * One executive measure, with its basis printed underneath.
- *
- * The basis line is not decoration. Three of the four are projections, and a
- * projection shown with the same authority as a measurement is the commonest way
- * a dashboard misleads — so the assumption sits with the number rather than in a
- * footnote nobody reads.
- */
-const MetricTile: React.FC<{
-  metric?: ExecutiveMetric;
-  format: 'money' | 'percent';
-  tone?: 'danger';
-}> = ({ metric, format, tone }) => {
-  const isDarkMode = useTheme();
-
-  const value =
-    metric?.value === null || metric?.value === undefined
-      ? '—'
-      : format === 'money'
-      ? formatMoney(metric.value)
-      : formatPercent(metric.value);
-
-  return (
-    <div className={`rounded-lg px-3 py-2.5 ${isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'}`}>
-      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-        {metric?.label ?? '—'}
-      </p>
-      <p
-        className={`text-xl font-bold tabular-nums truncate mt-0.5 ${
-          tone === 'danger' ? 'text-red-500 dark:text-red-400' : ''
-        }`}
-      >
-        {value}
-      </p>
-      <p className={`text-[11px] mt-1 leading-snug ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-        {metric?.basis ?? ''}
-      </p>
     </div>
   );
 };

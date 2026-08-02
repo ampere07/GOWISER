@@ -43,7 +43,7 @@ const SEVERITY_TONE: Record<SystemAlarm['severity'], 'danger' | 'warning' | 'inf
 const CHANNEL_ICON: Record<string, React.ReactNode> = {
   cash: <Banknote size={14} />,
   pnb: <Landmark size={14} />,
-  xendit: <CreditCard size={14} />,
+  portal: <CreditCard size={14} />,
   other: <Wallet size={14} />,
 };
 
@@ -255,9 +255,20 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               tone={(health?.churn_rate_pct ?? 0) > 10 ? 'danger' : 'neutral'}
               caption="disconnected ÷ (active + disconnected)"
             />
+            {/* Read out of the card list rather than a fixed field: the billing
+                summary is now whatever statuses the source holds, and an install
+                without a Pullout status shows a dash instead of a false zero. */}
             <Tile
               label="Pullout"
-              value={first ? '—' : formatNumber(health?.billing_summary?.pullout)}
+              value={
+                first
+                  ? '—'
+                  : formatNumber(
+                      health?.billing_summary?.cards.find(
+                        (card) => card.key === 'pullout'
+                      )?.count
+                    )
+              }
               icon={<Users size={16} />}
               caption="equipment recovered"
             />
@@ -309,7 +320,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
 
             {/* Income by channel — the split finance reconciles against. */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {['cash', 'pnb', 'xendit'].map((key) => {
+              {['cash', 'pnb', 'portal'].map((key) => {
                 const channel = finance?.channels?.[key];
 
                 return (
@@ -437,7 +448,14 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
         <Card flush>
           <CardHeader
             title="Active System Alarms"
-            subtitle="Derived from operational thresholds, not a monitoring feed"
+            subtitle={
+              // States the floor whenever an age was clamped, so "40 days" on a
+              // job that plainly predates the migration is never read as its
+              // true age.
+              ops?.age_bounded && ops.reliable_from
+                ? `Ages counted from ${ops.reliable_from} — earlier records are not reliable`
+                : 'Derived from operational thresholds, not a monitoring feed'
+            }
             icon={<ShieldAlert size={16} />}
           />
           <CardBody>
