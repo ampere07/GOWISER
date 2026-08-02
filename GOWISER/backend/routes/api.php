@@ -147,6 +147,25 @@ Route::prefix('expenses-logs')->group(function () {
     Route::delete('/{id}', [ExpensesLogController::class , 'destroy']);
 });
 
+// Monthly Payables. Behind auth:sanctum, unlike the older expenses-logs routes above:
+// these rows are amounts owed to named vendors with account numbers on them, so the
+// endpoints get the session guard rather than relying on the SPA to be the only caller.
+Route::middleware('auth:sanctum')->prefix('monthly-payables')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'index']);
+    // Literal segments before /{id}, or the wildcard swallows them.
+    Route::get('/alert-count', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'alertCount']);
+    Route::post('/generate', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'generateMonthlyBatch']);
+    Route::post('/', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'show'])->whereNumber('id');
+    // POST+_method=PUT is how the frontend sends multipart updates; PHP does not
+    // populate $_FILES on a real PUT body.
+    Route::match(['put', 'post'], '/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'update'])->whereNumber('id');
+    Route::delete('/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'destroy'])->whereNumber('id');
+    Route::post('/{id}/payments', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'recordPayment'])->whereNumber('id');
+    Route::delete('/{id}/payments/{paymentId}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'deletePayment'])
+        ->whereNumber('id')->whereNumber('paymentId');
+});
+
 Route::prefix('expenses-categories')->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'index']);
     Route::post('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'store']);

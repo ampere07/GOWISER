@@ -19,8 +19,10 @@ import {
 } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice, SourceCell } from '../components/reporting/DatabaseFilter';
+import WidgetRange from '../components/reporting/WidgetRange';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
+import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
 import { TechData, TechnicianLocation } from '../types/reporting';
 import { formatNumber, formatTime, pluralise } from '../utils/format';
@@ -47,11 +49,32 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   const { filters, update, reset, databases } = useSectionFilters('tech');
 
-  const { data, loading, error, sourceLabel, substituted } = useReportingSection<TechData>(
-    reportingService.getTech,
-    filters,
-    refreshToken
-  );
+  // Every Tech widget carries its own range, as the other modules now do.
+  // Headline counts and workload share one because they are two views of the
+  // same question — who did what, over what period — and splitting them would
+  // let the summary contradict the table beneath it. Field positions and the
+  // roster are statements of now and take a range only so the control is
+  // consistent across the page.
+  const workloadRange = useWidgetRange('monthly');
+  const positionsRange = useWidgetRange('monthly');
+  const rosterRange = useWidgetRange('monthly');
+
+  const primary = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+    dateFrom: workloadRange.range.from,
+    dateTo: workloadRange.range.to,
+  });
+
+  const positions = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+    dateFrom: positionsRange.range.from,
+    dateTo: positionsRange.range.to,
+  });
+
+  const roster = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+    dateFrom: rosterRange.range.from,
+    dateTo: rosterRange.range.to,
+  });
+
+  const { data, loading, error, sourceLabel, substituted } = primary;
 
   const first = loading && !data;
 
@@ -63,7 +86,7 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
   const unattributed =
     (data?.unattributed.job_orders ?? 0) + (data?.unattributed.service_orders ?? 0);
 
-  const live = (data?.locations ?? []).filter((location) => location.is_live);
+  const live = (positions.data?.locations ?? []).filter((location) => location.is_live);
 
   // Only in aggregate mode. It matters more here than elsewhere: two branches can
   // employ people with the same name, and the rows are deliberately not merged.
@@ -96,7 +119,20 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
       />
 
       {/* ── Headline ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div className="min-w-0">
+            <h3 className={`font-bold text-base ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              Roster &amp; Workload
+            </h3>
+            <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              {data?.range_label ?? 'Selected range'}
+            </p>
+          </div>
+          <WidgetRange state={workloadRange} />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Technicians"
           value={formatNumber(data?.roster_count)}
@@ -112,7 +148,9 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
           icon={<Radio size={20} />}
           loading={first}
           caption={
-            data ? `of ${pluralise(data.locations.length, 'device')} reporting` : undefined
+            positions.data
+              ? `of ${pluralise(positions.data.locations.length, 'device')} reporting`
+              : undefined
           }
         />
         <StatCard
@@ -135,7 +173,8 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
               : 'nothing attributed in this range'
           }
         />
-      </div>
+        </div>
+      </Card>
 
       {/* Unattributed work is the number that says the table below is partial.
           Surfaced, not hidden, because a partial table read as complete is worse
@@ -171,6 +210,7 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
           title="Workload by Technician"
           subtitle={data?.range_label}
           badge={pluralise(workload.length, 'technician')}
+          actions={<WidgetRange state={workloadRange} />}
         />
         <Table>
           <Thead>
@@ -258,22 +298,25 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
           subtitle="Last reported location per technician device"
           icon={<MapPin size={16} />}
           actions={
-            data && data.locations.length > 0 ? (
-              <Pill tone={live.length > 0 ? 'success' : 'neutral'}>
-                {live.length}/{data.locations.length} live
-              </Pill>
-            ) : undefined
+            <div className="flex flex-wrap items-center gap-2 justify-end">
+              {positions.data && positions.data.locations.length > 0 && (
+                <Pill tone={live.length > 0 ? 'success' : 'neutral'}>
+                  {live.length}/{positions.data.locations.length} live
+                </Pill>
+              )}
+              <WidgetRange state={positionsRange} />
+            </div>
           }
         />
         <CardBody>
           <PanelState
-            loading={first}
-            empty={(data?.locations.length ?? 0) === 0}
+            loading={positions.loading && !positions.data}
+            empty={(positions.data?.locations.length ?? 0) === 0}
             emptyMessage="No technician devices have reported a position."
             height={160}
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {(data?.locations ?? []).map((location) => (
+              {(positions.data?.locations ?? []).map((location) => (
                 <LocationCard key={location.user_id} location={location} />
               ))}
             </div>
@@ -283,7 +326,11 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
 
       {/* ── Roster ───────────────────────────────────────────────────── */}
       <Card flush>
-        <CardHeader title="Roster" badge={pluralise(data?.roster.length ?? 0, 'technician')} />
+        <CardHeader
+          title="Roster"
+          badge={pluralise(roster.data?.roster.length ?? 0, 'technician')}
+          actions={<WidgetRange state={rosterRange} />}
+        />
         <Table>
           <Thead>
             <Th width="60px">#</Th>
@@ -294,13 +341,13 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
           <tbody>
             <TableState
               colSpan={4}
-              loading={first}
-              error={error}
-              empty={(data?.roster.length ?? 0) === 0}
+              loading={roster.loading && !roster.data}
+              error={roster.error}
+              empty={(roster.data?.roster.length ?? 0) === 0}
               emptyMessage="No technicians are registered."
             />
 
-            {(data?.roster ?? []).map((technician, index) => (
+            {(roster.data?.roster ?? []).map((technician, index) => (
               <Tr key={technician.id}>
                 <Td className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>{index + 1}</Td>
                 <Td className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>

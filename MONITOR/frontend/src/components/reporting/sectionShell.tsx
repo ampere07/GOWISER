@@ -9,17 +9,19 @@ import {
   ReportingFilters,
   ReportingSection,
 } from '../../types/reporting';
-import { monthStartIso, todayIso } from '../../utils/format';
-
-/** Month-to-date, as the source system defaults to. */
+/**
+ * The page-wide filters.
+ *
+ * No date range: that moved into each widget (see useWidgetRange), because one
+ * page-level period made the comparison these screens exist for — a month
+ * against a twelve-month trend — impossible to draw. What is left is genuinely
+ * page-wide.
+ */
 export const defaultFilters = (): ReportingFilters => ({
   // Defaults to every database. With one configured this is indistinguishable
   // from picking it; with eight it is the figure someone actually wants first.
   database: ALL_DATABASES,
-  dateFrom: monthStartIso(),
-  dateTo: todayIso(),
   branch: null,
-  period: 'monthly',
   branchPeriod: 'monthly',
   branchYear: new Date().getFullYear(),
   overdueSearch: '',
@@ -101,7 +103,8 @@ export const useSectionFilters = (section: ReportingSection) => {
 
   // Reset keeps the chosen database: it is a scope, not a filter someone is
   // trying to clear, and silently switching it back would move the ground under
-  // them.
+  // them. Widget ranges reset themselves — each owns its own state, and a page
+  // control reaching into them would undo a window someone deliberately set.
   const reset = useCallback(
     () => setFilters((current) => ({ ...defaultFilters(), database: current.database })),
     []

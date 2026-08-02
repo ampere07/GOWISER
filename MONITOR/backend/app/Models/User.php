@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Permissions;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -31,6 +32,7 @@ class User extends Authenticatable
         'last_name',
         'contact_number',
         'role_id',
+        'permission_overrides',
         'darkmode',
         'last_login',
         'active',
@@ -44,6 +46,7 @@ class User extends Authenticatable
     protected $casts = [
         'active' => 'boolean',
         'last_login' => 'datetime',
+        'permission_overrides' => 'array',
     ];
 
     protected $appends = [
@@ -73,14 +76,71 @@ class User extends Authenticatable
     }
 
     /**
-     * Sections of the dashboard this user may see. Falls back to the role's
-     * permission list; an empty list means "no access", never "all access".
+     * The role's own permission list, before any per-user override.
+     *
+     * An empty list means "no access", never "all access".
      */
-    public function permissionList(): array
+    public function rolePermissions(): array
     {
         $permissions = $this->role?->permissions;
 
         return is_array($permissions) ? $permissions : [];
+    }
+
+    /**
+     * Everything this user may do: the role's list, plus per-user grants, minus
+     * per-user denials.
+     *
+     * Deny is applied last and wins over both the grant list and the role. That
+     * ordering is what makes an override usable as a restriction — "this analyst
+     * keeps the Financial tab but not the revenue figures" — rather than only as
+     * an extension, which would leave a restriction expressible only by inventing
+     * another role.
+     *
+     * @return string[]
+     */
+    public function permissionList(): array
+    {
+        $overrides = is_array($this->permission_overrides) ? $this->permission_overrides : [];
+
+        $granted = array_merge(
+            $this->rolePermissions(),
+            Permissions::sanitise($overrides['grant'] ?? [])
+        );
+
+        $denied = Permissions::sanitise($overrides['deny'] ?? []);
+
+        return array_values(array_unique(array_diff($granted, $denied)));
+    }
+
+    /** The raw override record, in the shape the management screen edits. */
+    public function overrides(): array
+    {
+        $overrides = is_array($this->permission_overrides) ? $this->permission_overrides : [];
+
+        return [
+            'grant' => Permissions::sanitise($overrides['grant'] ?? []),
+            'deny' => Permissions::sanitise($overrides['deny'] ?? []),
+        ];
+    }
+
+    /** Lower-cased role name, or 'viewer' for a user with no role attached. */
+    public function roleName(): string
+    {
+        return $this->role ? strtolower(trim($this->role->role_name)) : 'viewer';
+    }
+
+    /**
+     * Whether this user's *role* is one the consolidated executive view is
+     * intended for.
+     *
+     * Deliberately separate from the module permission and checked in addition to
+     * it: that view puts every company's money on one screen, and a custom role
+     * should not acquire it merely by being granted a module id.
+     */
+    public function isExecutiveRole(): bool
+    {
+        return in_array($this->roleName(), Permissions::EXECUTIVE_ROLES, true);
     }
 
     /**

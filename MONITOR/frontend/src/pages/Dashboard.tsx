@@ -12,7 +12,11 @@ import FieldOperations from './FieldOperations';
 import Tech from './Tech';
 import Employee from './Employee';
 import Databases from './Databases';
+import ExecutiveOverview from './ExecutiveOverview';
+import UserManagement from './UserManagement';
+import AuditTrail from './AuditTrail';
 import { UserData } from '../types/api';
+import { PermissionContext } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import { useMonitorStore } from '../store/monitorStore';
 import { monitorService } from '../services/monitorService';
@@ -49,8 +53,30 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, [reporting]);
 
   const allowed = useMemo(
-    () => visibleMenuItems(user.permissions, capabilities, servableSections),
-    [user.permissions, capabilities, servableSections]
+    () =>
+      visibleMenuItems(
+        user.permissions,
+        capabilities,
+        servableSections,
+        Boolean(user.is_executive_role)
+      ),
+    [user.permissions, capabilities, servableSections, user.is_executive_role]
+  );
+
+  /**
+   * The effective permission list, shared with every panel below.
+   *
+   * Memoised on the identity of the list rather than rebuilt each render: it is
+   * a context value, and a new object every render would re-render every
+   * consumer — which on these pages is most of the widget tree.
+   */
+  const permissionContext = useMemo(
+    () => ({
+      permissions: user.permissions ?? [],
+      isExecutiveRole: Boolean(user.is_executive_role),
+      user,
+    }),
+    [user]
   );
 
   const [activeSection, setActiveSection] = useState(() => allowed[0]?.id ?? 'overview');
@@ -144,6 +170,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     'field-operations',
     'tech',
     'employee',
+    // Composed server-side across every database, so it has no source to switch.
+    'executive-overview',
+    'users',
+    'audit',
   ].includes(activeSection);
 
   const renderContent = () => {
@@ -164,6 +194,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
 
     switch (activeSection) {
+      case 'executive-overview':
+        return <ExecutiveOverview refreshToken={refreshToken} />;
+      case 'users':
+        return <UserManagement refreshToken={refreshToken} />;
+      case 'audit':
+        return <AuditTrail refreshToken={refreshToken} />;
       case 'subscriber-analytics':
         return <SubscriberAnalytics refreshToken={refreshToken} />;
       case 'financial':
@@ -191,6 +227,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   };
 
   return (
+    <PermissionContext.Provider value={permissionContext}>
     <div className={`h-screen flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
       <div className="flex-shrink-0">
         <Header
@@ -225,6 +262,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               permissions={user.permissions}
               capabilities={capabilities}
               servableSections={servableSections}
+              isExecutiveRole={Boolean(user.is_executive_role)}
             />
           </div>
         </div>
@@ -234,6 +272,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         </div>
       </div>
     </div>
+    </PermissionContext.Provider>
   );
 };
 

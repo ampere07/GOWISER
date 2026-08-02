@@ -130,6 +130,102 @@ return [
 
     'non_staff_roles' => ['Customer'],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Income channels
+    |--------------------------------------------------------------------------
+    |
+    | Neither monitored system stores a collection channel. Both store a
+    | free-text payment method that cashiers and gateways write a dozen ways, so
+    | the three channels finance reconciles against — Cash, PNB and Xendit — are
+    | derived by matching fragments of that string.
+    |
+    | Matched case-insensitively as substrings, first channel wins, in the order
+    | written here. 'pnb' therefore has to come before 'cash', or a method
+    | recorded as "PNB cash deposit" is counted over the counter.
+    |
+    | Anything unmatched lands in "Other" rather than being folded into Cash. The
+    | residue is the signal that a new payment method appeared; absorbing it
+    | would hide exactly that.
+    |
+    */
+
+    'income_channels' => [
+        'pnb' => ['pnb', 'philippine national bank', 'bank transfer', 'bank deposit', 'bank'],
+        'xendit' => ['xendit', 'portal', 'online', 'gcash', 'maya', 'paymaya', 'e-wallet', 'ewallet', 'card'],
+        'cash' => ['cash', 'over the counter', 'otc', 'walk-in', 'walkin', 'office', 'counter'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Capital expenditure
+    |--------------------------------------------------------------------------
+    |
+    | Expense-type names that mean an asset was bought rather than a period cost
+    | incurred. Netting CapEx against one month's income understates that month
+    | and overstates every later one, which is why the Financial module reports
+    | the two apart.
+    |
+    | Unmatched types are treated as OpEx — true of the large majority of an
+    | ISP's ledger, and the safer default: a CapEx item miscounted as OpEx
+    | understates profit, which is the error that gets noticed.
+    |
+    */
+
+    'capex_patterns' => [
+        'equipment', 'hardware', 'router', 'switch', 'onu', 'olt', 'server',
+        'vehicle', 'motorcycle', 'truck', 'tower', 'construction', 'building',
+        'fiber', 'fibre', 'cable roll', 'capital', 'furniture', 'computer',
+        'laptop', 'machinery', 'land', 'improvement', 'asset',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Recurring payables
+    |--------------------------------------------------------------------------
+    |
+    | Expense-type names that come back every period and therefore need a monthly
+    | paid/unpaid tick on the Accounts Payable panel.
+    |
+    | A positive list rather than a list of one-offs: fixed costs are a small,
+    | stable, nameable set; the things bought once are unbounded.
+    |
+    | NETMANAGER's own period_type column already settles this for rows booked
+    | 'monthly' or 'yearly' — see ExpenseClassifier::recurrence, which trusts that
+    | first and only falls back to these names.
+    |
+    */
+
+    'recurring_patterns' => [
+        'rent', 'rental', 'lease', 'salary', 'salaries', 'payroll', 'wage',
+        'electric', 'power', 'water', 'internet', 'bandwidth', 'ip transit',
+        'subscription', 'insurance', 'permit', 'license', 'licence',
+        'sss', 'philhealth', 'pag-ibig', 'pagibig', 'tax', 'loan', 'amortization',
+        'maintenance', 'security', 'janitorial', 'allowance', 'utilities',
+        'colocation', 'co-location', 'hosting', 'telephone', 'communication',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Churn assumption for projected loss
+    |--------------------------------------------------------------------------
+    |
+    | Projected churn loss is the monthly revenue at risk from accounts that have
+    | already lapsed. `at_risk_factor` is the share of currently-disconnected
+    | subscribers assumed not to return.
+    |
+    | 1.0 would claim every lapsed account is lost, which the collections team
+    | disproves every month; 0 would claim none are. The default is deliberately
+    | conservative and deliberately visible — the figure is labelled with the
+    | assumption on screen, because a projection whose assumption is buried is
+    | read as a measurement.
+    |
+    */
+
+    'churn' => [
+        'at_risk_factor' => env('REPORTING_CHURN_FACTOR', 0.6),
+    ],
+
     'company' => [
         'name' => env('REPORT_COMPANY_NAME', 'GO WISER CORPORATION'),
         'description' => env('REPORT_COMPANY_DESC', 'Internet Service Provider'),

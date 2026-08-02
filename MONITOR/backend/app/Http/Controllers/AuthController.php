@@ -130,11 +130,18 @@ class AuthController extends Controller
             'username' => $user->username,
             'email' => $user->email_address,
             'full_name' => $user->full_name,
-            'role' => $user->role ? strtolower($user->role->role_name) : 'viewer',
+            'role' => $user->roleName(),
             // Cast: MySQL hands this back as an int, SQLite as a string, and
             // the frontend types it as a number.
             'role_id' => $user->role_id !== null ? (int) $user->role_id : null,
+            // The effective list — role plus per-user grants, minus per-user
+            // denials. What the frontend hides on must be what the middleware
+            // enforces on, or a control appears that every click then rejects.
             'permissions' => $user->permissionList(),
+            // Governs the consolidated executive view, which needs an executive
+            // role on top of the module permission. Sent so the sidebar can hide
+            // the tab rather than offering a page that 403s on open.
+            'is_executive_role' => $user->isExecutiveRole(),
         ];
     }
 }

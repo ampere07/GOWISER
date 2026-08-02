@@ -1,12 +1,17 @@
 <?php
 
+use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\DatabaseConnectionController;
+use App\Http\Controllers\Api\ExecutiveOverviewController;
 use App\Http\Controllers\Api\FinancialsController;
 use App\Http\Controllers\Api\MonitorController;
+use App\Http\Controllers\Api\PayableController;
 use App\Http\Controllers\Api\ReportingController;
 use App\Http\Controllers\Api\SiteController;
+use App\Http\Controllers\Api\UserManagementController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\SettingsColorPaletteController;
+use App\Support\Permissions;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -100,7 +105,59 @@ Route::middleware(['auth', 'executive'])->prefix('reporting')->group(function ()
 
     // Line-level data for the three print layouts. Never cached: a printed
     // report is a record someone signs.
-    Route::get('/printable', [ReportingController::class, 'printable']);
+    //
+    // Gated separately from reading the Financial module. Printing puts the
+    // ledger on paper and out of the building, which is a stronger act than
+    // looking at it, and several roles are meant to do the second but not the
+    // first.
+    Route::get('/printable', [ReportingController::class, 'printable'])
+        ->middleware('permission:' . Permissions::ACTION_FINANCIAL_EXPORT);
+});
+
+/*
+ * Module 5 — the consolidated C-suite summary.
+ *
+ * Composed from the sections above rather than from its own SQL, so it can never
+ * disagree with the modules it summarises. The controller enforces a role check
+ * on top of the module permission: this view puts every company's figures on one
+ * page, which is not access a custom role should acquire sideways.
+ */
+Route::middleware(['auth', 'executive'])->group(function () {
+    Route::get('/executive/overview', [ExecutiveOverviewController::class, 'show']);
+});
+
+/*
+ * The write endpoints outside the Databases page.
+ *
+ * All of them write to MONITOR's own tables. The monitored databases stay
+ * read-only at the connection level in SourceRegistry::connection(), which no
+ * request can bypass — so none of these routes sit behind the 'executive'
+ * middleware, which would reject them for not being GETs.
+ *
+ * Each carries the specific permission it needs rather than a blanket admin
+ * role: approving a payable, editing a user and reading the audit trail are
+ * three different jobs and are granted independently.
+ */
+Route::middleware('auth')->group(function () {
+    Route::post('/payables/toggle', [PayableController::class, 'toggle'])
+        ->middleware('permission:' . Permissions::ACTION_PAYABLE_TOGGLE);
+
+    Route::get('/audit-logs', [AuditLogController::class, 'index'])
+        ->middleware('permission:' . Permissions::ACTION_AUDIT_VIEW);
+
+    Route::prefix('users')
+        ->middleware('permission:' . Permissions::ACTION_USERS_MANAGE)
+        ->group(function () {
+            Route::get('/', [UserManagementController::class, 'index']);
+            Route::post('/', [UserManagementController::class, 'store']);
+            Route::put('/{user}', [UserManagementController::class, 'update']);
+            Route::delete('/{user}', [UserManagementController::class, 'destroy']);
+
+            // Reshaping a role changes what everyone holding it can see, so it
+            // needs its own grant beyond being able to edit a single user.
+            Route::put('/roles/{role}', [UserManagementController::class, 'updateRole'])
+                ->middleware('permission:' . Permissions::ACTION_ROLES_MANAGE);
+        });
 });
 
 /*

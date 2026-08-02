@@ -85,9 +85,16 @@ class GowiserReportsDriver implements ReportsDriver
             'range_label' => $this->rangeLabel($from, $to),
 
             'kpi' => $this->accountKpis($db, $anchor),
+
+            // The four billing-status counters the summary header reports.
+            'billing_summary' => StatusMap::billingSummary($status['raw']),
+
             'status' => $status,
             'plans' => $this->planMix($db),
-            'top_barangays' => $this->topBarangays($db, $params),
+
+            // Every barangay, not a top ten — see barangayBreakdown.
+            'barangays' => $this->barangayBreakdown($db, $params),
+
             'growth' => [
                 'new_in_range' => $this->newAccounts($db, $from, $to),
                 'expected_mrc' => round($this->expectedMrc($db), 2),
@@ -106,10 +113,11 @@ class GowiserReportsDriver implements ReportsDriver
      */
     private function accountKpis(ConnectionInterface $db, Carbon $anchor): array
     {
+        // Arrears counts are gone with the widget that showed them. The overdue
+        // ledger below still reports who owes and how much, which is the
+        // actionable form of the same question; a headline count of accounts in
+        // arrears was a number nobody could do anything with.
         $row = $db->table('billing_accounts')
-            ->selectRaw('COUNT(*) AS total')
-            ->selectRaw('COALESCE(SUM(account_balance > 0), 0) AS in_arrears')
-            ->selectRaw('COALESCE(SUM(CASE WHEN account_balance > 0 THEN account_balance ELSE 0 END), 0) AS receivables')
             ->selectRaw('COALESCE(SUM(created_at >= ?), 0) AS new_30day', [
                 $anchor->copy()->subDays(30)->startOfDay()->toDateTimeString(),
             ])
@@ -119,13 +127,14 @@ class GowiserReportsDriver implements ReportsDriver
         $expiring = $this->prepaidExpiring($db, $anchor);
 
         return [
-            'total' => (int) ($row->total ?? 0),
+            // Counts subscribers, so pending applications are excluded — the
+            // status map already dropped them, and taking the total from there
+            // keeps the header and the pie chart agreeing.
+            'total' => $status['total'],
             'active' => $status['active'],
-            'pending' => $status['pending'],
-            'suspended' => $status['suspended'],
-            'expired' => $status['expired'],
-            'in_arrears' => (int) ($row->in_arrears ?? 0),
-            'receivables' => round((float) ($row->receivables ?? 0), 2),
+            'vip' => $status['vip'],
+            'restricted' => $status['restricted'],
+            'disconnected' => $status['disconnected'],
             'new_30day' => (int) ($row->new_30day ?? 0),
             'expiring_3day' => $expiring['expiring_3day'],
             'expiring_7day' => $expiring['expiring_7day'],
@@ -212,24 +221,23 @@ class GowiserReportsDriver implements ReportsDriver
             $total += $count;
         }
 
-        /** Case-insensitive lookup across the labels the data actually has. */
-        $find = function (array $names) use ($byStatus): int {
-            foreach ($byStatus as $label => $count) {
-                if (in_array(strtolower(trim($label)), $names, true)) {
-                    return $count;
-                }
-            }
-
-            return 0;
-        };
+        $reported = StatusMap::rewrite($byStatus);
 
         return [
-            'total' => $total,
-            'active' => $find(['active']),
-            'pending' => $find(['in progress', 'pending']),
-            'suspended' => $find(['suspended']),
-            'expired' => $find(['overdue', 'expired']),
-            'by_status' => $byStatus,
+            // The reported total, not every row: pending applications are not
+            // subscribers and StatusMap has already dropped them.
+            'total' => array_sum($reported),
+            'active' => $reported['Active'] ?? 0,
+            'vip' => $reported['VIP'] ?? 0,
+            'restricted' => $reported['Restricted'] ?? 0,
+            'disconnected' => $reported['Disconnected'] ?? 0,
+            'inactive' => $reported['Inactive'] ?? 0,
+            'pullout' => $reported['Pullout'] ?? 0,
+            'by_status' => $reported,
+            // The source's own vocabulary, kept so the billing summary can bucket
+            // on it and so a figure can be traced back to what GOWISER stores.
+            'raw' => $byStatus,
+            'excluded' => $total - array_sum($reported),
         ];
     }
 
@@ -284,13 +292,22 @@ class GowiserReportsDriver implements ReportsDriver
             ->sum(DB::raw('COALESCE(pl.price, 0)'));
     }
 
-    private function topBarangays(ConnectionInterface $db, array $params): array
+    /**
+     * Every barangay, with the billing-status split management asked for.
+     *
+     * Uncapped, unlike the plan mix beside it: this is a table answering a
+     * coverage question, and a top ten drops exactly the thin coverage the
+     * question is about. Sorting is left to the client so the same payload
+     * serves a table sorted by any column.
+     */
+    private function barangayBreakdown(ConnectionInterface $db, array $params): array
     {
         $query = $db->table('customers as c')
             ->join('billing_accounts as ba', 'ba.customer_id', '=', 'c.id')
             ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
             ->whereNotNull('c.barangay')
-            ->where('c.barangay', '<>', '');
+            ->where('c.barangay', '<>', '')
+            ->whereRaw(StatusMap::excludeSql('bs.status_name'));
 
         foreach ([
             'c.region' => $params['geo_region'] ?? '',
@@ -306,11 +323,17 @@ class GowiserReportsDriver implements ReportsDriver
             ->selectRaw('c.city AS municipality')
             ->selectRaw('c.region AS province')
             ->selectRaw('COUNT(*) AS total')
-            ->selectRaw("COALESCE(SUM(LOWER(COALESCE(bs.status_name, '')) = 'active'), 0) AS active")
-            ->selectRaw("COALESCE(SUM(LOWER(COALESCE(bs.status_name, '')) IN ('overdue', 'expired')), 0) AS expired")
+            ->selectRaw(StatusMap::bucketSql('bs.status_name', 'active') . ' AS active')
+            ->selectRaw(StatusMap::bucketSql('bs.status_name', 'vip') . ' AS vip')
+            ->selectRaw(StatusMap::bucketSql('bs.status_name', 'inactive') . ' AS inactive')
+            ->selectRaw(StatusMap::bucketSql('bs.status_name', 'pullout') . ' AS pullout')
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'suspended'), 0) AS restricted")
+            ->selectRaw(
+                "COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) IN ('overdue', 'expired', 'disconnected')), 0)"
+                . ' AS disconnected'
+            )
             ->groupBy('c.barangay', 'c.city', 'c.region')
-            ->orderByRaw('COUNT(*) DESC')
-            ->limit(self::TOP_N)
+            ->orderBy('c.barangay')
             ->get()
             ->map(fn ($row) => [
                 'barangay' => (string) $row->barangay,
@@ -318,7 +341,11 @@ class GowiserReportsDriver implements ReportsDriver
                 'province' => (string) ($row->province ?? ''),
                 'total' => (int) $row->total,
                 'active' => (int) $row->active,
-                'expired' => (int) $row->expired,
+                'vip' => (int) $row->vip,
+                'inactive' => (int) $row->inactive,
+                'pullout' => (int) $row->pullout,
+                'restricted' => (int) $row->restricted,
+                'disconnected' => (int) $row->disconnected,
             ])
             ->all();
     }
@@ -488,6 +515,13 @@ class GowiserReportsDriver implements ReportsDriver
         $expectedMrc = $this->expectedMrc($db);
         $net = $revenue['total'] - $expenses['total'];
 
+        // Computed once and regrouped, rather than queried again per panel: two
+        // queries over the same rows can disagree if one lands between them.
+        $byMethod = $this->revenueByMethod($db, $from, $to);
+        $byExpenseType = $this->expensesByCategory($db, $expensePeriod, $from, $to);
+
+        $base = $this->subscriberBase($db);
+
         return [
             'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
@@ -526,9 +560,29 @@ class GowiserReportsDriver implements ReportsDriver
                 'points' => $this->trendSeries($db, $trendPeriod, $anchor),
             ],
 
+            // Cash / PNB / Xendit, regrouped from by_method.
+            'income_channels' => IncomeChannels::summarise($byMethod),
+
+            'executive_metrics' => ExecutiveMetrics::build(
+                $expectedMrc,
+                $revenue['total'],
+                $base['active'],
+                $base['disconnected'],
+                $base['lapsed_mrc'],
+                $this->rangeLabel($from, $to)
+            ),
+
+            'opex_capex' => ExpenseClassifier::opexCapex($byExpenseType),
+
+            'payables' => PayablesLedger::build(
+                $this->sourceKey($params),
+                $to,
+                $this->payableLines($db, $expensePeriod, $from, $to)
+            ),
+
             'by_plan' => $this->revenueByPlan($db, $from, $to),
-            'by_method' => $this->revenueByMethod($db, $from, $to),
-            'by_expense_type' => $this->expensesByCategory($db, $expensePeriod, $from, $to),
+            'by_method' => $byMethod,
+            'by_expense_type' => $byExpenseType,
             'payment_notes' => $this->paymentRemarks($db, $from, $to),
 
             // No branch dimension in this schema.
@@ -541,8 +595,91 @@ class GowiserReportsDriver implements ReportsDriver
             ],
 
             'periods' => $this->summaryPeriods($db, $anchor),
-            'recent_payments' => $this->recentPayments($db),
         ];
+    }
+
+    /**
+     * The subscriber base behind the executive metrics.
+     *
+     * `lapsed_mrc` is the monthly charge carried by accounts that have already
+     * disconnected — the revenue genuinely at risk, rather than a headcount times
+     * an average, which misstates it wherever plan prices differ.
+     */
+    private function subscriberBase(ConnectionInterface $db): array
+    {
+        $lapsed = "LOWER(TRIM(COALESCE(bs.status_name, ''))) IN ('overdue', 'expired', 'disconnected')";
+
+        $row = $db->table('billing_accounts as ba')
+            ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) IN ('active', 'vip')), 0) AS active")
+            ->selectRaw("COALESCE(SUM({$lapsed}), 0) AS disconnected")
+            ->selectRaw("COALESCE(SUM(CASE WHEN {$lapsed} THEN COALESCE(pl.price, 0) ELSE 0 END), 0) AS lapsed_mrc")
+            ->first();
+
+        return [
+            'active' => (int) ($row->active ?? 0),
+            'disconnected' => (int) ($row->disconnected ?? 0),
+            'lapsed_mrc' => (float) ($row->lapsed_mrc ?? 0),
+        ];
+    }
+
+    /**
+     * Payable lines for the range, one per expense category.
+     *
+     * Grouped by category rather than listed per row for the same reason the
+     * NETMANAGER driver does it: an accounts-payable panel is about obligations,
+     * and the settlement tick belongs to the obligation for the month, not to an
+     * individual ledger entry that may be re-keyed.
+     */
+    private function payableLines(
+        ConnectionInterface $db,
+        string $granularity,
+        string $from,
+        string $to
+    ): array {
+        $label = "COALESCE(NULLIF(ec.category_name, ''), NULLIF(e.category, ''), '(Uncategorized)')";
+
+        return $this->expenseRows($db, $granularity, $from, $to)
+            ->leftJoin('expenses_category as ec', 'ec.id', '=', 'e.category_id')
+            ->selectRaw("{$label} AS label")
+            ->selectRaw('COALESCE(ec.id, 0) AS category_id')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('COALESCE(SUM(e.amount), 0) AS total')
+            ->selectRaw('MAX(e.date) AS last_booked')
+            ->selectRaw("MAX(LOWER(COALESCE(e.expense_type, 'daily'))) AS period_type")
+            ->groupBy('label', 'category_id')
+            ->orderByRaw('COALESCE(SUM(e.amount), 0) DESC')
+            ->get()
+            ->map(fn ($row) => [
+                // Falls back to the label when the row carries only the legacy
+                // free-text category, so those rows still get a stable key
+                // instead of all collapsing onto category 0.
+                'ref' => (int) $row->category_id > 0
+                    ? 'category:' . (int) $row->category_id
+                    : 'category-name:' . strtolower(trim((string) $row->label)),
+                'label' => (string) $row->label,
+                'type' => (string) $row->label,
+                'amount' => round((float) $row->total, 2),
+                'count' => (int) $row->cnt,
+                'period_type' => (string) $row->period_type,
+                'last_booked_at' => $row->last_booked,
+            ])
+            ->all();
+    }
+
+    /**
+     * Which database this driver is answering for.
+     *
+     * Travels in the params because a driver is handed a connection, not a key.
+     * The payables settlement table is keyed per source: two companies both owe
+     * rent, and one paying it does not settle the other's.
+     */
+    private function sourceKey(array $params): string
+    {
+        $key = trim((string) ($params['source_key'] ?? ''));
+
+        return $key !== '' ? $key : 'gowiser';
     }
 
     /** Count, total, average and largest collection in the range. */
@@ -703,41 +840,6 @@ class GowiserReportsDriver implements ReportsDriver
         }
 
         return array_values($years);
-    }
-
-    private function recentPayments(ConnectionInterface $db): array
-    {
-        return $this->collectedTransactions($db)
-            ->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 't.account_no')
-            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
-            ->select(
-                't.id',
-                't.or_no',
-                't.account_no',
-                't.received_payment',
-                't.payment_method',
-                't.status',
-                't.payment_date',
-                'c.first_name',
-                'c.last_name'
-            )
-            // Ordered by when the row was written, not the payment date: this is
-            // an activity feed, and a back-dated payment entered just now belongs
-            // at the top of it.
-            ->orderByDesc('t.created_at')
-            ->limit(10)
-            ->get()
-            ->map(fn ($row) => [
-                'id' => (string) $row->id,
-                'or_number' => (string) ($row->or_no ?? ''),
-                'account_number' => (string) ($row->account_no ?? ''),
-                'subscriber' => $this->fullName($row->first_name ?? '', $row->last_name ?? ''),
-                'amount' => round((float) $row->received_payment, 2),
-                'method' => (string) ($row->payment_method ?? ''),
-                'status' => strtolower((string) ($row->status ?? '')),
-                'payment_date' => $row->payment_date,
-            ])
-            ->all();
     }
 
     // ── Expenses ─────────────────────────────────────────────────────────
@@ -1199,6 +1301,13 @@ class GowiserReportsDriver implements ReportsDriver
             ],
             'series' => $this->operationsSeries($db, $from, $to),
             'turnaround' => $this->operationsTurnaround($db, $from, $to),
+
+            // Average completion time per work-order type. The headline
+            // turnaround above answers "how long does a job take"; this answers
+            // "which kind of job is the slow one", which is the question that
+            // leads somewhere.
+            'turnaround_by_type' => $this->turnaroundByType($db, $from, $to),
+
             'concerns' => $this->serviceOrderConcerns($db, $from, $to),
             'repair_categories' => $this->serviceOrderRepairs($db, $from, $to),
             'recent' => $this->recentJobOrders($db),
@@ -1330,6 +1439,85 @@ class GowiserReportsDriver implements ReportsDriver
             'job_orders' => $shape($jobs),
             'service_orders' => $shape($services),
         ];
+    }
+
+    /**
+     * Average time on site, segmented by the type of work order.
+     *
+     * Job orders are new connections and service orders are repairs, and they
+     * genuinely take different amounts of time — so a single blended average
+     * tells a field manager nothing about which queue is slipping. Service orders
+     * are split further by repair category where the row carries one, which is
+     * where the actionable difference usually is.
+     *
+     * Minutes, from the technician app's own start/end stamps, consistent with
+     * operationsTurnaround. Rows missing either stamp are excluded rather than
+     * counted as instantaneous.
+     */
+    private function turnaroundByType(ConnectionInterface $db, string $from, string $to): array
+    {
+        // Read through ?? throughout: an aggregate over no matching rows yields
+        // NULL columns and first() itself can be null, so a direct dereference is
+        // not safe here even though the callers guard on the count.
+        $shape = function ($row, string $label, ?string $group = null): array {
+            $average = $row->avg_minutes ?? null;
+            $longest = $row->max_minutes ?? null;
+
+            return [
+                'label' => $label,
+                'group' => $group,
+                'closed' => (int) ($row->cnt ?? 0),
+                'average_minutes' => $average !== null ? round((float) $average, 1) : null,
+                'longest_minutes' => $longest !== null ? (int) $longest : null,
+                'unit' => 'minutes',
+            ];
+        };
+
+        $measured = fn (string $table) => $db->table($table)
+            ->whereBetween(DB::raw('DATE(end_time)'), [$from, $to])
+            ->whereNotNull('start_time')
+            ->whereNotNull('end_time')
+            ->whereRaw('end_time >= start_time');
+
+        $rows = [];
+
+        $jobs = $measured('job_orders')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS avg_minutes')
+            ->selectRaw('MAX(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS max_minutes')
+            ->first();
+
+        if ((int) ($jobs->cnt ?? 0) > 0) {
+            $rows[] = $shape($jobs, 'Job Orders (new connections)', 'job_orders');
+        }
+
+        $services = $measured('service_orders')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS avg_minutes')
+            ->selectRaw('MAX(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS max_minutes')
+            ->first();
+
+        if ((int) ($services->cnt ?? 0) > 0) {
+            $rows[] = $shape($services, 'Service Orders (repairs)', 'service_orders');
+        }
+
+        $byCategory = $measured('service_orders')
+            ->whereNotNull('repair_category')
+            ->where('repair_category', '<>', '')
+            ->selectRaw('repair_category AS label')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS avg_minutes')
+            ->selectRaw('MAX(TIMESTAMPDIFF(MINUTE, start_time, end_time)) AS max_minutes')
+            ->groupBy('label')
+            ->orderByRaw('AVG(TIMESTAMPDIFF(MINUTE, start_time, end_time)) DESC')
+            ->limit(self::TOP_N)
+            ->get();
+
+        foreach ($byCategory as $row) {
+            $rows[] = $shape($row, (string) $row->label, 'service_orders');
+        }
+
+        return $rows;
     }
 
     private function serviceOrderConcerns(ConnectionInterface $db, string $from, string $to): array
