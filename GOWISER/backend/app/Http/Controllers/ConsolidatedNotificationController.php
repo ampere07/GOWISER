@@ -67,16 +67,6 @@ class ConsolidatedNotificationController extends Controller
             // job orders cannot turn this into an unbounded read.
             $jobCandidates = DB::table('job_orders')
                 ->join('applications', 'job_orders.application_id', '=', 'applications.id')
-                ->leftJoin('application_visits as av', function ($join) {
-                    // Latest visit for the application: a job order can be visited
-                    // more than once, and it is the most recent attempt that
-                    // describes the current state. Correlated on the indexed
-                    // application_id so this stays a keyed lookup.
-                    $join->on('av.id', '=', DB::raw(
-                        '(SELECT MAX(av2.id) FROM application_visits av2'
-                        . ' WHERE av2.application_id = job_orders.application_id)'
-                    ));
-                })
                 ->where('job_orders.onsite_status', 'Done')
                 ->orderBy('job_orders.updated_at', 'desc')
                 ->limit(min($limit * self::SUPPRESSION_OVERFETCH, self::SUPPRESSION_OVERFETCH_CAP))
@@ -84,7 +74,7 @@ class ConsolidatedNotificationController extends Controller
                     'job_orders.id',
                     'job_orders.updated_at',
                     'job_orders.billing_status',
-                    'av.visit_status',
+                    'job_orders.onsite_status',
                     'applications.first_name',
                     'applications.last_name',
                     'applications.desired_plan'
@@ -95,7 +85,7 @@ class ConsolidatedNotificationController extends Controller
 
             $jobCompeltions = $jobCandidates
                 ->filter(function ($job) use ($guard) {
-                    $reason = $guard->reasonFor($job->visit_status, $job->billing_status);
+                    $reason = $guard->reasonFor($job->billing_status, $job->onsite_status);
 
                     if ($reason === null) {
                         return true;
@@ -103,8 +93,8 @@ class ConsolidatedNotificationController extends Controller
 
                     $guard->logSuppressed($job->id, $reason, [
                         'feed' => 'consolidated',
-                        'visit_status' => $job->visit_status,
                         'billing_status' => $job->billing_status,
+                        'onsite_status' => $job->onsite_status,
                     ]);
 
                     return false;

@@ -36,15 +36,6 @@ class JobOrderNotificationController extends Controller
             // query — see that class for why each one gates the notification.
             $jobOrders = DB::table('job_orders')
                 ->join('applications', 'job_orders.application_id', '=', 'applications.id')
-                ->leftJoin('application_visits as av', function ($join) {
-                    // Latest visit for the application: a failed first visit
-                    // followed by a successful revisit must not be judged on the
-                    // stale row. Correlated on the indexed application_id.
-                    $join->on('av.id', '=', DB::raw(
-                        '(SELECT MAX(av2.id) FROM application_visits av2'
-                        . ' WHERE av2.application_id = job_orders.application_id)'
-                    ));
-                })
                 ->where('job_orders.onsite_status', 'Done')
                 // We want recent updates
                 ->orderBy('job_orders.updated_at', 'desc')
@@ -53,7 +44,7 @@ class JobOrderNotificationController extends Controller
                     'job_orders.id',
                     'job_orders.updated_at',
                     'job_orders.billing_status',
-                    'av.visit_status',
+                    'job_orders.onsite_status',
                     'applications.first_name',
                     'applications.last_name',
                     'applications.desired_plan',
@@ -61,7 +52,7 @@ class JobOrderNotificationController extends Controller
                 )
                 ->get()
                 ->filter(function ($jobOrder) use ($guard) {
-                    $reason = $guard->reasonFor($jobOrder->visit_status, $jobOrder->billing_status);
+                    $reason = $guard->reasonFor($jobOrder->billing_status, $jobOrder->onsite_status);
 
                     if ($reason === null) {
                         return true;
@@ -69,8 +60,8 @@ class JobOrderNotificationController extends Controller
 
                     $guard->logSuppressed($jobOrder->id, $reason, [
                         'feed' => 'job_order_completions',
-                        'visit_status' => $jobOrder->visit_status,
                         'billing_status' => $jobOrder->billing_status,
+                        'onsite_status' => $jobOrder->onsite_status,
                     ]);
 
                     return false;

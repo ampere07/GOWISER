@@ -9,19 +9,14 @@ use Illuminate\Support\Facades\Log;
  * Decides whether a job order is allowed to appear in a JO-number notification.
  *
  * A JO notification names the job order by number and tells the reader the work
- * is finished. That claim is only true once BOTH halves of the job order have
+ * is finished. That claim is only true once BOTH statuses of the job order have
  * landed:
  *
- *   visit_status    the technician's visit on the linked application. While it
- *                   is still Pending nobody has confirmed the install happened,
- *                   so announcing a completed JO is announcing something that
- *                   has not been observed.
+ *   billing_status  the job order's own billing state. If it is still Pending,
+ *                   the JO has not been billed yet.
  *
- *   billing_status  the job order's own billing state. JobOrderController@store
- *                   defaults it to 'Pending', and a JO that has not been billed
- *                   is not finished from the business's side — the notification
- *                   drives follow-up work that would then be done against an
- *                   account with no charge on it.
+ *   onsite_status   the job order's own onsite work state. While it is still
+ *                   Pending the onsite installation work is not completed yet.
  *
  * Either one pending suppresses the notification. Suppression is logged with the
  * JO id and the reason, because "the notification never arrived" is otherwise
@@ -40,14 +35,12 @@ class JobOrderNotificationGuard
      * Compared case-insensitively after trimming: the column is free-text
      * varchar written by several different forms, and production data carries
      * 'Pending', 'pending' and ' Pending ' interchangeably. Blank and NULL are
-     * deliberately NOT treated as pending — a job order that predates the
-     * billing_status column has no value at all, and suppressing every one of
-     * those would silence the feed for all historical work.
+     * deliberately NOT treated as pending.
      */
     private const PENDING_STATES = ['pending'];
 
-    public const REASON_VISIT_PENDING = 'visit_status is pending';
     public const REASON_BILLING_PENDING = 'billing_status is pending';
+    public const REASON_ONSITE_PENDING = 'onsite_status is pending';
 
     /**
      * Job order ids that must NOT be notified, mapped to why.
@@ -55,12 +48,6 @@ class JobOrderNotificationGuard
      * One query for the whole batch rather than one per job order: these feeds
      * render a page of notifications at a time, and a per-row check would be a
      * round trip per notification on an endpoint the header polls.
-     *
-     * The visit joined is the most recent one for the application. A job order's
-     * application can be visited more than once (a failed first visit, then a
-     * successful revisit) and it is the latest attempt that describes the
-     * current state — an old Pending row must not suppress a job order whose
-     * revisit completed.
      *
      * @param  iterable<int|string>  $jobOrderIds
      * @return array<int,string>  [job_order_id => reason]
@@ -74,25 +61,14 @@ class JobOrderNotificationGuard
         }
 
         $rows = DB::table('job_orders as jo')
-            ->leftJoin('application_visits as av', function ($join) {
-                // Correlated on the indexed application_id, so this stays a
-                // keyed lookup per job order rather than a scan of the visits
-                // table. MAX(id) rather than MAX(timestamp): timestamp is
-                // nullable here and id is monotonic, so it is the reliable
-                // "latest row" for this table.
-                $join->on('av.id', '=', DB::raw(
-                    '(SELECT MAX(av2.id) FROM application_visits av2'
-                    . ' WHERE av2.application_id = jo.application_id)'
-                ));
-            })
             ->whereIn('jo.id', $ids)
-            ->select('jo.id', 'jo.billing_status', 'av.visit_status')
+            ->select('jo.id', 'jo.billing_status', 'jo.onsite_status')
             ->get();
 
         $suppressed = [];
 
         foreach ($rows as $row) {
-            $reason = $this->reasonFor($row->visit_status, $row->billing_status);
+            $reason = $this->reasonFor($row->billing_status, $row->onsite_status);
 
             if ($reason === null) {
                 continue;
@@ -101,8 +77,8 @@ class JobOrderNotificationGuard
             $suppressed[(int) $row->id] = $reason;
 
             $this->logSuppressed($row->id, $reason, [
-                'visit_status' => $row->visit_status,
                 'billing_status' => $row->billing_status,
+                'onsite_status' => $row->onsite_status,
             ]);
         }
 
@@ -124,25 +100,21 @@ class JobOrderNotificationGuard
     /**
      * The suppression reason for a pair of statuses the caller already holds.
      *
-     * Pure — no query, no log. Exists so a feed that is already joining the
-     * visit row for its own SELECT can reuse this rule instead of paying for a
-     * second round trip to re-read statuses it has in hand. Callers that
-     * suppress on the strength of this must call logSuppressed() themselves;
-     * the two are split because deciding and announcing are different acts and
-     * only the caller knows whether it actually dropped the row.
+     * Pure — no query, no log. Callers that suppress on the strength of this
+     * must call logSuppressed() themselves.
      *
      * @return string|null  null when the job order may be notified
      */
-    public function reasonFor($visitStatus, $billingStatus): ?string
+    public function reasonFor($billingStatus, $onsiteStatus): ?string
     {
         $reasons = [];
 
-        if ($this->isPending($visitStatus)) {
-            $reasons[] = self::REASON_VISIT_PENDING;
-        }
-
         if ($this->isPending($billingStatus)) {
             $reasons[] = self::REASON_BILLING_PENDING;
+        }
+
+        if ($this->isPending($onsiteStatus)) {
+            $reasons[] = self::REASON_ONSITE_PENDING;
         }
 
         return $reasons === [] ? null : implode(' and ', $reasons);
