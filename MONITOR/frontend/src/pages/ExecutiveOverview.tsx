@@ -1,70 +1,55 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Activity,
   AlertTriangle,
   Banknote,
+  BarChart3,
   Building2,
   CreditCard,
-  HardDrive,
   Landmark,
   Lock,
-  Radio,
-  Receipt,
+  MapPin,
   ShieldAlert,
-  Timer,
-  TrendingDown,
   TrendingUp,
+  Trophy,
   UserCheck,
   Users,
   Wallet,
+  Wifi,
+  Wrench,
 } from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import WidgetRange from '../components/reporting/WidgetRange';
-import { ErrorBanner, Pill, Table, Td, Th, Thead, Tr } from '../components/reporting/primitives';
+import { ErrorBanner, Pill, RankBadge, Table, Td, Th, Thead, Tr } from '../components/reporting/primitives';
 import { RestrictedPanel } from '../components/rbac/Restricted';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
-import { ExecutiveOverviewData, SystemAlarm } from '../types/reporting';
-import { formatMoney, formatNumber, formatPercent, pluralise } from '../utils/format';
+import { ExecutiveOverviewData, BarangayRow } from '../types/reporting';
+import { formatMoney, formatNumber, pluralise } from '../utils/format';
 
 interface ExecutiveOverviewProps {
   refreshToken: number;
 }
 
-const SEVERITY_TONE: Record<SystemAlarm['severity'], 'danger' | 'warning' | 'info'> = {
-  critical: 'danger',
-  warning: 'warning',
-  info: 'info',
-};
-
-const CHANNEL_ICON: Record<string, React.ReactNode> = {
-  cash: <Banknote size={14} />,
-  pnb: <Landmark size={14} />,
-  portal: <CreditCard size={14} />,
-  other: <Wallet size={14} />,
-};
-
 /**
- * Module 5 — the consolidated C-suite summary.
+ * Redesigned executive dashboard — simplified for a business owner.
  *
- * Every figure here is the same figure the module it came from shows, arrived at
- * through the same code path and the same cache. The backend composes this from
- * the existing section payloads rather than querying independently, precisely so
- * a board meeting is never spent reconciling two of our own numbers.
+ * Three clear sections:
+ *   1. Subscribers — status breakdowns, JO/SO tasks, applications, barangay table
+ *   2. Finance — income, projected monthly, expenses, gross/net, payment methods, plans
+ *   3. Operations — reported concerns, repair categories, top tech leaderboard
  *
- * Guarded twice on the server: the module permission decides whether the tab
- * exists, and a role check decides whether this particular view is appropriate
- * at all. A 403 here is therefore a real answer, not a bug, and is rendered as
- * one rather than as a generic failure.
+ * Default view is daily. Dynamic date filtering, no hardcoded months.
+ * Every figure is the same figure the module it came from shows.
  */
 const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   const { user } = usePermissions();
 
-  const range = useWidgetRange('monthly');
+  // Default to daily view as requested
+  const range = useWidgetRange('daily');
 
   const [data, setData] = useState<ExecutiveOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -88,9 +73,6 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
       .catch((err) => {
         if (cancelled) return;
 
-        // A 403 is the role check answering, not a failure. Separated so the
-        // page can say what it means instead of offering a retry that will
-        // never succeed.
         if (err?.response?.status === 403) {
           setForbidden(true);
           setError(null);
@@ -112,7 +94,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
 
   useEffect(() => load(), [load, refreshToken]);
 
-  const health = data?.subscriber_health;
+  const subs = data?.subscriber_overview;
   const finance = data?.financial_summary;
   const ops = data?.operations_tech;
   const first = loading && !data;
@@ -120,7 +102,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   if (forbidden) {
     return (
       <ReportingPage>
-        <PageHeader title="Executive Group Overview" />
+        <PageHeader title="Executive Dashboard" />
         <Card>
           <div className="flex items-start gap-3 py-6 px-2">
             <Lock size={20} className={isDarkMode ? 'text-gray-600' : 'text-gray-400'} />
@@ -129,9 +111,8 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 Restricted to executive roles
               </p>
               <p className={`text-sm mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                This view puts every company's subscribers, money and backlog on one screen, so it
-                requires an executive role in addition to the module permission. Your role
-                {user?.role ? <> ({user.role})</> : null} does not have it.
+                This view requires an executive role.
+                {user?.role ? <> Your role ({user.role}) does not have access.</> : null}
               </p>
             </div>
           </div>
@@ -143,14 +124,11 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   return (
     <ReportingPage>
       <PageHeader
-        title="Executive Group Overview"
+        title="Executive Dashboard"
         subtitle={
           <>
-            Group-wide summary
+            Business overview
             {data && <> · {data.range_label}</>}
-            {data && data.databases.total > 0 && (
-              <> · {pluralise(data.databases.answered.length, 'database')}</>
-            )}
           </>
         }
         actions={<WidgetRange state={range} size="md" />}
@@ -158,8 +136,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
 
       {error && <ErrorBanner message={error} />}
 
-      {/* A summary built on six of eight branches is not wrong, but it must not
-          be read as eight — so the shortfall travels with the figures. */}
+      {/* Database availability warning */}
       {data && data.databases.failed.length > 0 && (
         <div
           className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${
@@ -174,421 +151,535 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               <strong>
                 {data.databases.answered.length} of {data.databases.total} databases
               </strong>{' '}
-              answered, so these totals are incomplete.
+              answered. Some data may be incomplete.
             </p>
-            <ul className="mt-1 space-y-0.5">
-              {data.databases.failed.map((entry) => (
-                <li key={entry.key} className="break-words">
-                  <strong>{entry.label}</strong> — {entry.error}
-                </li>
-              ))}
-            </ul>
           </div>
         </div>
       )}
 
-      {/* Sections that could not be reached are named rather than shown as zero:
-          "no revenue" and "we could not ask" are different claims. */}
-      {data && Object.keys(data.unavailable).length > 0 && (
-        <div
-          className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${
-            isDarkMode
-              ? 'border-gray-800 bg-gray-900 text-gray-400'
-              : 'border-gray-200 bg-gray-50 text-gray-600'
-          }`}
-        >
-          <ShieldAlert size={15} className="mt-0.5 flex-shrink-0" />
-          <span>
-            Not included in this summary:{' '}
-            {Object.keys(data.unavailable)
-              .map((key) => key.replace(/_/g, ' '))
-              .join(', ')}
-            .
-          </span>
+      {/* Projected Monthly Earnings — hero card */}
+      {finance?.available && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard
+            label="Total Income"
+            value={first ? '—' : formatMoney(finance?.total_income)}
+            icon={<Banknote size={18} />}
+            tone="success"
+            caption={data?.range_label}
+          />
+          <KpiCard
+            label="Projected Monthly"
+            value={first ? '—' : formatMoney(finance?.projected_monthly)}
+            icon={<TrendingUp size={18} />}
+            tone="info"
+            caption={
+              finance?.daily_average
+                ? `${formatMoney(finance.daily_average)}/day × ${finance.days_in_month ?? 30} days`
+                : 'daily avg × days in month'
+            }
+          />
+          <KpiCard
+            label="Total Expenses"
+            value={first ? '—' : formatMoney(finance?.total_expenses)}
+            icon={<Building2 size={18} />}
+            tone="warning"
+            caption={`OPEX: ${formatMoney(finance?.opex)} · CAPEX: ${formatMoney(finance?.capex)}`}
+          />
+          <KpiCard
+            label="Net Income"
+            value={first ? '—' : formatMoney(finance?.net)}
+            icon={<Wallet size={18} />}
+            tone={(finance?.net ?? 0) >= 0 ? 'success' : 'danger'}
+            caption={
+              finance?.margin_pct !== null && finance?.margin_pct !== undefined
+                ? `${finance.margin_pct.toFixed(1)}% margin`
+                : 'income − expenses'
+            }
+          />
         </div>
       )}
 
-      {/* ── 1. Subscriber health ──────────────────────────────────────── */}
-      <Card flush>
-        <CardHeader
-          title="Subscriber Health"
-          subtitle={health?.range_label}
-          icon={<Users size={16} />}
-        />
-        <CardBody>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <Tile
-              label="Active Subscribers"
-              value={first ? '—' : formatNumber(health?.active_subscribers)}
-              icon={<UserCheck size={16} />}
-              caption={
-                health?.vip_subscribers
-                  ? `${formatNumber(health.vip_subscribers)} VIP included`
-                  : 'active and VIP'
-              }
-            />
-            {/* New minus disconnections, so a month that signed 40 and lost 45
-                reads as minus five rather than as growth of 40. */}
-            <Tile
-              label="Net Growth"
-              value={
-                first || health?.net_growth === undefined
-                  ? '—'
-                  : `${health.net_growth > 0 ? '+' : ''}${formatNumber(health.net_growth)}`
-              }
-              icon={
-                (health?.net_growth ?? 0) >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />
-              }
-              tone={(health?.net_growth ?? 0) >= 0 ? 'success' : 'danger'}
-              caption={
-                health
-                  ? `${formatNumber(health.new_in_range)} new · ${formatNumber(
-                      health.disconnected
-                    )} disconnected`
-                  : undefined
-              }
-            />
-            <Tile
-              label="Churn Rate"
-              value={first ? '—' : formatPercent(health?.churn_rate_pct)}
-              icon={<TrendingDown size={16} />}
-              tone={(health?.churn_rate_pct ?? 0) > 10 ? 'danger' : 'neutral'}
-              caption="disconnected ÷ (active + disconnected)"
-            />
-            {/* Read out of the card list rather than a fixed field: the billing
-                summary is now whatever statuses the source holds, and an install
-                without a Pullout status shows a dash instead of a false zero. */}
-            <Tile
-              label="Pullout"
-              value={
-                first
-                  ? '—'
-                  : formatNumber(
-                      health?.billing_summary?.cards.find(
-                        (card) => card.key === 'pullout'
-                      )?.count
-                    )
-              }
-              icon={<Users size={16} />}
-              caption="equipment recovered"
-            />
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* ── 2. Financial summary ──────────────────────────────────────── */}
-      {finance?.masked ? (
-        <RestrictedPanel title="Financial Summary" height={220} />
-      ) : (
+      {/* ── 1. SUBSCRIBERS ───────────────────────────────────────────── */}
+      {subs?.available && (
         <Card flush>
           <CardHeader
-            title="Financial Summary"
-            subtitle={finance?.range_label}
+            title="Subscribers"
+            subtitle="Status breakdown across billing, online, and work orders"
+            icon={<Users size={16} />}
+          />
+          <CardBody>
+            {/* Billing Status */}
+            <SectionLabel label="Billing Status" icon={<UserCheck size={14} />} />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <MiniKpi label="Active" value={first ? '—' : formatNumber(subs.billing?.active)} tone="success" />
+              <MiniKpi label="Inactive" value={first ? '—' : formatNumber(subs.billing?.inactive)} tone="warning" />
+              <MiniKpi label="VIP" value={first ? '—' : formatNumber(subs.billing?.vip)} tone="info" />
+              <MiniKpi label="Pullout" value={first ? '—' : formatNumber(subs.billing?.pullout)} tone="danger" />
+            </div>
+
+            {/* Online Status */}
+            <SectionLabel label="Online Status" icon={<Wifi size={14} />} />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <MiniKpi label="Online" value={first ? '—' : formatNumber(subs.online_status?.online)} tone="success" />
+              <MiniKpi label="Offline" value={first ? '—' : formatNumber(subs.online_status?.offline)} tone="danger" />
+              <MiniKpi label="Restricted" value={first ? '—' : formatNumber(subs.online_status?.restricted)} tone="warning" />
+              <MiniKpi label="Disconnected" value={first ? '—' : formatNumber(subs.online_status?.disconnected)} tone="neutral" />
+            </div>
+
+            {/* JO/SO Status */}
+            <SectionLabel label="JO/SO Status" icon={<BarChart3 size={14} />} />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <MiniKpi label="Done" value={first ? '—' : formatNumber(subs.jo_so_status?.done)} tone="success" />
+              <MiniKpi label="Reschedule" value={first ? '—' : formatNumber(subs.jo_so_status?.reschedule)} tone="warning" />
+              <MiniKpi label="Failed" value={first ? '—' : formatNumber(subs.jo_so_status?.failed)} tone="danger" />
+              <MiniKpi label="In Progress" value={first ? '—' : formatNumber(subs.jo_so_status?.in_progress)} tone="info" />
+            </div>
+
+            {/* Total Applications */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+              <MiniKpi
+                label="Total Applications"
+                value={first ? '—' : formatNumber(subs.total_applications)}
+                tone="info"
+              />
+            </div>
+
+            {/* Per Barangay Count Table */}
+            {(subs.barangays?.length ?? 0) > 0 && (
+              <>
+                <SectionLabel label="Per Barangay Count" icon={<MapPin size={14} />} />
+                <BarangayTable rows={subs.barangays ?? []} loading={first} />
+              </>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* ── 2. FINANCE ───────────────────────────────────────────────── */}
+      {finance?.masked ? (
+        <RestrictedPanel title="Finance" height={220} />
+      ) : finance?.available ? (
+        <Card flush>
+          <CardHeader
+            title="Finance"
+            subtitle={finance.range_label}
             icon={<Wallet size={16} />}
           />
           <CardBody>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-              <Tile
-                label="Total Income"
-                value={first ? '—' : formatMoney(finance?.total_income)}
-                icon={<Banknote size={16} />}
-                tone="success"
-                caption={finance ? `${formatPercent(finance.margin_pct)} margin` : undefined}
-              />
-              <Tile
-                label="OpEx"
-                value={first ? '—' : formatMoney(finance?.opex)}
-                icon={<Building2 size={16} />}
-                caption="consumed in period"
-              />
-              <Tile
-                label="CapEx"
-                value={first ? '—' : formatMoney(finance?.capex)}
-                icon={<HardDrive size={16} />}
-                caption="assets acquired"
-              />
-              <Tile
-                label="Outstanding Payables"
-                value={first ? '—' : formatMoney(finance?.outstanding_payables)}
-                icon={<Receipt size={16} />}
-                tone={(finance?.outstanding_payables ?? 0) > 0 ? 'danger' : 'success'}
-                caption={
-                  finance ? pluralise(finance.payables_unpaid_count ?? 0, 'item') + ' unsettled' : undefined
-                }
-              />
+            {/* Gross / Net / OPEX / CAPEX */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+              <MiniKpi label="Gross Revenue" value={first ? '—' : formatMoney(finance.gross)} tone="success" />
+              <MiniKpi label="Net Revenue" value={first ? '—' : formatMoney(finance.net)} tone={(finance.net ?? 0) >= 0 ? 'success' : 'danger'} />
+              <MiniKpi label="OPEX" value={first ? '—' : formatMoney(finance.opex)} tone="warning" />
+              <MiniKpi label="CAPEX" value={first ? '—' : formatMoney(finance.capex)} tone="neutral" />
             </div>
 
-            {/* Income by channel — the split finance reconciles against. */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {['cash', 'pnb', 'portal'].map((key) => {
-                const channel = finance?.channels?.[key];
-
-                return (
-                  <div
-                    key={key}
-                    className={`rounded-lg px-3 py-2.5 ${isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'}`}
-                  >
-                    <p
-                      className={`flex items-center gap-1.5 text-xs ${
-                        isDarkMode ? 'text-gray-400' : 'text-gray-500'
-                      }`}
+            {/* Payment Methods */}
+            {(finance.by_method?.length ?? 0) > 0 && (
+              <>
+                <SectionLabel label="Payment Methods" icon={<CreditCard size={14} />} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">
+                  {finance.by_method?.map((method) => (
+                    <div
+                      key={method.label}
+                      className={`rounded-lg px-3 py-2.5 ${isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'}`}
                     >
-                      {CHANNEL_ICON[key]}
-                      {channel?.label ?? key.toUpperCase()}
-                    </p>
-                    <p className="text-lg font-bold tabular-nums truncate">
-                      {first ? '—' : formatMoney(channel?.total ?? 0)}
-                    </p>
-                    <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                      {formatPercent(channel?.share_pct ?? 0)} of income
-                    </p>
+                      <p className={`text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {method.label}
+                      </p>
+                      <p className="text-lg font-bold tabular-nums truncate">
+                        {formatMoney(method.total)}
+                      </p>
+                      <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                        {pluralise(method.count, 'transaction')}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Plan Distribution */}
+            {(finance.by_plan?.length ?? 0) > 0 && (
+              <>
+                <SectionLabel label="Plan Distribution" icon={<BarChart3 size={14} />} />
+                <Table>
+                  <Thead>
+                    <Th>Plan</Th>
+                    <Th align="right">Subscribers</Th>
+                    <Th align="right">Revenue</Th>
+                  </Thead>
+                  <tbody>
+                    {finance.by_plan?.map((plan) => (
+                      <Tr key={plan.label}>
+                        <Td className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                          {plan.label}
+                        </Td>
+                        <Td align="right" className="tabular-nums">
+                          {formatNumber(plan.count)}
+                        </Td>
+                        <Td align="right" className="tabular-nums font-semibold">
+                          {formatMoney(plan.total)}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </>
+            )}
+
+            {/* Income by Channel */}
+            {finance.channels && Object.keys(finance.channels).length > 0 && (
+              <>
+                <SectionLabel label="Income by Channel" icon={<Banknote size={14} />} />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {Object.entries(finance.channels).map(([key, channel]) => (
+                    <div
+                      key={key}
+                      className={`rounded-lg px-3 py-2.5 ${isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'}`}
+                    >
+                      <p className={`flex items-center gap-1.5 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {key === 'cash' ? <Banknote size={14} /> : key === 'pnb' ? <Landmark size={14} /> : <CreditCard size={14} />}
+                        {channel.label}
+                      </p>
+                      <p className="text-lg font-bold tabular-nums truncate">
+                        {formatMoney(channel.total)}
+                      </p>
+                      <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                        {channel.share_pct?.toFixed(1)}% of income
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {/* ── 3. OPERATIONS ────────────────────────────────────────────── */}
+      {ops?.available && (
+        <Card flush>
+          <CardHeader
+            title="Operations"
+            subtitle="Field work summary"
+            icon={<Wrench size={16} />}
+          />
+          <CardBody>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Reported Concerns */}
+              <div>
+                <SectionLabel label="Reported Concerns" icon={<ShieldAlert size={14} />} />
+                {(ops.concerns?.length ?? 0) === 0 ? (
+                  <EmptyState label="No concerns reported" />
+                ) : (
+                  <div className="space-y-2">
+                    {ops.concerns?.map((concern) => (
+                      <div
+                        key={concern.label}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 ${
+                          isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'
+                        }`}
+                      >
+                        <span className={`text-sm ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>
+                          {concern.label}
+                        </span>
+                        <Pill tone="warning">{formatNumber(concern.count)}</Pill>
+                      </div>
+                    ))}
                   </div>
-                );
-              })}
+                )}
+              </div>
+
+              {/* Repair Categories */}
+              <div>
+                <SectionLabel label="Repair Categories" icon={<Wrench size={14} />} />
+                {(ops.repair_categories?.length ?? 0) === 0 ? (
+                  <EmptyState label="No repair records" />
+                ) : (
+                  <div className="space-y-2">
+                    {ops.repair_categories?.map((cat) => (
+                      <div
+                        key={cat.label}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 ${
+                          isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'
+                        }`}
+                      >
+                        <span className={`text-sm ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>
+                          {cat.label}
+                        </span>
+                        <Pill tone="info">{formatNumber(cat.count)}</Pill>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {finance?.metrics && (
-              <div
-                className={`mt-4 pt-4 border-t grid grid-cols-2 lg:grid-cols-4 gap-3 ${
-                  isDarkMode ? 'border-gray-800' : 'border-gray-200'
-                }`}
-              >
-                {[
-                  { metric: finance.metrics.prospective_revenue, money: true },
-                  { metric: finance.metrics.arpu, money: true },
-                  { metric: finance.metrics.collection_efficiency, money: false },
-                  { metric: finance.metrics.projected_churn_loss, money: true },
-                ].map(({ metric, money }) => (
-                  <div key={metric.label}>
-                    <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {metric.label}
-                    </p>
-                    <p className="text-base font-bold tabular-nums truncate">
-                      {metric.value === null
-                        ? '—'
-                        : money
-                        ? formatMoney(metric.value)
-                        : formatPercent(metric.value)}
-                    </p>
-                    {/* The assumption travels with the number: three of these
-                        four are projections, and one shown with the authority of
-                        a measurement is how a dashboard misleads. */}
-                    <p
-                      className={`text-[11px] leading-snug ${
-                        isDarkMode ? 'text-gray-600' : 'text-gray-400'
-                      }`}
-                    >
-                      {metric.basis}
-                    </p>
-                  </div>
-                ))}
+            {/* Top Tech Leaderboard */}
+            {(ops.top_tech?.length ?? 0) > 0 && (
+              <div className="mt-6">
+                <SectionLabel label="Top Technicians" icon={<Trophy size={14} />} />
+                <Table>
+                  <Thead>
+                    <Th width="40px">#</Th>
+                    <Th>Technician</Th>
+                    <Th align="right">JO Done</Th>
+                    <Th align="right">SO Done</Th>
+                    <Th align="right">Total</Th>
+                    <Th align="right">Avg Time</Th>
+                  </Thead>
+                  <tbody>
+                    {ops.top_tech?.map((tech, idx) => (
+                      <Tr key={tech.id ?? tech.name}>
+                        <Td>
+                          <RankBadge rank={idx + 1} />
+                        </Td>
+                        <Td className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                          {tech.name}
+                        </Td>
+                        <Td align="right" className="tabular-nums">
+                          {formatNumber(tech.job_orders_done)}
+                        </Td>
+                        <Td align="right" className="tabular-nums">
+                          {formatNumber(tech.service_orders_done)}
+                        </Td>
+                        <Td align="right" className="font-semibold tabular-nums">
+                          {formatNumber(tech.completed)}
+                        </Td>
+                        <Td align="right" className={`tabular-nums ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                          {tech.average_minutes !== null && tech.average_minutes !== undefined
+                            ? `${tech.average_minutes} min`
+                            : '—'}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
               </div>
             )}
           </CardBody>
         </Card>
       )}
 
-      {/* ── 3. Operations and tech ────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* System Alarms — kept but simplified */}
+      {(ops?.alarms?.length ?? 0) > 0 && (
         <Card flush>
           <CardHeader
-            title="Operations & Tech"
-            subtitle="Delivery and field capacity"
-            icon={<Activity size={16} />}
-          />
-          <CardBody>
-            <div className="grid grid-cols-2 gap-4">
-              <Tile
-                label="Avg. Resolution"
-                value={
-                  first || ops?.average_turnaround === null || ops?.average_turnaround === undefined
-                    ? '—'
-                    : `${ops.average_turnaround} ${ops.turnaround_unit === 'hours' ? 'h' : 'min'}`
-                }
-                icon={<Timer size={16} />}
-                caption={
-                  ops?.turnaround_unit === 'hours' ? 'ticket age, closed work' : 'time on site'
-                }
-              />
-              <Tile
-                label="Open Work"
-                value={first ? '—' : formatNumber(ops?.open_work)}
-                icon={<Activity size={16} />}
-                tone={(ops?.open_work ?? 0) > 0 ? 'warning' : 'success'}
-                caption={
-                  ops?.oldest_open_days !== null && ops?.oldest_open_days !== undefined
-                    ? `oldest ${formatNumber(ops.oldest_open_days)}d`
-                    : 'nothing waiting'
-                }
-              />
-              <Tile
-                label="Technicians Live"
-                value={
-                  first || ops?.technicians_live === null
-                    ? '—'
-                    : `${formatNumber(ops?.technicians_live)}/${formatNumber(
-                        ops?.technicians_reporting
-                      )}`
-                }
-                icon={<Radio size={16} />}
-                tone={(ops?.technicians_live ?? 0) > 0 ? 'success' : 'neutral'}
-                caption="devices reporting recently"
-              />
-              <Tile
-                label="Active Alarms"
-                value={first ? '—' : formatNumber(ops?.alarm_count)}
-                icon={<ShieldAlert size={16} />}
-                tone={(ops?.alarm_count ?? 0) > 0 ? 'danger' : 'success'}
-                caption={(ops?.alarm_count ?? 0) > 0 ? 'see the list beside' : 'nothing raised'}
-              />
-            </div>
-          </CardBody>
-        </Card>
-
-        <Card flush>
-          <CardHeader
-            title="Active System Alarms"
-            subtitle={
-              // States the floor whenever an age was clamped, so "40 days" on a
-              // job that plainly predates the migration is never read as its
-              // true age.
-              ops?.age_bounded && ops.reliable_from
-                ? `Ages counted from ${ops.reliable_from} — earlier records are not reliable`
-                : 'Derived from operational thresholds, not a monitoring feed'
-            }
+            title="System Alerts"
             icon={<ShieldAlert size={16} />}
           />
           <CardBody>
-            {(ops?.alarms.length ?? 0) === 0 ? (
-              <p className={`text-sm py-6 text-center ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                {first ? 'Loading…' : 'Nothing is currently raising an alarm.'}
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {(ops?.alarms ?? []).map((alarm) => (
-                  <div
-                    key={alarm.key}
-                    className={`rounded-lg px-3 py-2 flex items-start gap-2 ${
-                      isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'
+            <div className="space-y-2">
+              {ops?.alarms.map((alarm) => (
+                <div
+                  key={alarm.key}
+                  className={`rounded-lg px-3 py-2 flex items-start gap-2 ${
+                    isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'
+                  }`}
+                >
+                  <AlertTriangle
+                    size={15}
+                    className={`mt-0.5 flex-shrink-0 ${
+                      alarm.severity === 'critical'
+                        ? 'text-red-500'
+                        : alarm.severity === 'warning'
+                        ? 'text-amber-500'
+                        : 'text-blue-500'
                     }`}
-                  >
-                    <AlertTriangle
-                      size={15}
-                      className={`mt-0.5 flex-shrink-0 ${
-                        alarm.severity === 'critical'
-                          ? 'text-red-500'
-                          : alarm.severity === 'warning'
-                          ? 'text-amber-500'
-                          : 'text-blue-500'
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-2 text-sm font-semibold">
-                        {alarm.label}
-                        <Pill tone={SEVERITY_TONE[alarm.severity]}>{alarm.severity}</Pill>
-                      </p>
-                      {/* Each alarm states what triggered it, so nobody reads a
-                          derived threshold as an SNMP trap. */}
-                      <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                        {alarm.detail}
-                      </p>
-                    </div>
+                  />
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      {alarm.label}
+                      <Pill
+                        tone={
+                          alarm.severity === 'critical'
+                            ? 'danger'
+                            : alarm.severity === 'warning'
+                            ? 'warning'
+                            : 'info'
+                        }
+                      >
+                        {alarm.severity}
+                      </Pill>
+                    </p>
+                    <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {alarm.detail}
+                    </p>
                   </div>
-                ))}
-              </div>
-            )}
+                </div>
+              ))}
+            </div>
           </CardBody>
-        </Card>
-      </div>
-
-      {/* Turnaround by work type, the actionable half of the SLA picture. */}
-      {(ops?.turnaround_by_type.length ?? 0) > 0 && (
-        <Card flush>
-          <CardHeader title="Resolution Turnaround by Work Type" icon={<Timer size={16} />} />
-          <Table>
-            <Thead>
-              <Th>Work type</Th>
-              <Th align="right">Closed</Th>
-              <Th align="right">Average</Th>
-              <Th align="right">Longest</Th>
-            </Thead>
-            <tbody>
-              {(ops?.turnaround_by_type ?? []).map((row) => {
-                const minutes = row.unit === 'minutes';
-                const average = minutes ? row.average_minutes : row.average_hours;
-                const longest = minutes ? row.longest_minutes : row.longest_hours;
-                const unit = minutes ? 'min' : 'h';
-
-                return (
-                  <Tr key={`${row.label}-${row.unit}`}>
-                    <Td className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
-                      {row.label}
-                    </Td>
-                    <Td align="right" className="tabular-nums">
-                      {formatNumber(row.closed)}
-                    </Td>
-                    <Td align="right" className="font-semibold tabular-nums">
-                      {average === null || average === undefined ? '—' : `${average} ${unit}`}
-                    </Td>
-                    <Td
-                      align="right"
-                      className={`tabular-nums ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
-                    >
-                      {longest === null || longest === undefined
-                        ? '—'
-                        : `${formatNumber(longest)} ${unit}`}
-                    </Td>
-                  </Tr>
-                );
-              })}
-            </tbody>
-          </Table>
         </Card>
       )}
 
-      <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-        Every figure here is composed from the same section payloads the modules themselves render,
-        so this page cannot disagree with them. Counts are as of {data?.as_of ?? 'today'}. Alarms are
-        derived from operational thresholds — aged backlog, silent field devices, unattributed work —
-        and are not a network monitoring feed.
+      <p className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+        Figures sourced from section modules. Counts as of {data?.as_of ?? 'today'}.
       </p>
     </ReportingPage>
   );
 };
 
-/** One measure on the summary. Compact by design: this page is read at a glance. */
-const Tile: React.FC<{
+// ── Sub-components ────────────────────────────────────────────────────
+
+type Tone = 'success' | 'danger' | 'warning' | 'neutral' | 'info';
+
+/** Hero KPI card — large number with icon badge and caption. */
+const KpiCard: React.FC<{
   label: string;
   value: React.ReactNode;
   icon?: React.ReactNode;
   caption?: React.ReactNode;
-  tone?: 'success' | 'danger' | 'warning' | 'neutral';
+  tone?: Tone;
 }> = ({ label, value, icon, caption, tone = 'neutral' }) => {
   const isDarkMode = useTheme();
 
-  const toneClass: Record<string, string> = {
+  const toneValue: Record<Tone, string> = {
     success: 'text-emerald-600 dark:text-emerald-400',
     danger: 'text-red-500 dark:text-red-400',
     warning: 'text-amber-500 dark:text-amber-400',
     neutral: isDarkMode ? 'text-white' : 'text-gray-900',
+    info: 'text-blue-600 dark:text-blue-400',
+  };
+
+  const toneBg: Record<Tone, string> = {
+    success: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400',
+    danger: 'bg-red-100 text-red-500 dark:bg-red-500/15 dark:text-red-400',
+    warning: 'bg-amber-100 text-amber-500 dark:bg-amber-500/15 dark:text-amber-400',
+    neutral: 'bg-gray-100 text-gray-500 dark:bg-gray-700/60 dark:text-gray-300',
+    info: 'bg-blue-100 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400',
   };
 
   return (
-    <div>
-      <p
-        className={`flex items-center gap-1.5 text-xs ${
-          isDarkMode ? 'text-gray-400' : 'text-gray-500'
-        }`}
-      >
-        {icon}
-        {label}
-      </p>
-      <p className={`text-2xl font-bold tracking-tight tabular-nums truncate mt-0.5 ${toneClass[tone]}`}>
-        {value}
-      </p>
+    <div
+      className={`rounded-xl border p-4 sm:p-5 ${
+        isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200 shadow-sm'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={`text-sm mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>{label}</p>
+          <p className={`text-2xl sm:text-3xl font-bold tracking-tight truncate ${toneValue[tone]}`}>
+            {value}
+          </p>
+        </div>
+        {icon && (
+          <span className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${toneBg[tone]}`}>
+            {icon}
+          </span>
+        )}
+      </div>
       {caption && (
-        <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>{caption}</p>
+        <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>{caption}</p>
       )}
+    </div>
+  );
+};
+
+/** Small count tile inside a section. */
+const MiniKpi: React.FC<{
+  label: string;
+  value: React.ReactNode;
+  tone?: Tone;
+}> = ({ label, value, tone = 'neutral' }) => {
+  const isDarkMode = useTheme();
+
+  const toneValue: Record<Tone, string> = {
+    success: 'text-emerald-600 dark:text-emerald-400',
+    danger: 'text-red-500 dark:text-red-400',
+    warning: 'text-amber-500 dark:text-amber-400',
+    neutral: isDarkMode ? 'text-white' : 'text-gray-900',
+    info: 'text-blue-600 dark:text-blue-400',
+  };
+
+  return (
+    <div className={`rounded-lg px-3 py-2.5 ${isDarkMode ? 'bg-gray-800/60' : 'bg-gray-50'}`}>
+      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>{label}</p>
+      <p className={`text-xl font-bold tabular-nums truncate mt-0.5 ${toneValue[tone]}`}>{value}</p>
+    </div>
+  );
+};
+
+/** Section label within a card. */
+const SectionLabel: React.FC<{ label: string; icon?: React.ReactNode }> = ({ label, icon }) => {
+  const isDarkMode = useTheme();
+
+  return (
+    <p
+      className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider mb-2 mt-1 ${
+        isDarkMode ? 'text-gray-400' : 'text-gray-500'
+      }`}
+    >
+      {icon}
+      {label}
+    </p>
+  );
+};
+
+/** Empty state for a list. */
+const EmptyState: React.FC<{ label: string }> = ({ label }) => {
+  const isDarkMode = useTheme();
+  return (
+    <p className={`text-sm py-4 text-center ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+      {label}
+    </p>
+  );
+};
+
+/** Compact barangay count table. */
+const BarangayTable: React.FC<{ rows: BarangayRow[]; loading?: boolean }> = ({ rows, loading }) => {
+  const isDarkMode = useTheme();
+
+  // Sort by total descending
+  const sorted = [...rows].sort((a, b) => b.total - a.total);
+
+  return (
+    <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+      <table className="w-full text-sm">
+        <thead className={`sticky top-0 z-10 ${isDarkMode ? 'bg-gray-800/90' : 'bg-gray-50'}`}>
+          <tr>
+            <th className={`px-3 py-2 text-left font-semibold whitespace-nowrap ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Barangay
+            </th>
+            <th className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Active
+            </th>
+            <th className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              VIP
+            </th>
+            <th className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Inactive
+            </th>
+            <th className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Total
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((row) => (
+            <tr
+              key={`${row.barangay}-${row.municipality}`}
+              className={`border-t ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}
+            >
+              <td className={`px-3 py-2 font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                {row.barangay}
+                {row.municipality && (
+                  <span className={`text-xs ml-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                    {row.municipality}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.active)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.vip)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.inactive)}</td>
+              <td className={`px-3 py-2 text-right tabular-nums font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                {formatNumber(row.total)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, Modal, Linking, Platform, useWindowDimensions, StyleSheet, Alert, DeviceEventEmitter } from 'react-native';
 import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ContactActions from './common/ContactActions';
 import ServiceOrderEditModal from '../modals/ServiceOrderEditModal';
 import ConfirmationModal from '../modals/MoveToJoModal';
 import StartTimerModal from '../modals/StartTimerModal';
@@ -745,7 +746,10 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     endTime: () => <Text style={valStyle} selectable={true}>{formatDate((serviceOrder as any).end_time)}</Text>,
     duration: () => <Text style={valStyle} selectable={true}>{getDurationString((serviceOrder as any).start_time, (serviceOrder as any).end_time)}</Text>,
     fullName: () => <Text style={valStyle} selectable={true}>{serviceOrder.fullName}</Text>,
-    contactNumber: () => <Text style={valStyle} selectable={true}>{serviceOrder.contactNumber}</Text>,
+    // Same quick actions as the job order view: a service visit starts with the
+    // same "are you home?" call, and the technician should not have to leave the
+    // app to make it.
+    contactNumber: () => <ContactActions value={serviceOrder.contactNumber} valueStyle={valStyle} />,
     fullAddress: () => <Text style={valStyle} selectable={true}>{serviceOrder.fullAddress}</Text>,
     addressCoordinates: () => {
       const coords = customerDetail?.addressCoordinates;

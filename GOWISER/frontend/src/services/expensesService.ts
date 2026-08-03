@@ -7,14 +7,38 @@ interface ApiResponse<T> {
 }
 
 /**
- * 'daily' and 'monthly' are bucket tags. They decide which summary card an expense
- * lands in on the Expenses page — they do not recur, accrue, or generate rows.
+ * What kind of spending this is — the axis the executive dashboard splits on.
+ *
+ * OPEX is consumed in the period it is booked, so netting it against that
+ * period's income is correct. CAPEX buys an asset that outlives the period, so
+ * netting it against one month is not. Reporting them apart is the reason this
+ * field exists.
+ *
+ * Matches MONITOR's classifier and the backend's App\Support\ExpenseClassifier,
+ * so the same expense lands in the same bucket in both systems.
  */
-export type ExpenseType = 'daily' | 'monthly';
+export type ExpenseType = 'OPEX' | 'CAPEX';
+
+/**
+ * How often the spending recurs.
+ *
+ * Independent of the type above, and previously conflated with it — this is what
+ * `expense_type` used to hold. A leased vehicle is Monthly OPEX; a fibre reel is
+ * Daily (one-off) CAPEX. One field could not say both.
+ *
+ * A bucket tag, not a schedule: it decides which summary card an expense lands
+ * in. It does not recur, accrue, or generate rows.
+ */
+export type ExpenseFrequency = 'Daily' | 'Monthly';
 
 export const EXPENSE_TYPES: { value: ExpenseType; label: string; hint: string }[] = [
-  { value: 'daily', label: 'Daily', hint: 'Counted in the daily expenses total' },
-  { value: 'monthly', label: 'Monthly', hint: 'Counted in the monthly expenses total' },
+  { value: 'OPEX', label: 'OPEX', hint: 'Operating cost — consumed within the period' },
+  { value: 'CAPEX', label: 'CAPEX', hint: 'Capital purchase — an asset that outlives the period' },
+];
+
+export const EXPENSE_FREQUENCIES: { value: ExpenseFrequency; label: string; hint: string }[] = [
+  { value: 'Daily', label: 'Daily', hint: 'Counted in the daily expenses total' },
+  { value: 'Monthly', label: 'Monthly', hint: 'Counted in the monthly expenses total' },
 ];
 
 export interface Expense {
@@ -27,6 +51,7 @@ export interface Expense {
   category: string;
   categoryId: number | null;
   expenseType: ExpenseType;
+  frequency: ExpenseFrequency;
   description: string;
   invoiceNo: string;
   referenceNo: string;
@@ -53,12 +78,18 @@ export interface ExpenseSummary {
   count_today: number;
   count_this_month: number;
   by_category: { label: string; value: number }[];
+  /** The OpEx/CapEx split, reported apart because they hit the month differently. */
+  opex_this_month: number;
+  capex_this_month: number;
+  opex_count: number;
+  capex_count: number;
   scope: { today: string; month_start: string; month_end: string };
 }
 
 export interface ExpenseFilters {
   search?: string;
   expense_type?: ExpenseType | '';
+  frequency?: ExpenseFrequency | '';
   category_id?: number | '';
   date_from?: string;
   date_to?: string;
@@ -68,6 +99,7 @@ export interface ExpensePayload {
   date: string;
   amount: number | string;
   expense_type: ExpenseType;
+  frequency: ExpenseFrequency;
   category_id?: number | null;
   payee?: string;
   description?: string;
@@ -88,6 +120,7 @@ const toQueryParams = (filters?: ExpenseFilters) => {
 
   if (filters.search) params.search = filters.search;
   if (filters.expense_type) params.expense_type = filters.expense_type;
+  if (filters.frequency) params.frequency = filters.frequency;
   if (filters.category_id) params.category_id = String(filters.category_id);
   if (filters.date_from) params.date_from = filters.date_from;
   if (filters.date_to) params.date_to = filters.date_to;
@@ -106,6 +139,7 @@ const toFormData = (payload: ExpensePayload): FormData => {
   form.append('date', payload.date);
   form.append('amount', String(payload.amount));
   form.append('expense_type', payload.expense_type);
+  form.append('frequency', payload.frequency);
 
   if (payload.category_id) form.append('category_id', String(payload.category_id));
   if (payload.receipt) form.append('receipt', payload.receipt);

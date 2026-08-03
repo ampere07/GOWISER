@@ -654,6 +654,31 @@ export interface SubscriberHealth {
   range_label?: string;
 }
 
+/** Detailed subscriber breakdown for the simplified executive dashboard. */
+export interface SubscriberOverview {
+  available: boolean;
+  billing?: {
+    active: number;
+    inactive: number;
+    vip: number;
+    pullout: number;
+  };
+  online_status?: {
+    online: number;
+    offline: number;
+    restricted: number;
+    disconnected: number;
+  };
+  jo_so_status?: {
+    done: number;
+    reschedule: number;
+    failed: number;
+    in_progress: number;
+  };
+  total_applications?: number;
+  barangays?: BarangayRow[];
+}
+
 export interface ExecutiveFinancialSummary {
   available: boolean;
   /** True when the role may open this view but not read the money on it. */
@@ -662,12 +687,20 @@ export interface ExecutiveFinancialSummary {
   channels?: Record<string, { label: string; total: number; count: number; share_pct: number }>;
   opex?: number;
   capex?: number;
+  total_expenses?: number;
+  gross?: number;
   net?: number;
   margin_pct?: number | null;
   outstanding_payables?: number;
   payables_unpaid_count?: number;
   metrics?: ExecutiveMetrics | null;
   range_label?: string;
+  by_method?: LabelledTotal[];
+  by_plan?: LabelledTotal[];
+  daily_average?: number;
+  projected_monthly?: number;
+  days_elapsed?: number;
+  days_in_month?: number;
 }
 
 /**
@@ -699,6 +732,12 @@ export interface OperationsTechSummary {
   reliable_from: string | null;
   /** True when an age was clamped to that floor rather than measured. */
   age_bounded: boolean;
+  /** Reported concerns from operations section. */
+  concerns?: LabelledCount[];
+  /** Repair category breakdown from operations section. */
+  repair_categories?: LabelledCount[];
+  /** Top technicians ranked by completed work. */
+  top_tech?: TechnicianWorkload[];
 }
 
 export interface ExecutiveOverviewData {
@@ -707,6 +746,7 @@ export interface ExecutiveOverviewData {
   range: DateRange;
   range_label: string;
   subscriber_health: SubscriberHealth;
+  subscriber_overview: SubscriberOverview;
   financial_summary: ExecutiveFinancialSummary;
   operations_tech: OperationsTechSummary;
   databases: {

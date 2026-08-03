@@ -1,12 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Loader2, Upload, FileText, CalendarDays, CalendarRange } from 'lucide-react';
+import {
+  X,
+  Loader2,
+  Upload,
+  FileText,
+  CalendarDays,
+  CalendarRange,
+  Building2,
+  HardDrive,
+} from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getExpensesCategories, ExpensesCategory } from '../services/expensesCategoryService';
 import {
   Expense,
   ExpensePayload,
   ExpenseType,
+  ExpenseFrequency,
   EXPENSE_TYPES,
+  EXPENSE_FREQUENCIES,
 } from '../services/expensesService';
 
 interface ExpensesFormModalProps {
@@ -22,7 +33,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 const emptyForm = (): ExpensePayload => ({
   date: today(),
   amount: '',
-  expense_type: 'daily',
+  // OPEX and Daily are the common case by a wide margin — most of an ISP's
+  // ledger is day-to-day operating spend — so a one-off purchase is the entry
+  // that costs an extra click, not the routine one.
+  expense_type: 'OPEX',
+  frequency: 'Daily',
   category_id: null,
   payee: '',
   description: '',
@@ -36,6 +51,50 @@ const emptyForm = (): ExpensePayload => ({
   received_date: '',
   receipt: null,
 });
+
+/**
+ * One choice in a two-up selector.
+ *
+ * Extracted because the type and frequency rows are the same control twice over,
+ * and duplicating forty lines of selected-state styling is how the two drift
+ * apart the first time either is touched.
+ */
+const OptionCard: React.FC<{
+  label: string;
+  hint: string;
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  selected: boolean;
+  disabled: boolean;
+  accent: string;
+  isDarkMode: boolean;
+  onSelect: () => void;
+}> = ({ label, hint, icon: Icon, selected, disabled, accent, isDarkMode, onSelect }) => (
+  <button
+    type="button"
+    disabled={disabled}
+    onClick={onSelect}
+    aria-pressed={selected}
+    className={`p-4 rounded border text-left transition-all disabled:cursor-not-allowed ${
+      selected
+        ? 'border-transparent'
+        : isDarkMode
+        ? 'border-gray-700 hover:border-gray-600'
+        : 'border-gray-300 hover:border-gray-400'
+    }`}
+    style={selected ? { backgroundColor: `${accent}1a`, borderColor: accent } : undefined}
+  >
+    <div className="flex items-center gap-2 mb-1">
+      <Icon size={16} style={{ color: selected ? accent : undefined }} />
+      <span
+        className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
+        style={selected ? { color: accent } : undefined}
+      >
+        {label}
+      </span>
+    </div>
+    <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>{hint}</p>
+  </button>
+);
 
 const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
   isOpen,
@@ -93,7 +152,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
       setForm({
         date: expense.dateRaw || today(),
         amount: expense.amount ?? '',
-        expense_type: expense.expenseType || 'daily',
+        expense_type: expense.expenseType || 'OPEX',
+        frequency: expense.frequency || 'Daily',
         category_id: expense.categoryId ?? null,
         payee: expense.payee || '',
         description: expense.description || '',
@@ -131,7 +191,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
       next.amount = 'Amount cannot be negative';
     }
 
-    if (!form.expense_type) next.expense_type = 'Select daily or monthly';
+    if (!form.expense_type) next.expense_type = 'Select OPEX or CAPEX';
+    if (!form.frequency) next.frequency = 'Select daily or monthly';
     if (!form.category_id) next.category_id = 'Category is required';
 
     setErrors(next);
@@ -245,53 +306,55 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
             )}
 
-            {/* Expense type — the daily/monthly bucket */}
+            {/* Expense type (OPEX/CAPEX) and frequency (Daily/Monthly).
+                Two separate choices, because they are two independent facts: a
+                leased vehicle is Monthly OPEX and a fibre reel is Daily CAPEX.
+                Presenting them as one control would force a false choice — which
+                is exactly what the single field used to do. */}
             <div>
               <label className={labelClass}>
                 Expense Type<span className="text-red-500">*</span>
               </label>
               <div className="grid grid-cols-2 gap-3">
-                {EXPENSE_TYPES.map((type) => {
-                  const selected = form.expense_type === type.value;
-                  const Icon = type.value === 'daily' ? CalendarDays : CalendarRange;
-                  return (
-                    <button
-                      key={type.value}
-                      type="button"
-                      disabled={saving}
-                      onClick={() => setField('expense_type', type.value as ExpenseType)}
-                      className={`p-4 rounded border text-left transition-all disabled:cursor-not-allowed ${
-                        selected
-                          ? 'border-transparent'
-                          : isDarkMode
-                          ? 'border-gray-700 hover:border-gray-600'
-                          : 'border-gray-300 hover:border-gray-400'
-                      }`}
-                      style={
-                        selected
-                          ? { backgroundColor: `${accent}1a`, borderColor: accent }
-                          : undefined
-                      }
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <Icon size={16} style={{ color: selected ? accent : undefined }} />
-                        <span
-                          className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
-                          style={selected ? { color: accent } : undefined}
-                        >
-                          {type.label}
-                        </span>
-                      </div>
-                      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                        {type.hint}
-                      </p>
-                    </button>
-                  );
-                })}
+                {EXPENSE_TYPES.map((type) => (
+                  <OptionCard
+                    key={type.value}
+                    label={type.label}
+                    hint={type.hint}
+                    icon={type.value === 'OPEX' ? Building2 : HardDrive}
+                    selected={form.expense_type === type.value}
+                    disabled={saving}
+                    accent={accent}
+                    isDarkMode={isDarkMode}
+                    onSelect={() => setField('expense_type', type.value as ExpenseType)}
+                  />
+                ))}
               </div>
               {errors.expense_type && (
                 <p className="text-red-500 text-xs mt-1">{errors.expense_type}</p>
               )}
+            </div>
+
+            <div>
+              <label className={labelClass}>
+                Frequency<span className="text-red-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {EXPENSE_FREQUENCIES.map((frequency) => (
+                  <OptionCard
+                    key={frequency.value}
+                    label={frequency.label}
+                    hint={frequency.hint}
+                    icon={frequency.value === 'Daily' ? CalendarDays : CalendarRange}
+                    selected={form.frequency === frequency.value}
+                    disabled={saving}
+                    accent={accent}
+                    isDarkMode={isDarkMode}
+                    onSelect={() => setField('frequency', frequency.value as ExpenseFrequency)}
+                  />
+                ))}
+              </div>
+              {errors.frequency && <p className="text-red-500 text-xs mt-1">{errors.frequency}</p>}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

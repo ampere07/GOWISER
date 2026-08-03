@@ -413,6 +413,15 @@ class JobOrderController extends Controller
                 $data['onsite_status'] = 'Pending';
             }
 
+            // A PPPoE account starts restricted, always. Set here rather than left
+            // to the caller so a client that omits the field cannot create an
+            // account that is live before anyone has paid for it — see
+            // JobOrder::USERNAME_STATUS_RESTRICTED for why activation belongs
+            // downstream in the payment pipelines.
+            if (empty($data['username_status'])) {
+                $data['username_status'] = JobOrder::USERNAME_STATUS_RESTRICTED;
+            }
+
             $data = $this->normalizeVipBillingFlags($data);
 
             \Log::info('JobOrder Creating with data', [
@@ -677,6 +686,29 @@ class JobOrderController extends Controller
                 }
             }
 
+            // Whichever of the three branches above ran, a PPPoE account now
+            // exists on this job order that did not before. It starts restricted:
+            // credentials being filled in says a technician reached the form, not
+            // that the customer is entitled to service. Activation happens later,
+            // through the payment pipelines — see
+            // JobOrder::USERNAME_STATUS_RESTRICTED.
+            //
+            // Only stamped when the job order has no status yet, so re-saving a JO
+            // that was legitimately activated downstream does not knock it back
+            // into restriction. That makes this safe to re-run, which matters
+            // because the Done form saves repeatedly.
+            if ($request->filled('pppoe_username') && empty($jobOrder->username_status)) {
+                $request->merge([
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+
+                \Log::info('PPPoE account initialised as restricted', [
+                    'job_order_id' => $id,
+                    'username' => $request->input('pppoe_username'),
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+            }
+
             $validator = Validator::make($request->all(), [
                 'application_id' => 'nullable|integer|exists:applications,id',
                 'status' => 'nullable|string|max:100',
@@ -715,6 +747,12 @@ class JobOrderController extends Controller
                 'installation_landmark' => 'nullable|string|max:255',
                 'pppoe_username' => 'nullable|string|max:255',
                 'pppoe_password' => 'nullable|string|max:255',
+                // Free-text rather than an `in` rule: the column also carries the
+                // states the downstream RADIUS operations write (Active, Disconnected,
+                // …), and constraining it here would reject a legitimate later update.
+                // What matters is that a new account is never created without it —
+                // that is enforced above, not by this rule.
+                'username_status' => 'nullable|string|max:100',
                 'custom_password' => 'nullable|string|max:255',
                 'created_by_user_email' => 'nullable|email|max:255',
                 'updated_by_user_email' => 'nullable|email|max:255',
@@ -1301,7 +1339,15 @@ class JobOrderController extends Controller
                 'account_no' => $accountNumber,
                 'username' => $usernameForTechnical,
                 'pppoe_password' => $jobOrder->pppoe_password,
-                'username_status' => $jobOrder->username_status,
+                // Carried across from the job order, falling back to restricted
+                // rather than NULL. A job order created before the restricted-by-
+                // default rule has no status to copy, and a blank here would read
+                // as "no restriction" on the customer record — the one reading it
+                // cannot tell an unset column from a live account. Only ever fills
+                // an absent value; a job order already activated downstream keeps
+                // whatever state it reached.
+                'username_status' => $jobOrder->username_status
+                    ?: JobOrder::USERNAME_STATUS_RESTRICTED,
                 'connection_type' => $jobOrder->connection_type,
                 'router_model' => $jobOrder->router_model,
                 'router_modem_sn' => $modemSN,
@@ -2031,9 +2077,26 @@ class JobOrderController extends Controller
                 $plan = trim($plan);
             }
             
+            // The account is created into the Restricted group, NOT the customer's
+            // plan group.
+            //
+            // This is the whole point of the restricted-by-default rule: putting a
+            // brand new user straight into its plan group is what "early automatic
+            // activation" means in practice — full plan bandwidth granted the
+            // moment a technician saved a form, before a peso has been collected.
+            // The user is provisioned so the credentials work and the session can
+            // be seen, but it carries the restricted profile until the payment
+            // pipelines move it. $plan is still resolved above and reported back in
+            // the response, because the caller needs to know which plan the account
+            // will be activated onto.
+            //
+            // Activation is downstream and explicit: ManualRadiusOperationsService
+            // ::reconnectUser, called from PaymentWorkerService and
+            // TransactionController once a payment lands, rewrites the group to the
+            // plan. Nothing here should ever do it.
             $payload = [
                 'name' => $pppoeUsername,
-                'group' => $plan,
+                'group' => JobOrder::USERNAME_STATUS_RESTRICTED,
                 'password' => $pppoePassword
             ];
 
@@ -2119,6 +2182,28 @@ class JobOrderController extends Controller
                 ];
             }
 
+            // Record the restriction on the job order itself, so the state is
+            // visible without querying RADIUS and so approval carries it onto
+            // technical_details (TechnicalDetail::create copies this column).
+            //
+            // Only when the account was actually provisioned in this call and the
+            // job order has not since been activated: this method is re-runnable by
+            // design — the Done form and the approval path can both reach it — and
+            // it must never knock an account that a payment already activated back
+            // into restriction.
+            if ($radiusSubmitted && empty($jobOrder->username_status)) {
+                $jobOrder->update([
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+
+                \Log::channel('radiusrelated')->info('PPPoE account provisioned restricted', [
+                    'job_order_id' => $id,
+                    'username' => $pppoeUsername,
+                    'radius_group' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                    'plan_when_activated' => $plan,
+                ]);
+            }
+
             return [
                 'success' => true,
                 'message' => $credentialsExist ? 'RADIUS credentials already exist' : 'RADIUS account created successfully',
@@ -2126,7 +2211,13 @@ class JobOrderController extends Controller
                     'job_order_id' => $id,
                     'username' => $pppoeUsername,
                     'password' => $pppoePassword,
-                    'group' => $plan,
+                    // What the account is on now, and what it will be moved to when
+                    // a payment activates it. Reported apart so the caller cannot
+                    // read the plan as evidence the account is live.
+                    'group' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                    'plan_when_activated' => $plan,
+                    'username_status' => $jobOrder->username_status
+                        ?: JobOrder::USERNAME_STATUS_RESTRICTED,
                     'credentials_exist' => $credentialsExist,
                     'radius_response' => [
                         'submitted' => $radiusSubmitted,

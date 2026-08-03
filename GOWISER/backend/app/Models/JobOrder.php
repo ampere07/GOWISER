@@ -8,6 +8,28 @@ class JobOrder extends Model
 {
     protected $table = 'job_orders';
 
+    /**
+     * The state every newly created PPPoE account starts in.
+     *
+     * A PPPoE account exists from the moment credentials are generated, but
+     * existing is not the same as being entitled to service: the customer has
+     * not paid yet, and nothing about generating a username says they have.
+     * Creating the RADIUS user straight into its plan group would hand out full
+     * bandwidth at the moment a technician filled in a form, which is why the
+     * account is created here and activated somewhere else entirely.
+     *
+     * Activation is downstream and deliberate — ManualRadiusOperationsService
+     * ::reconnectUser, called from the payment pipelines (PaymentWorkerService
+     * and TransactionController) once money has actually landed. That call is
+     * what moves the RADIUS user into the plan group.
+     *
+     * The string matches the RADIUS profile group name and the billing status
+     * vocabulary the rest of the app compares against, so the same value is
+     * correct on job_orders.username_status, technical_details.username_status
+     * and in the RADIUS payload.
+     */
+    public const USERNAME_STATUS_RESTRICTED = 'Restricted';
+
     protected $fillable = [
         'application_id',
         'account_id',

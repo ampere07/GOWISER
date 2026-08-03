@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\JobOrderNotificationGuard;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -12,11 +13,24 @@ class ConsolidatedNotificationController extends Controller
     /** roles.id for SuperAdmin. Matches the $roleId == 7 checks elsewhere in the app. */
     private const SUPERADMIN_ROLE_ID = 7;
 
+    /**
+     * How much wider than $limit the job-order query reads before suppression.
+     *
+     * The guard removes rows after the query, so reading exactly $limit would
+     * hand back a short page whenever anything was withheld. The cap stops an
+     * installation whose job orders are overwhelmingly pending from turning a
+     * notification poll into a large scan.
+     */
+    private const SUPPRESSION_OVERFETCH = 3;
+    private const SUPPRESSION_OVERFETCH_CAP = 150;
+
     public function index(Request $request)
     {
         try {
-            $limit = $request->get('limit', 15);
-            $latest = collect();
+            // Cast and clamped: the value reaches a LIMIT and an arithmetic
+            // over-fetch below, and a caller passing "abc" or 100000 should not
+            // decide either.
+            $limit = max(1, min(100, (int) $request->get('limit', 15)));
 
             // 1. Fetch Applications (Pending)
             $applications = DB::table('applications')
@@ -40,19 +54,62 @@ class ConsolidatedNotificationController extends Controller
                 });
 
             // 2. Fetch Job Orders (Done)
-            $jobCompeltions = DB::table('job_orders')
+            //
+            // A JO notification names the job order by number and says the work is
+            // finished, so it is withheld until both halves of the job order have
+            // actually landed — see JobOrderNotificationGuard. The visit row and
+            // billing_status are selected here rather than re-read by the guard so
+            // the check costs no extra query.
+            //
+            // Over-fetched before filtering: the guard drops rows, and taking
+            // exactly $limit first would leave the feed short by however many were
+            // suppressed. Capped at a small multiple so a database full of pending
+            // job orders cannot turn this into an unbounded read.
+            $jobCandidates = DB::table('job_orders')
                 ->join('applications', 'job_orders.application_id', '=', 'applications.id')
+                ->leftJoin('application_visits as av', function ($join) {
+                    // Latest visit for the application: a job order can be visited
+                    // more than once, and it is the most recent attempt that
+                    // describes the current state. Correlated on the indexed
+                    // application_id so this stays a keyed lookup.
+                    $join->on('av.id', '=', DB::raw(
+                        '(SELECT MAX(av2.id) FROM application_visits av2'
+                        . ' WHERE av2.application_id = job_orders.application_id)'
+                    ));
+                })
                 ->where('job_orders.onsite_status', 'Done')
                 ->orderBy('job_orders.updated_at', 'desc')
-                ->limit($limit)
+                ->limit(min($limit * self::SUPPRESSION_OVERFETCH, self::SUPPRESSION_OVERFETCH_CAP))
                 ->select(
                     'job_orders.id',
                     'job_orders.updated_at',
+                    'job_orders.billing_status',
+                    'av.visit_status',
                     'applications.first_name',
                     'applications.last_name',
                     'applications.desired_plan'
                 )
-                ->get()
+                ->get();
+
+            $guard = app(JobOrderNotificationGuard::class);
+
+            $jobCompeltions = $jobCandidates
+                ->filter(function ($job) use ($guard) {
+                    $reason = $guard->reasonFor($job->visit_status, $job->billing_status);
+
+                    if ($reason === null) {
+                        return true;
+                    }
+
+                    $guard->logSuppressed($job->id, $reason, [
+                        'feed' => 'consolidated',
+                        'visit_status' => $job->visit_status,
+                        'billing_status' => $job->billing_status,
+                    ]);
+
+                    return false;
+                })
+                ->take($limit)
                 ->map(function ($job) {
                     $updatedAt = Carbon::parse($job->updated_at);
                     return [
@@ -66,7 +123,8 @@ class ConsolidatedNotificationController extends Controller
                         'formatted_date' => $updatedAt->format('Y-m-d h:i:s A'), // e.g. 2026-02-11 05:53:42 PM
                         'raw_date' => $updatedAt->toIso8601String()
                     ];
-                });
+                })
+                ->values();
 
             // 3. Fetch Service Orders (Visit Done)
             //

@@ -8,6 +8,7 @@ use App\Models\ActivityLog;
 use App\Models\ExpensesCategory;
 use App\Models\ExpensesLog;
 use App\Services\GoogleDriveService;
+use App\Support\ExpenseClassifier;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -58,8 +59,15 @@ class ExpensesLogController extends Controller
             });
         }
 
+        // Normalised rather than matched verbatim: the column is canonical
+        // OPEX/CAPEX, and a filter arriving as 'opex' from a link or a saved view
+        // should still find its rows.
         if ($request->filled('expense_type')) {
-            $query->where('expense_type', $request->expense_type);
+            $query->where('expense_type', ExpenseClassifier::normalise($request->expense_type));
+        }
+
+        if ($request->filled('frequency')) {
+            $query->where('frequency', $this->normaliseFrequency($request->frequency));
         }
 
         if ($request->filled('category_id')) {
@@ -78,6 +86,72 @@ class ExpensesLogController extends Controller
     }
 
     /**
+     * Resolves the [expense_type, frequency] pair a write should store.
+     *
+     * Three shapes reach this, and all three have to produce a sensible row:
+     *
+     *  1. A current client sends both — 'CAPEX' and 'Monthly'. Taken as given.
+     *
+     *  2. A client that predates the split sends expense_type: 'monthly' and no
+     *     frequency. That value was always a frequency, so it is read as one, and
+     *     the nature is derived from the category the same way the alignment
+     *     migration derived it for historical rows. The row lands in the same
+     *     bucket it would have under the old code, plus a nature it never had.
+     *
+     *  3. A current client sends the nature but omits the frequency. Defaults to
+     *     Daily, matching the column default.
+     *
+     * $fallback carries the row's existing values on update, so a PATCH-style
+     * write that touches neither field leaves both alone rather than resetting
+     * them to defaults.
+     *
+     * @return array{0:string,1:string}
+     */
+    private function resolveClassification(Request $request, ?ExpensesLog $existing = null): array
+    {
+        $posted = trim((string) $request->input('expense_type', ''));
+        $isLegacy = in_array(strtolower($posted), ['daily', 'monthly'], true);
+
+        $frequency = $request->filled('frequency')
+            ? $this->normaliseFrequency($request->input('frequency'))
+            : ($isLegacy
+                ? $this->normaliseFrequency($posted)
+                : ($existing->frequency ?? ExpensesLog::FREQUENCY_DAILY));
+
+        if ($posted === '') {
+            // Neither field posted: an update that is only changing an amount.
+            return [
+                $existing->expense_type ?? ExpensesLog::TYPE_OPEX,
+                $frequency,
+            ];
+        }
+
+        $type = $isLegacy
+            // The legacy value said nothing about nature, so it is inferred from
+            // the category — the same call, against the same config, that MONITOR
+            // makes when it classifies these rows for the dashboard.
+            ? ExpenseClassifier::nature($request->input('category'))
+            : ExpenseClassifier::normalise($posted);
+
+        return [$type, $frequency];
+    }
+
+    /**
+     * Canonicalises a frequency to 'Daily' or 'Monthly'.
+     *
+     * Case-insensitive because the value arrives from a form, a query string and
+     * a CSV import, and 'monthly' from a saved filter must still match the
+     * 'Monthly' in the column. Anything unrecognised falls back to Daily, which
+     * is the column's default.
+     */
+    private function normaliseFrequency($value): string
+    {
+        return strtolower(trim((string) $value)) === 'monthly'
+            ? ExpensesLog::FREQUENCY_MONTHLY
+            : ExpensesLog::FREQUENCY_DAILY;
+    }
+
+    /**
      * Kept byte-for-byte compatible with what the legacy ExpensesLog page already
      * consumes — new keys are added alongside, never in place of, the old ones.
      */
@@ -92,7 +166,12 @@ class ExpensesLogController extends Controller
             'payee' => $record->payee ?? '',
             'category' => $record->category ?? '',
             'categoryId' => $record->category_id ? (int) $record->category_id : null,
-            'expenseType' => $record->expense_type ?? ExpensesLog::TYPE_DAILY,
+            // expenseType now carries the OpEx/CapEx nature; the daily/monthly
+            // meaning it used to carry moved to `frequency` beside it. Both are
+            // emitted so a table can show the two facts independently, which is
+            // the whole point of having split them.
+            'expenseType' => $record->expense_type ?? ExpensesLog::TYPE_OPEX,
+            'frequency' => $record->frequency ?? ExpensesLog::FREQUENCY_DAILY,
             'description' => $record->description ?? '',
             'invoiceNo' => $record->invoice_no ?? '',
             'referenceNo' => $record->reference_no ?? '',
@@ -213,7 +292,22 @@ class ExpensesLogController extends Controller
         return [
             'date' => "{$req}|date",
             'amount' => "{$req}|numeric|min:0",
-            'expense_type' => "{$req}|string|in:" . implode(',', ExpensesLog::TYPES),
+            // The two facts MONITOR reports on, kept independent: what kind of
+            // spending it is (expense_type), and how often it recurs (frequency).
+            //
+            // expense_type still accepts the legacy 'daily'/'monthly' vocabulary
+            // it held before the split. A mobile build or a saved integration that
+            // has not been updated posts those, and 422-ing it would break
+            // recording an expense outright; resolveClassification() below reads a
+            // legacy value as the frequency it always meant and derives the
+            // OpEx/CapEx nature from the category. Nothing is rejected that used
+            // to be accepted.
+            //
+            // frequency is optional for the same reason — an old client cannot
+            // send a field it does not know about.
+            'expense_type' => "{$req}|string|in:"
+                . implode(',', array_merge(ExpensesLog::TYPES, ['daily', 'monthly'])),
+            'frequency' => 'nullable|string|in:' . implode(',', ExpensesLog::FREQUENCIES),
             'category_id' => 'nullable|integer|exists:expenses_category,id',
             'category' => 'nullable|string|max:150',
             'payee' => 'nullable|string|max:300',
@@ -305,6 +399,25 @@ class ExpensesLogController extends Controller
                 ->orderByDesc('value')
                 ->get();
 
+            // The OpEx/CapEx split, aggregated in one grouped query rather than as
+            // two SUMs: the same scan answers both, and the pair is guaranteed to
+            // come from one snapshot of the table. A second query for CapEx could
+            // land after a write that the OpEx query missed and the two would not
+            // add up to the total beside them.
+            $byNature = (clone $base())
+                ->whereBetween('date', [$monthStart, $monthEnd])
+                ->select(
+                    'expense_type',
+                    DB::raw('SUM(COALESCE(amount, 0)) as value'),
+                    DB::raw('COUNT(*) as entries')
+                )
+                ->groupBy('expense_type')
+                ->get()
+                ->keyBy('expense_type');
+
+            $opex = (float) ($byNature[ExpensesLog::TYPE_OPEX]->value ?? 0);
+            $capex = (float) ($byNature[ExpensesLog::TYPE_CAPEX]->value ?? 0);
+
             return response()->json([
                 'status' => 'success',
                 'data' => [
@@ -316,6 +429,17 @@ class ExpensesLogController extends Controller
                     'count_this_month' => (clone $base())
                         ->whereBetween('date', [$monthStart, $monthEnd])->count(),
                     'by_category' => $byCategory,
+
+                    // Reported apart because they mean different things to the
+                    // month's result: OpEx is consumed in it, CapEx buys something
+                    // that outlives it. This is the same split MONITOR's executive
+                    // dashboard shows, now from a recorded column rather than from
+                    // guessing at category names.
+                    'opex_this_month' => $opex,
+                    'capex_this_month' => $capex,
+                    'opex_count' => (int) ($byNature[ExpensesLog::TYPE_OPEX]->entries ?? 0),
+                    'capex_count' => (int) ($byNature[ExpensesLog::TYPE_CAPEX]->entries ?? 0),
+
                     'scope' => [
                         'today' => $today->format('Y-m-d'),
                         'month_start' => $monthStart->format('Y-m-d'),
@@ -352,13 +476,21 @@ class ExpensesLogController extends Controller
 
             $now = Carbon::now();
 
+            // Resolved rather than taken verbatim: a client that predates the
+            // OpEx/CapEx split posts a frequency in expense_type, and this reads
+            // it as the frequency it always meant. The category is passed through
+            // the request, so resolve after resolveCategory() has run.
+            $request->merge(['category' => $categoryName]);
+            [$expenseType, $frequency] = $this->resolveClassification($request);
+
             $expense = new ExpensesLog();
             // varchar(50) PK — same UUID strategy InventoryLog uses.
             $expense->id = (string) Str::uuid();
             $expense->organization_id = $currentUser->organization_id ?? null;
             $expense->date = $request->date;
             $expense->amount = $request->amount;
-            $expense->expense_type = $request->expense_type;
+            $expense->expense_type = $expenseType;
+            $expense->frequency = $frequency;
             $expense->category_id = $categoryId;
             $expense->category = $categoryName;
             $expense->payee = $request->payee;
@@ -381,7 +513,7 @@ class ExpensesLogController extends Controller
 
             ActivityLog::log(
                 'Expense Created',
-                "New {$expense->expense_type} expense recorded: {$expense->category} — {$expense->amount}",
+                "New {$expense->frequency} {$expense->expense_type} expense recorded: {$expense->category} — {$expense->amount}",
                 'info',
                 [
                     'resource_type' => 'ExpensesLog',
@@ -445,8 +577,22 @@ class ExpensesLogController extends Controller
                 $expense->photo = $this->uploadReceipt($request->file('receipt'));
             }
 
+            // expense_type and frequency are set through the resolver rather than
+            // copied straight across: the pair has to be decided together, and a
+            // legacy client posting expense_type: 'monthly' must land in frequency
+            // instead of writing 'monthly' into the nature column.
+            //
+            // Passed the current row so a write touching neither field leaves both
+            // as they are — an update that only changes an amount must not reset a
+            // classification someone chose.
+            if ($request->has('expense_type') || $request->has('frequency')) {
+                $request->merge(['category' => $expense->category]);
+                [$expense->expense_type, $expense->frequency] =
+                    $this->resolveClassification($request, $expense);
+            }
+
             foreach ([
-                'date', 'amount', 'expense_type', 'payee', 'description', 'invoice_no',
+                'date', 'amount', 'payee', 'description', 'invoice_no',
                 'reference_no', 'provider', 'supplier', 'location', 'barangay', 'city',
                 'received_date',
             ] as $field) {
@@ -555,7 +701,7 @@ class ExpensesLogController extends Controller
             $handle = fopen('php://output', 'w');
 
             fputcsv($handle, [
-                'ID', 'Date', 'Type', 'Category', 'Payee', 'Amount', 'Description',
+                'ID', 'Date', 'Type', 'Frequency', 'Category', 'Payee', 'Amount', 'Description',
                 'Invoice No', 'Reference No', 'Provider', 'Supplier', 'Received Date',
                 'Location', 'Barangay', 'City', 'Processed By', 'Modified By', 'Modified Date',
             ]);
@@ -569,6 +715,7 @@ class ExpensesLogController extends Controller
                     $r->id,
                     $r->date ? Carbon::parse($r->date)->format('Y-m-d') : '',
                     strtoupper($r->expense_type ?? ''),
+                    $r->frequency ?? '',
                     $r->category,
                     $r->payee,
                     $r->amount,

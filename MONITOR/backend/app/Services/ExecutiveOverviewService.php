@@ -65,6 +65,7 @@ class ExecutiveOverviewService
             'range_label' => $this->rangeLabel($params['date_from'], $params['date_to']),
 
             'subscriber_health' => $this->subscriberHealth($sections['subscriber_analytics'] ?? null),
+            'subscriber_overview' => $this->subscriberOverview($sections['subscriber_analytics'] ?? null, $sections['operations'] ?? null),
             'financial_summary' => $this->financialSummary($sections['financial'] ?? null),
             'operations_tech' => $this->operationsTech(
                 $sections['operations'] ?? null,
@@ -114,6 +115,82 @@ class ExecutiveOverviewService
         ];
     }
 
+    /**
+     * Detailed subscriber overview: billing status, online status, JO/SO task
+     * status, total applications, and per-barangay counts.
+     *
+     * Composed from the subscriber_analytics and operations section payloads.
+     */
+    private function subscriberOverview(?array $subscribers, ?array $operations): array
+    {
+        if ($subscribers === null) {
+            return ['available' => false];
+        }
+
+        $status = $subscribers['status'] ?? [];
+
+        // Billing status counts: Active / Inactive / VIP / Pullout
+        $billingCounts = [
+            'active' => (int) ($status['active'] ?? 0),
+            'inactive' => (int) ($status['inactive'] ?? 0),
+            'vip' => (int) ($status['vip'] ?? 0),
+            'pullout' => (int) ($status['pullout'] ?? 0),
+        ];
+
+        // Online status counts: Online / Offline / Restricted / Disconnected
+        // Sessions (live RADIUS states) come from subscriber_analytics on GOWISER;
+        // fall back to the status counts for what we do have.
+        $sessions = $subscribers['sessions'] ?? [];
+        $sessionMap = [];
+        foreach ($sessions as $s) {
+            $sessionMap[strtolower($s['label'] ?? '')] = (int) ($s['count'] ?? 0);
+        }
+
+        $onlineStatus = [
+            'online' => $sessionMap['online'] ?? 0,
+            'offline' => $sessionMap['offline'] ?? 0,
+            'restricted' => (int) ($status['restricted'] ?? 0),
+            'disconnected' => (int) ($status['disconnected'] ?? 0),
+        ];
+
+        // JO/SO status breakdown from operations queues
+        $joSoStatus = ['done' => 0, 'reschedule' => 0, 'failed' => 0, 'in_progress' => 0];
+
+        if ($operations !== null) {
+            foreach ($operations['queues'] ?? [] as $queue) {
+                foreach ($queue['statuses'] ?? [] as $row) {
+                    $key = strtolower(trim($row['label'] ?? ''));
+                    $count = (int) ($row['count'] ?? 0);
+
+                    if (in_array($key, ['done', 'completed'])) {
+                        $joSoStatus['done'] += $count;
+                    } elseif (in_array($key, ['reschedule', 'rescheduled'])) {
+                        $joSoStatus['reschedule'] += $count;
+                    } elseif (in_array($key, ['failed', 'cancelled', 'canceled'])) {
+                        $joSoStatus['failed'] += $count;
+                    } elseif (in_array($key, ['in progress', 'in_progress', 'ongoing', 'pending', 'new', 'open'])) {
+                        $joSoStatus['in_progress'] += $count;
+                    }
+                }
+            }
+        }
+
+        // Total applications: new subscribers in the range
+        $totalApplications = (int) ($subscribers['growth']['new_in_range'] ?? 0);
+
+        // Per-barangay table (complete list from subscriber_analytics)
+        $barangays = $subscribers['barangays'] ?? [];
+
+        return [
+            'available' => true,
+            'billing' => $billingCounts,
+            'online_status' => $onlineStatus,
+            'jo_so_status' => $joSoStatus,
+            'total_applications' => $totalApplications,
+            'barangays' => $barangays,
+        ];
+    }
+
     /** Income by channel, OpEx against CapEx, and what is still owed. */
     private function financialSummary(?array $financial): array
     {
@@ -132,18 +209,38 @@ class ExecutiveOverviewService
             ];
         }
 
+        $totalIncome = (float) ($financial['kpi']['income'] ?? 0);
+        $opex = (float) ($financial['opex_capex']['opex']['total'] ?? 0);
+        $capex = (float) ($financial['opex_capex']['capex']['total'] ?? 0);
+        $totalExpenses = $opex + $capex;
+        $gross = $totalIncome;
+        $net = $totalIncome - $totalExpenses;
+
+        // Projected monthly earnings = daily average × days in month
+        $dailyAverage = (float) ($financial['kpi']['daily_average'] ?? 0);
+        $daysInMonth = (int) ($financial['kpi']['days_in_month'] ?? (int) now()->daysInMonth);
+        $projectedMonthly = $dailyAverage * $daysInMonth;
+
         return [
             'available' => true,
-            'total_income' => (float) ($financial['kpi']['income'] ?? 0),
+            'total_income' => $totalIncome,
             'channels' => $channels,
-            'opex' => (float) ($financial['opex_capex']['opex']['total'] ?? 0),
-            'capex' => (float) ($financial['opex_capex']['capex']['total'] ?? 0),
-            'net' => (float) ($financial['kpi']['net'] ?? 0),
+            'opex' => $opex,
+            'capex' => $capex,
+            'total_expenses' => $totalExpenses,
+            'gross' => $gross,
+            'net' => $net,
             'margin_pct' => $financial['kpi']['margin_pct'] ?? null,
             'outstanding_payables' => (float) ($financial['payables']['outstanding'] ?? 0),
             'payables_unpaid_count' => (int) ($financial['payables']['totals']['unpaid']['count'] ?? 0),
             'metrics' => $financial['executive_metrics'] ?? null,
             'range_label' => $financial['range_label'] ?? '',
+            'by_method' => $financial['by_method'] ?? [],
+            'by_plan' => $financial['by_plan'] ?? [],
+            'daily_average' => $dailyAverage,
+            'projected_monthly' => $projectedMonthly,
+            'days_elapsed' => (int) ($financial['kpi']['days_elapsed'] ?? 0),
+            'days_in_month' => $daysInMonth,
         ];
     }
 
@@ -238,6 +335,20 @@ class ExecutiveOverviewService
             }
         }
 
+        // Reported concerns and repair categories from operations
+        $concerns = $operations['concerns'] ?? [];
+        $repairCategories = $operations['repair_categories'] ?? [];
+
+        // Top technicians by completed work (JO done + SO done)
+        $topTech = [];
+        if ($tech !== null) {
+            $workload = $tech['workload'] ?? [];
+            // Sort by completed work descending
+            usort($workload, fn ($a, $b) => (int) ($b['completed'] ?? 0) - (int) ($a['completed'] ?? 0));
+            // Take top 10
+            $topTech = array_slice($workload, 0, 10);
+        }
+
         return [
             'available' => $operations !== null || $tech !== null,
             'open_work' => $operations !== null ? $openWork : null,
@@ -253,6 +364,10 @@ class ExecutiveOverviewService
             // reader to wonder why an obviously ancient job reports 40 days.
             'reliable_from' => $reliableFrom?->toDateString(),
             'age_bounded' => $bounded,
+            // New: operations detail for the simplified executive dashboard
+            'concerns' => $concerns,
+            'repair_categories' => $repairCategories,
+            'top_tech' => $topTech,
         ];
     }
 

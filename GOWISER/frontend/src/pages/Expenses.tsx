@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Plus, Edit, Trash2, Download, FileText, CalendarDays, CalendarRange, Wallet, Hash,
+  Building2, HardDrive,
 } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import ExpensesFormModal from '../modals/ExpensesFormModal';
@@ -16,6 +17,9 @@ import {
   ExpensePayload,
   ExpenseSummary,
   ExpenseType,
+  ExpenseFrequency,
+  EXPENSE_TYPES,
+  EXPENSE_FREQUENCIES,
 } from '../services/expensesService';
 import { getExpensesCategories, ExpensesCategory } from '../services/expensesCategoryService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -38,6 +42,7 @@ const Expenses: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ExpenseType | ''>('');
+  const [frequencyFilter, setFrequencyFilter] = useState<ExpenseFrequency | ''>('');
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -50,11 +55,12 @@ const Expenses: React.FC = () => {
   const serverFilters: ExpenseFilters = useMemo(
     () => ({
       expense_type: typeFilter,
+      frequency: frequencyFilter,
       category_id: categoryFilter,
       date_from: dateFrom,
       date_to: dateTo,
     }),
-    [typeFilter, categoryFilter, dateFrom, dateTo]
+    [typeFilter, frequencyFilter, categoryFilter, dateFrom, dateTo]
   );
 
   const fetchData = useCallback(
@@ -179,13 +185,16 @@ const Expenses: React.FC = () => {
 
   const clearFilters = () => {
     setTypeFilter('');
+    setFrequencyFilter('');
     setCategoryFilter('');
     setDateFrom('');
     setDateTo('');
     setSearchQuery('');
   };
 
-  const hasFilters = Boolean(typeFilter || categoryFilter || dateFrom || dateTo || searchQuery);
+  const hasFilters = Boolean(
+    typeFilter || frequencyFilter || categoryFilter || dateFrom || dateTo || searchQuery
+  );
 
   const accent = colorPalette?.primary || '#7c3aed';
 
@@ -273,8 +282,12 @@ const Expenses: React.FC = () => {
             </div>
           )}
 
-          {/* Summary cards. 'daily' and 'monthly' are bucket tags — an expense counts
-              toward the card matching its type, nothing accrues or repeats. */}
+          {/* Summary cards.
+              Two rows because the table now records two independent facts. The
+              first row splits by frequency (which card an expense lands in); the
+              second splits by nature (OpEx against CapEx), which is the split the
+              executive dashboard reports and the one that decides whether the
+              spend belongs against this month's result at all. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {summaryCard(
               'Daily Expenses (Today)',
@@ -306,6 +319,23 @@ const Expenses: React.FC = () => {
             )}
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {summaryCard(
+              'OPEX This Month',
+              peso(summary?.opex_this_month ?? 0),
+              `${summary?.opex_count ?? 0} operating entries — consumed in the period`,
+              <Building2 size={18} />,
+              'text-amber-500'
+            )}
+            {summaryCard(
+              'CAPEX This Month',
+              peso(summary?.capex_this_month ?? 0),
+              `${summary?.capex_count ?? 0} capital entries — assets that outlive the period`,
+              <HardDrive size={18} />,
+              'text-violet-500'
+            )}
+          </div>
+
           {/* Filters */}
           <div className={`${cardClass} space-y-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center gap-3">
@@ -318,14 +348,36 @@ const Expenses: React.FC = () => {
               />
 
               <div className="flex flex-wrap items-center gap-3">
+                {/* Two selects, because the two facts filter independently —
+                    "show me every capital purchase" and "show me the monthly
+                    ones" are different questions, and one combined dropdown
+                    could not ask either without excluding the other. */}
                 <select
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value as ExpenseType | '')}
                   className={controlClass}
+                  title="Expense type"
                 >
                   <option value="">All types</option>
-                  <option value="daily">Daily</option>
-                  <option value="monthly">Monthly</option>
+                  {EXPENSE_TYPES.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={frequencyFilter}
+                  onChange={(e) => setFrequencyFilter(e.target.value as ExpenseFrequency | '')}
+                  className={controlClass}
+                  title="Frequency"
+                >
+                  <option value="">All frequencies</option>
+                  {EXPENSE_FREQUENCIES.map((frequency) => (
+                    <option key={frequency.value} value={frequency.value}>
+                      {frequency.label}
+                    </option>
+                  ))}
                 </select>
 
                 <select
@@ -386,6 +438,7 @@ const Expenses: React.FC = () => {
                   >
                     <th className={th}>Date</th>
                     <th className={th}>Type</th>
+                    <th className={th}>Frequency</th>
                     <th className={th}>Category</th>
                     <th className={th}>Payee</th>
                     <th className={`${th} text-right`}>Amount</th>
@@ -400,7 +453,7 @@ const Expenses: React.FC = () => {
                   {loading ? (
                     <tr>
                       <td
-                        colSpan={10}
+                        colSpan={11}
                         className={`px-4 py-12 text-center ${
                           isDarkMode ? 'text-gray-400' : 'text-gray-600'
                         }`}
@@ -419,15 +472,29 @@ const Expenses: React.FC = () => {
                         }`}
                       >
                         <td className={td}>{expense.date}</td>
+                        {/* Distinct colour families for the two axes, so a glance
+                            down the table never confuses "capital" with
+                            "monthly" — they are different questions. */}
                         <td className="py-3 px-4 whitespace-nowrap">
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                              expense.expenseType === 'monthly'
+                              expense.expenseType === 'CAPEX'
+                                ? 'bg-violet-500/10 text-violet-500'
+                                : 'bg-amber-500/10 text-amber-500'
+                            }`}
+                          >
+                            {expense.expenseType || 'OPEX'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              expense.frequency === 'Monthly'
                                 ? 'bg-indigo-500/10 text-indigo-500'
                                 : 'bg-emerald-500/10 text-emerald-500'
                             }`}
                           >
-                            {expense.expenseType}
+                            {expense.frequency || 'Daily'}
                           </span>
                         </td>
                         <td className={td}>{expense.category || '—'}</td>
@@ -498,7 +565,7 @@ const Expenses: React.FC = () => {
                   ) : (
                     <tr>
                       <td
-                        colSpan={10}
+                        colSpan={11}
                         className={`px-4 py-12 text-center ${
                           isDarkMode ? 'text-gray-400' : 'text-gray-600'
                         }`}

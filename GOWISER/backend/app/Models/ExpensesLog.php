@@ -25,11 +25,37 @@ class ExpensesLog extends Model
      */
     public $timestamps = false;
 
-    /** Bucket tags only — they pick a summary card, they do not recur or accrue. */
-    public const TYPE_DAILY = 'daily';
-    public const TYPE_MONTHLY = 'monthly';
+    /**
+     * What kind of spending this is — the axis MONITOR's executive dashboard
+     * splits on.
+     *
+     *   OPEX   consumed in the period. Netting it against that period's income
+     *          is correct.
+     *   CAPEX  buys an asset that outlives the period, so netting it against one
+     *          month is not.
+     *
+     * Aligned with App\Support\ExpenseClassifier and with MONITOR's classifier of
+     * the same name, which is what reads these rows for the dashboard.
+     */
+    public const TYPE_OPEX = 'OPEX';
+    public const TYPE_CAPEX = 'CAPEX';
 
-    public const TYPES = [self::TYPE_DAILY, self::TYPE_MONTHLY];
+    public const TYPES = [self::TYPE_OPEX, self::TYPE_CAPEX];
+
+    /**
+     * How often the spending recurs.
+     *
+     * Orthogonal to the type above, and previously conflated with it: this column
+     * holds what `expense_type` used to hold. A leased vehicle is Monthly OPEX, a
+     * fibre reel is Daily (one-off) CAPEX — one column could not say both.
+     *
+     * A bucket tag, not a schedule: it decides which summary card an expense
+     * lands in. It does not accrue, recur, or generate rows.
+     */
+    public const FREQUENCY_DAILY = 'Daily';
+    public const FREQUENCY_MONTHLY = 'Monthly';
+
+    public const FREQUENCIES = [self::FREQUENCY_DAILY, self::FREQUENCY_MONTHLY];
 
     protected $fillable = [
         'id',
@@ -48,6 +74,7 @@ class ExpensesLog extends Model
         'category',
         'category_id',
         'expense_type',
+        'frequency',
         'invoice_no',
         'reference_no',
         'received_date',
@@ -73,14 +100,33 @@ class ExpensesLog extends Model
         return $this->belongsTo(ExpensesCategory::class, 'category_id', 'id');
     }
 
+    /**
+     * Frequency scopes.
+     *
+     * These read `frequency`, not `expense_type` — the daily/monthly meaning
+     * moved columns in the MONITOR alignment. The method names are unchanged
+     * because their meaning is unchanged: callers asking for "the daily ones"
+     * still get the daily ones.
+     */
     public function scopeDaily($query)
     {
-        return $query->where('expense_type', self::TYPE_DAILY);
+        return $query->where('frequency', self::FREQUENCY_DAILY);
     }
 
     public function scopeMonthly($query)
     {
-        return $query->where('expense_type', self::TYPE_MONTHLY);
+        return $query->where('frequency', self::FREQUENCY_MONTHLY);
+    }
+
+    /** Nature scopes — the OpEx/CapEx split the executive dashboard reports. */
+    public function scopeOpex($query)
+    {
+        return $query->where('expense_type', self::TYPE_OPEX);
+    }
+
+    public function scopeCapex($query)
+    {
+        return $query->where('expense_type', self::TYPE_CAPEX);
     }
 
     /**
