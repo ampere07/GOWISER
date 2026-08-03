@@ -419,11 +419,14 @@ class EnhancedBillingGenerationService
             
             $othersBasicCharges = 0;
 
-            $totalAmount = $prorateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
-            
-            if ($account->account_balance < 0) {
-                $totalAmount += $account->account_balance;
-            }
+            $periodCharges = $prorateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+
+            $priorBalance = round((float) $account->account_balance, 2);
+
+            // An advance payment sits on the account as a negative (credit) balance. It is netted
+            // into THIS invoice's total so the customer sees the credit applied, which means it must
+            // not be folded into the account balance again below — that would spend it twice.
+            $totalAmount = $priorBalance < 0 ? $periodCharges + $priorBalance : $periodCharges;
 
             $invoice = Invoice::create([
                 'account_no' => $account->account_no,
@@ -446,22 +449,24 @@ class EnhancedBillingGenerationService
 
             $appliedDiscounts = $charges['discounts'];
             
-            $newBalance = $account->account_balance > 0 
-                ? $totalAmount + $account->account_balance 
-                : $totalAmount;
+            // Always accumulate onto the running ledger — never assign the invoice total over it.
+            // Assigning is what wiped advance credits: a -5,000.00 credit was replaced by the new
+            // invoice total instead of absorbing it. Adding this period's charges to a negative
+            // balance nets it down toward zero and carries any remaining credit forward.
+            $newBalance = round($priorBalance + $periodCharges, 2);
 
             $account->update([
-                'account_balance' => round($newBalance, 2),
+                'account_balance' => $newBalance,
                 'balance_update_date' => $invoiceDate
             ]);
-            
+
             Log::info('Invoice created with discount applied to balance', [
                 'account_no' => $account->account_no,
                 'invoice_balance' => $prorateAmount,
                 'others_basic_charges' => $othersBasicCharges,
                 'total_amount' => $totalAmount,
                 'discounts_applied' => $appliedDiscounts,
-                'previous_balance' => $account->account_balance,
+                'previous_balance' => $priorBalance,
                 'new_balance' => $newBalance,
                 'note' => 'Discount already included in others_basic_charges calculation'
             ]);

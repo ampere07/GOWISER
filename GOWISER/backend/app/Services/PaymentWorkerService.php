@@ -558,6 +558,13 @@ class PaymentWorkerService
             $this->workerLog("[RECONNECT CHECK] Starting for account: {$accountNo}");
 
             // Step 1: Check if balance qualifies (0 or negative)
+            //
+            // INVARIANT: this whole reconnect/status-sync path READS the balance and never writes
+            // it. A negative balance is a real advance-payment credit the customer is owed — do
+            // not "settle" or normalise it to 0 on reconnect. Zeroing it here would silently spend
+            // the credit and the customer would be billed twice for the same period. Balance is
+            // written in exactly two places: updateBilling() above (payment applied) and billing
+            // generation (charges accrued).
             $balance = floatval($billingAccount->account_balance ?? 0);
             if ($balance > 0) {
                 $this->workerLog("[RECONNECT SKIP] Balance is positive: ₱{$balance}");

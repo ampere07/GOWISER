@@ -152,11 +152,14 @@ class BillingGenerationService
 
             $othersAndBasicCharges = $this->calculateOthersAndBasicCharges($account);
 
-            $totalAmount = $prorateAmount + $othersAndBasicCharges;
+            $periodCharges = $prorateAmount + $othersAndBasicCharges;
 
-            if ($account->account_balance < 0) {
-                $totalAmount += $account->account_balance;
-            }
+            $priorBalance = round((float) $account->account_balance, 2);
+
+            // An advance payment sits on the account as a negative (credit) balance. It is netted
+            // into THIS invoice's total so the customer sees the credit applied, which means it must
+            // not be folded into the account balance again below — that would spend it twice.
+            $totalAmount = $priorBalance < 0 ? $periodCharges + $priorBalance : $periodCharges;
 
             $invoice = Invoice::create([
                 'account_id' => $account->id,
@@ -171,9 +174,10 @@ class BillingGenerationService
                 'updated_by_user_id' => $userId
             ]);
 
-            $newBalance = $account->account_balance > 0
-                ? $totalAmount + $account->account_balance
-                : $totalAmount;
+            // Always accumulate onto the running ledger — never assign the invoice total over it.
+            // Assigning is what wiped advance credits: a negative (credit) balance was replaced by
+            // the new invoice total instead of absorbing it.
+            $newBalance = round($priorBalance + $periodCharges, 2);
 
             $account->update([
                 'account_balance' => $newBalance,
