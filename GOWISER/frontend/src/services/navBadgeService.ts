@@ -9,7 +9,7 @@ import apiClient from '../config/api';
 export interface NavBadgeCounts {
   /** Applications with status 'Pending' — awaiting review. */
   application: number;
-  /** Job Orders whose billing_status is not yet Done/Approved/Failed/Cancelled. */
+  /** Job Orders where billing_status is In Progress AND onsite_status is Done. */
   job_order: number;
   /** Service Orders whose support_status is not yet Resolved/Failed/Cancelled. */
   service_order: number;

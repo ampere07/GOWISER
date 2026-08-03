@@ -29,9 +29,8 @@ class NavBadgeCountController extends Controller
      * Compared case-insensitively (see notIn()), so 'done' / 'Done' / 'DONE' all resolve.
      */
     private const TERMINAL = [
-        // Job Order billing: the JO list itself renders a blank billing_status as 'Pending',
-        // so a blank must count here too.
-        'job_order' => ['Done', 'Approved', 'Failed', 'Cancelled'],
+        // Job Order attention count: billing_status = 'In Progress' AND onsite_status = 'Done'
+        'job_order' => ['Done', 'Approved', 'Failed', 'Cancelled', 'Completed'],
         // Service Order support: 'In Progress' and 'For Visit' are the open states.
         'service_order' => ['Resolved', 'Failed', 'Cancelled'],
         // Work Order: 'Pending' and 'In Progress' are the open states.
@@ -52,7 +51,8 @@ class NavBadgeCountController extends Controller
                 }),
 
                 'job_order' => $this->countWhere('job_orders', $organizationId, function (Builder $q) {
-                    $this->notIn($q, 'billing_status', self::TERMINAL['job_order']);
+                    $q->whereIn(DB::raw('LOWER(TRIM(billing_status))'), ['in progress', 'inprogress'])
+                      ->whereIn(DB::raw('LOWER(TRIM(onsite_status))'), ['done', 'completed', 'finish']);
                 }),
 
                 'service_order' => $this->countWhere('service_orders', $organizationId, function (Builder $q) {
