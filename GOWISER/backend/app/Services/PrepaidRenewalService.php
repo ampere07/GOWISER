@@ -34,17 +34,24 @@ class PrepaidRenewalService
      *     the current expiry (+30 days) so an early payer never loses their remaining days.
      *   - Expired or never set (null / in the past): start a FRESH 30-day period from the
      *     payment date.
+     *   - $activateNow: start a fresh period from the payment date REGARDLESS, forfeiting any
+     *     remaining days. See the parameter note below.
      *
-     * @return array{prepaid:bool, mode?:string, previous_expiry?:?string, new_expiry?:string, error?:string}
+     * @param bool $activateNow Customer ticked "Activate Now" on a plan change and accepted losing
+     *   the balance of the current period. Callers must only pass true when a genuine plan switch
+     *   is happening — {@see PrepaidPlanChangeService::settlePayment()} is what decides that.
+     *   Forfeiting days for a same-plan top-up would be pure loss to the customer.
+     *
+     * @return array{prepaid:bool, mode?:string, previous_expiry?:?string, new_expiry?:string, forfeited_days?:int, error?:string}
      */
-    public function renewByAccountNo(string $accountNo, ?Carbon $paymentDate = null): array
+    public function renewByAccountNo(string $accountNo, ?Carbon $paymentDate = null, bool $activateNow = false): array
     {
         try {
             $account = BillingAccount::where('account_no', $accountNo)->first();
             if (!$account) {
                 return ['prepaid' => false];
             }
-            return $this->renew($account, $paymentDate);
+            return $this->renew($account, $paymentDate, $activateNow);
         } catch (\Throwable $e) {
             Log::error('[PREPAID RENEWAL] Failed for account ' . $accountNo . ': ' . $e->getMessage());
             return ['prepaid' => false, 'error' => $e->getMessage()];
@@ -54,7 +61,7 @@ class PrepaidRenewalService
     /**
      * @see renewByAccountNo()
      */
-    public function renew(BillingAccount $account, ?Carbon $paymentDate = null): array
+    public function renew(BillingAccount $account, ?Carbon $paymentDate = null, bool $activateNow = false): array
     {
         // Only prepaid accounts have a service period; postpaid is entirely unaffected.
         if (!BillingAccount::isPrepaidType($account->generation_type)) {
@@ -63,14 +70,27 @@ class PrepaidRenewalService
 
         $paymentDate = $paymentDate ? $paymentDate->copy() : Carbon::now();
         $current = $account->prepaid_expires_at ? Carbon::parse($account->prepaid_expires_at) : null;
+        $forfeitedDays = 0;
 
-        if ($current && $current->greaterThan($paymentDate)) {
+        if ($activateNow && $current && $current->greaterThan($paymentDate)) {
+            // The customer asked for the new plan to start immediately and was warned that the
+            // rest of the current period goes with it. A fresh window from the payment date is
+            // exactly that forfeit — the days between now and the old expiry are not carried over.
+            //
+            // Counted (not just discarded) because the figure is what the receipt and the audit
+            // trail need in order to show what the customer gave up.
+            $forfeitedDays = (int) ceil($paymentDate->floatDiffInDays($current));
+            $newExpiry = $paymentDate->copy()->addDays(self::PREPAID_PERIOD_DAYS);
+            $mode = 'activated';
+        } elseif ($current && $current->greaterThan($paymentDate)) {
             // Early payment while still active — extend from the EXISTING expiry, preserving
             // every remaining prepaid day (e.g. expiry Jul 31 + pay Jul 20 => Aug 30).
             $newExpiry = $current->copy()->addDays(self::PREPAID_PERIOD_DAYS);
             $mode = 'extended';
         } else {
-            // Expired or never set — start a fresh period from the payment date.
+            // Expired or never set — start a fresh period from the payment date. Note this is also
+            // where an "Activate Now" on an already-lapsed account lands: there is nothing left to
+            // forfeit, so the two are the same operation and 'renewed' is the honest label.
             $newExpiry = $paymentDate->copy()->addDays(self::PREPAID_PERIOD_DAYS);
             $mode = 'renewed';
         }
@@ -88,6 +108,7 @@ class PrepaidRenewalService
             'previous_expiry' => $current?->toDateTimeString(),
             'new_expiry' => $newExpiry->toDateTimeString(),
             'payment_date' => $paymentDate->toDateTimeString(),
+            'forfeited_days' => $forfeitedDays,
         ]);
 
         return [
@@ -95,6 +116,9 @@ class PrepaidRenewalService
             'mode' => $mode,
             'previous_expiry' => $current?->toDateTimeString(),
             'new_expiry' => $newExpiry->toDateTimeString(),
+            // Only ever non-zero under 'activated'. Surfaced so the caller can put the cost of the
+            // choice on the receipt instead of the customer discovering it later.
+            'forfeited_days' => $forfeitedDays,
         ];
     }
 }

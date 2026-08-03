@@ -124,7 +124,9 @@ class TransactionController extends Controller
 
             $validated = $request->validate([
                 'account_no' => 'nullable|exists:billing_accounts,account_no',
-                'transaction_type' => 'required|in:Installation Fee,Recurring Fee,Security Deposit',
+                // Which types are legal depends on whether the account is prepaid or postpaid —
+                // 'Top Up' and 'Recurring Fee' are mutually exclusive. See resolveTypeRule().
+                'transaction_type' => $this->resolveTypeRule($request->input('account_no')),
                 'received_payment' => 'required|numeric|min:0',
                 'payment_date' => 'required|date',
                 'date_processed' => 'nullable|date',
@@ -140,7 +142,11 @@ class TransactionController extends Controller
                 'auto_apply_payment' => 'nullable|boolean',
                 // Prepaid only: the plan this payment buys. Acted on at approval.
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
+                // Prepaid only: start that plan immediately, forfeiting the rest of the period.
+                'activate_now' => 'nullable|boolean',
             ]);
+
+            $this->assertPrepaidOnlyFields($request);
 
             \Log::info('Transaction validation passed', [
                 'validated_data' => $validated
@@ -195,7 +201,8 @@ class TransactionController extends Controller
                         $transaction->received_payment,
                         $transaction->id,
                         Auth::id(),
-                        now()
+                        now(),
+                        $transaction->transaction_type
                     );
 
                     $transaction->status = 'Done';
@@ -213,7 +220,7 @@ class TransactionController extends Controller
                         $this->sendApprovalEmail($billingAccount, $appliedData['invoices_updated']['invoices_paid'] ?? [], $transaction->received_payment, $transaction->payment_date);
 
                         // Attempt reconnection for auto-applied payments
-                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
+                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now);
                     }
 
                 }
@@ -421,7 +428,12 @@ class TransactionController extends Controller
                     'payment_applied' => $paymentReceived
                 ]);
 
-                $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transactionId, $userId, $currentTime);
+                // Service Charge is balance-only: the SO charge it pays for is not an invoice
+                // yet (it lands on the NEXT monthly bill), so distributing this payment would mark
+                // an unrelated monthly invoice Paid. See Transaction::settlesInvoices().
+                if (Transaction::settlesInvoices($transaction->transaction_type)) {
+                    $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transactionId, $userId, $currentTime);
+                }
             }
             else {
                 \Log::info('Transaction is Security Deposit, skipping balance and invoice updates', [
@@ -492,7 +504,7 @@ class TransactionController extends Controller
 
 
             // Attempt reconnection after successful approval
-            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
+            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now);
 
             event(new TransactionUpdated(['action' => 'approved', 'transaction_id' => $transactionId, 'account_no' => $accountNo]));
 
@@ -691,6 +703,86 @@ class TransactionController extends Controller
     }
 
     /**
+     * Validation rule for transaction_type, narrowed to what the account may actually record.
+     *
+     * A prepaid account gets 'Top Up' and a postpaid one 'Recurring Fee'; the other three types
+     * are legal on both. This is the server-side half of the dropdown the transaction form builds
+     * from the same list ({@see Transaction::typesForGenerationType()}) — the client is filtered
+     * for usability, but the client is not what enforces it. Without this, a stale browser tab
+     * open since before the deploy would happily post 'Recurring Fee' against a prepaid account
+     * and produce exactly the mislabelled row the backfill migration exists to clean up.
+     *
+     * When the account cannot be resolved (no account_no — a transaction not tied to an account)
+     * every known type is accepted, since there is no account type to contradict.
+     *
+     * @param bool $required store() demands a type; update() leaves it optional.
+     * @param string|null $currentType The type the transaction ALREADY has, on an edit. Always
+     *   permitted, even when retired: 'Security Deposit' is no longer offered for new
+     *   transactions, but a pending one recorded before it was retired must still be editable —
+     *   correcting its OR number should not be blocked by, or silently change, its type.
+     * @return array<int, mixed>
+     */
+    private function resolveTypeRule(?string $accountNo, bool $required = true, ?string $currentType = null): array
+    {
+        $generationType = $accountNo
+            ? BillingAccount::where('account_no', $accountNo)->value('generation_type')
+            : null;
+
+        $allowed = $accountNo
+            ? Transaction::typesForGenerationType($generationType)
+            : array_merge([Transaction::TYPE_RECURRING_FEE, Transaction::TYPE_TOP_UP], Transaction::SHARED_TYPES);
+
+        if ($currentType !== null && !in_array($currentType, $allowed, true)) {
+            $allowed[] = $currentType;
+        }
+
+        return [$required ? 'required' : 'nullable', \Illuminate\Validation\Rule::in($allowed)];
+    }
+
+    /**
+     * Reject the prepaid-only fields when the account is postpaid.
+     *
+     * selected_plan_id and activate_now describe buying a prepaid plan. On a postpaid account the
+     * approval path ignores both — PrepaidPlanChangeService no-ops on a non-prepaid account — so
+     * accepting them would silently swallow a caller's intent and leave a row whose columns claim
+     * something that never happened. Better to say so.
+     *
+     * @throws \Illuminate\Validation\ValidationException
+     */
+    private function assertPrepaidOnlyFields(Request $request, ?string $accountNo = null): void
+    {
+        $accountNo = $accountNo ?? $request->input('account_no');
+
+        if (!$accountNo) {
+            return;
+        }
+
+        $generationType = BillingAccount::where('account_no', $accountNo)->value('generation_type');
+
+        if (BillingAccount::isPrepaidType($generationType)) {
+            return;
+        }
+
+        $offending = [];
+
+        if (filled($request->input('selected_plan_id'))) {
+            $offending['selected_plan_id'] = 'A plan can only be bought on a prepaid account.';
+        }
+
+        // boolean() rather than filled(): an explicit `activate_now: false` is a client saying
+        // "no", which is the correct answer for a postpaid account and must not be an error.
+        if ($request->boolean('activate_now')) {
+            $offending['activate_now'] = 'Activate Now applies to prepaid accounts only.';
+        }
+
+        if ($offending === []) {
+            return;
+        }
+
+        throw \Illuminate\Validation\ValidationException::withMessages($offending);
+    }
+
+    /**
      * Capture the prepaid-specific state of an account before an approval mutates it.
      *
      * Needed because attemptReconnectionAfterApproval() runs AFTER the approval commits
@@ -735,7 +827,13 @@ class TransactionController extends Controller
         ];
     }
 
-    private function applyPaymentToAccount(int $accountId, string $accountNo, float $paymentReceived, int $transactionId, ?int $userId, $currentTime): array
+    /**
+     * @param string|null $transactionType Decides whether the payment is also distributed across
+     *   unpaid invoices or is balance-only. See {@see Transaction::settlesInvoices()}. Defaults to
+     *   null, which settles invoices — the historical behaviour for every caller that predates the
+     *   prepaid/postpaid split.
+     */
+    private function applyPaymentToAccount(int $accountId, string $accountNo, float $paymentReceived, int $transactionId, ?int $userId, $currentTime, ?string $transactionType = null): array
     {
         $billingAccount = BillingAccount::find($accountId);
         if (!$billingAccount) {
@@ -755,7 +853,10 @@ class TransactionController extends Controller
         $billingAccount->updated_by = $userId;
         $billingAccount->save();
 
-        $invoiceResults = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transactionId, $userId, $currentTime);
+        // Balance-only for Service Charge — see Transaction::settlesInvoices().
+        $invoiceResults = Transaction::settlesInvoices($transactionType)
+            ? $this->updateInvoiceDetails($accountNo, $paymentReceived, $transactionId, $userId, $currentTime)
+            : ['invoices_paid' => [], 'invoices_partial' => [], 'distribution' => []];
 
         return [
             'old_balance' => $currentBalance,
@@ -928,8 +1029,16 @@ class TransactionController extends Controller
             $roleId = $authUser ? $authUser->role_id : null;
             $isSuperAdmin = !$authUser || $roleId == 7 || !$organizationId;
 
+            // The account cannot be reassigned by an edit, so the type rule is judged against the
+            // account the transaction already belongs to. Read before validate() because that is
+            // what decides whether 'Top Up' or 'Recurring Fee' is the legal recurring type here —
+            // and because the row's existing type stays permitted even if it has since been
+            // retired, so an old pending transaction remains editable.
+            $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type']);
+            $existingAccountNo = $existing->account_no ?? null;
+
             $validated = $request->validate([
-                'transaction_type' => 'nullable|in:Installation Fee,Recurring Fee,Security Deposit',
+                'transaction_type' => $this->resolveTypeRule($existingAccountNo, false, $existing->transaction_type ?? null),
                 'received_payment' => 'nullable|numeric|min:0',
                 'payment_date' => 'nullable|date',
                 'payment_method' => 'nullable|string|max:255',
@@ -940,7 +1049,10 @@ class TransactionController extends Controller
                 // Kept editable while the transaction is still Pending, so a mis-keyed plan can
                 // be corrected before approval acts on it.
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
+                'activate_now' => 'nullable|boolean',
             ]);
+
+            $this->assertPrepaidOnlyFields($request, $existingAccountNo);
 
             DB::beginTransaction();
 
@@ -978,7 +1090,19 @@ class TransactionController extends Controller
                 'message' => 'Transaction updated successfully',
                 'data' => $transaction->load(['account.customer', 'account.technicalDetails', 'processor', 'paymentMethodInfo'])
             ]);
-        } catch (\Exception $e) {
+        }
+        // Ahead of the generic handler below, which would otherwise report a rejected field as a
+        // 500 "Failed to update transaction" and give the form nothing to show against the input.
+        // Mirrors store(), which has always separated the two.
+        catch (\Illuminate\Validation\ValidationException $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        }
+        catch (\Exception $e) {
             DB::rollBack();
             \Log::error('Error updating transaction: ' . $e->getMessage());
             return response()->json([
@@ -1117,7 +1241,11 @@ class TransactionController extends Controller
                         $billingAccount->updated_by = $userId;
                         $billingAccount->save();
 
-                        $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transaction->id, $userId, $currentTime);
+                        // Balance-only for Service Charge — see approve() and
+                        // Transaction::settlesInvoices().
+                        if (Transaction::settlesInvoices($transaction->transaction_type)) {
+                            $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transaction->id, $userId, $currentTime);
+                        }
                     }
 
                     $transaction->status = 'Done';
@@ -1163,7 +1291,7 @@ class TransactionController extends Controller
                     $accountPayments[$accountNo]['total'] += $paymentReceived;
 
                     // Attempt reconnection after successful approval
-                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id);
+                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now);
 
                     $results['success'][] = [
                         'transaction_id' => $transactionId,
@@ -1275,7 +1403,7 @@ class TransactionController extends Controller
      * Attempt to reconnect user account after transaction approval
      * Only reconnects if billing_status_id is not 1 (Active) and balance is 0 or negative
      */
-    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null, $selectedPlanId = null): string
+    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null, $selectedPlanId = null, $activateNow = false): string
     {
         try {
             // Reload billing account to get latest balance and status
@@ -1292,27 +1420,31 @@ class TransactionController extends Controller
             }
 
             // Prepaid: a settling *service* payment extends (if still active) or restarts (if
-            // expired) the prepaid service period. Done BEFORE the already-online short-circuit
-            // below so an early payer whose session is still up still gets extended. Non-service
-            // transactions (Security Deposit, Installation Fee) must NEVER grant service days, and
-            // it is a no-op for postpaid accounts. Anchored to the actual payment date.
-            if (!in_array($transactionType, ['Security Deposit', 'Installation Fee'], true)) {
+            // expired) the prepaid service period, and acts on any plan bought with it. Done
+            // BEFORE the already-online short-circuit below so an early payer whose session is
+            // still up still gets extended. No-op for postpaid accounts. Anchored to the actual
+            // payment date.
+            //
+            // Guarded by Transaction::grantsService(): a Security Deposit, Installation Fee or
+            // Service Charge is not payment for service time, so none of them may grant prepaid
+            // days OR switch a customer's plan.
+            if (Transaction::grantsService($transactionType)) {
                 $prepaidPayDate = $paymentDate ? \Carbon\Carbon::parse($paymentDate) : null;
-                $prepaidRenewal = app(\App\Services\PrepaidRenewalService::class)->renewByAccountNo($accountNo, $prepaidPayDate);
+
+                // One call rather than renew-then-plan-change: "Activate Now" makes the two steps
+                // interdependent, and settlePayment() owns that ordering for both payment
+                // pipelines. Mirrors PaymentWorkerService.
+                $settled = app(\App\Services\PrepaidPlanChangeService::class)
+                    ->settlePayment($accountNo, $selectedPlanId, (bool) $activateNow, $prepaidPayDate);
+
+                $prepaidRenewal = $settled['renewal'];
+                $planChange = $settled['plan_change'];
+
                 if (!empty($prepaidRenewal['prepaid'])) {
-                    \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}");
+                    \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}"
+                        . (!empty($prepaidRenewal['forfeited_days']) ? " ({$prepaidRenewal['forfeited_days']} day(s) forfeited)" : ''));
                 }
 
-                // Prepaid plan change bought at the counter. Mirrors PaymentWorkerService: either
-                // queue the switch for when the current period lapses (customer is mid-period on a
-                // plan they already paid for) or apply it now (their period had expired). MUST run
-                // after the renewal above — it reads that call's `mode` / `previous_expiry`, since
-                // the renewal has already moved prepaid_expires_at forward.
-                //
-                // Deliberately inside this same transaction-type guard: a Security Deposit or
-                // Installation Fee must never switch a customer's plan.
-                $planChange = app(\App\Services\PrepaidPlanChangeService::class)
-                    ->handleSettledPayment($accountNo, $selectedPlanId, $prepaidRenewal);
                 if (($planChange['action'] ?? 'none') !== 'none') {
                     \Log::info("[TRANSACTION RECONNECT] Prepaid plan {$planChange['action']} for {$accountNo} — plan: {$planChange['plan']}"
                         . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));

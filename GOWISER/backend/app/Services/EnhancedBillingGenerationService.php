@@ -177,7 +177,20 @@ class EnhancedBillingGenerationService
         ])
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
-            ->whereNotNull('account_no');
+            ->whereNotNull('account_no')
+            // Prepaid accounts are not billed on the fixed billing-day cadence — they receive no
+            // recurring invoice at all, because a prepaid period is paid for at checkout. Mirrors
+            // the identical exclusion in EnhancedBillingGenerationServiceWithNotifications, which
+            // is what the nightly cron runs; this class is still reachable from the
+            // /billing-generation/trigger-scheduled and debug routes, and without this a prepaid
+            // customer invoked through one of those would be billed twice over.
+            //
+            // Alias list, not a single '!=': a row still spelled 'Pre Paid' must stay excluded.
+            // NULL generation_type is legacy and bills as postpaid.
+            ->where(function ($q) {
+                $q->whereNotIn('generation_type', BillingAccount::PREPAID_ALIASES)
+                  ->orWhereNull('generation_type');
+            });
 
         if ($billingDay === self::END_OF_MONTH_BILLING) {
             $query->where('billing_day', self::END_OF_MONTH_BILLING);

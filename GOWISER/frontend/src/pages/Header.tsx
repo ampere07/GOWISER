@@ -6,6 +6,7 @@ import { userSettingsService } from '../services/userSettingsService';
 import NotificationToast from '../components/NotificationToast';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
 
 interface HeaderProps {
   onToggleSidebar?: () => void;
@@ -44,6 +45,24 @@ const NOTIFICATION_BADGES: Record<string, { label: string; className: string }> 
   },
 };
 
+/**
+ * The "Needs attention" rows in the bell dropdown.
+ *
+ * Distinct from the notification feed below them: the feed is a stream of things that HAPPENED
+ * and can be cleared, whereas these are counts of work still OUTSTANDING and clear themselves
+ * only when the work is done. Same five counts the sidebar badges use.
+ *
+ * `section` matches the ids Sidebar/App route on, so a row navigates exactly where the
+ * corresponding menu item would.
+ */
+const ATTENTION_ROWS: { key: keyof NavBadgeCounts; label: string; section: string }[] = [
+  { key: 'application', label: 'Applications', section: 'application-management' },
+  { key: 'job_order', label: 'Job Orders', section: 'job-order' },
+  { key: 'service_order', label: 'Service Orders', section: 'service-order' },
+  { key: 'work_order', label: 'Work Orders', section: 'work-order' },
+  { key: 'transaction', label: 'Transactions', section: 'transaction-list' },
+];
+
 const badgeLabelFor = (type?: string) => NOTIFICATION_BADGES[type || 'application']?.label ?? 'Notification';
 const badgeStyleFor = (type?: string) =>
   (NOTIFICATION_BADGES[type || 'application'] ?? NOTIFICATION_BADGES.application).className;
@@ -69,6 +88,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Outstanding-work counts shown above the feed. Kept separate from `unreadCount` because
+  // "Clear All" dismisses notifications and must never appear to dismiss real pending work.
+  const [navBadges, setNavBadges] = useState<NavBadgeCounts>(EMPTY_NAV_BADGE_COUNTS);
   const [loading, setLoading] = useState(false);
   const [isTogglingDarkMode, setIsTogglingDarkMode] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -362,6 +384,31 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }, 10000); // 10 seconds polling fallback
 
     return () => {
+      clearInterval(interval);
+    };
+  }, []);
+
+  /**
+   * Outstanding-work counts for the bell.
+   *
+   * Polled on a slower cadence than the notification feed above (which is a 10s fallback for a
+   * live stream): these counts change when someone finishes a job, not second by second, and the
+   * sidebar is already subscribed to the per-entity broadcasts for immediate updates.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = () => {
+      getNavBadgeCounts().then(counts => {
+        if (!cancelled && mountedRef.current) setNavBadges(counts);
+      });
+    };
+
+    load();
+    const interval = setInterval(load, 2 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
       clearInterval(interval);
     };
   }, []);
@@ -714,8 +761,14 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
               } transition-colors`}
           >
             <Bell className="h-5 w-5" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+            {/* Numeric, not a bare dot: the count is the point — staff need to know whether one
+                thing is waiting or thirty without opening the panel. Totals the outstanding work
+                AND the unread feed, since both are things the bell is telling them about.
+                Capped at 99+ so a large backlog cannot stretch the header. */}
+            {(navBadges.total + unreadCount) > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+                {(navBadges.total + unreadCount) > 99 ? '99+' : (navBadges.total + unreadCount)}
+              </span>
             )}
           </button>
 
@@ -738,6 +791,38 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   </button>
                 )}
               </div>
+              {/* Needs attention — outstanding work, above the feed and deliberately outside the
+                  "Clear All" scope: these clear when the work is done, not when dismissed.
+                  Hidden entirely when everything is at zero so a quiet queue costs no space. */}
+              {navBadges.total > 0 && (
+                <div className={`px-4 py-3 border-b ${isDarkMode ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Needs Attention
+                  </div>
+                  <div className="space-y-1">
+                    {ATTENTION_ROWS.filter(row => navBadges[row.key] > 0).map(row => (
+                      <button
+                        key={row.key}
+                        onClick={() => {
+                          setShowNotifications(false);
+                          onNavigate?.(row.section);
+                        }}
+                        className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'
+                          }`}
+                      >
+                        <span>{row.label}</span>
+                        <span
+                          className="min-w-[20px] px-1.5 py-0.5 rounded-full text-xs font-bold text-white text-center"
+                          style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                        >
+                          {navBadges[row.key] > 99 ? '99+' : navBadges[row.key]}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="max-h-96 overflow-y-auto">
                 {loading ? (
                   <div className={`p-4 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'

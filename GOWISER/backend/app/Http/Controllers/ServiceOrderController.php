@@ -21,6 +21,109 @@ use App\Events\ServiceOrderUpdated;
 
 class ServiceOrderController extends Controller
 {
+    /**
+     * service_charge_logs.service_charge_type for a charge raised by a completed Service Order.
+     *
+     * Distinguishes these rows from AutoDisconnectService's own entries (reconnection fees,
+     * post-DC additional invoices), which share the table.
+     */
+    private const SO_CHARGE_TYPE = 'Service Order';
+
+    /**
+     * Bill a completed Service Order's charge to the customer.
+     *
+     * Fired when the order reaches a finished state (visit_status 'Done' or support_status
+     * 'Resolved'). Two effects, and which of them apply depends on the account type:
+     *
+     *   POSTPAID  the charge is added to account_balance AND logged to service_charge_logs as
+     *             'Unused'. The next monthly run picks up unused rows
+     *             ({@see \App\Services\EnhancedBillingGenerationServiceWithNotifications::calculateServiceFees()})
+     *             and folds the amount into that invoice's service_charge column, which is what
+     *             makes it show on the bill as a service charge rather than as an unexplained
+     *             balance movement.
+     *
+     *   PREPAID   the charge is added to account_balance ONLY. Prepaid accounts are excluded from
+     *             invoice generation entirely, so a service_charge_logs row would sit 'Unused'
+     *             forever waiting for a monthly invoice that is never generated — and would then
+     *             be swept up if the account were ever converted to postpaid, billing the customer
+     *             for a repair they already settled. Their record of the charge is the transaction
+     *             receipt (transaction_type 'Service Charge').
+     *
+     * Never throws: the Service Order status change is the caller's primary operation and has to
+     * stand even if the billing side fails. A failure here is logged for manual repair.
+     */
+    private function applyServiceOrderCharge($order, float $serviceCharge, string $updatedByUser): void
+    {
+        if ($serviceCharge <= 0) {
+            return;
+        }
+
+        try {
+            $billingAccount = DB::table('billing_accounts')
+                ->where('account_no', $order->account_no)
+                ->first();
+
+            if (!$billingAccount) {
+                Log::warning('[SERVICE ORDER CHARGE] No billing account for ' . $order->account_no . ', charge not applied');
+                return;
+            }
+
+            $isPrepaid = BillingAccount::isPrepaidType($billingAccount->generation_type ?? null);
+
+            $currentBalance = floatval($billingAccount->account_balance);
+            $newBalance = $currentBalance + $serviceCharge;
+
+            DB::table('billing_accounts')
+                ->where('account_no', $order->account_no)
+                ->update([
+                    'account_balance' => $newBalance,
+                    'balance_update_date' => now(),
+                ]);
+
+            Log::info("[SERVICE ORDER CHARGE] Account {$order->account_no} balance {$currentBalance} -> {$newBalance}"
+                . " (service charge: {$serviceCharge})");
+
+            if ($isPrepaid) {
+                Log::info("[SERVICE ORDER CHARGE] {$order->account_no} is prepaid — no invoice will be raised for this charge");
+                return;
+            }
+
+            // Dedupe on the order, not on the date: an order that is re-saved after already being
+            // marked Done must not queue the same charge twice. The caller's $statusChanged guard
+            // covers the common case, but it only sees the transition, so a second row created by
+            // any other path would still get through without this.
+            $alreadyLogged = DB::table('service_charge_logs')
+                ->where('service_order_id', $order->id)
+                ->where('service_charge_type', self::SO_CHARGE_TYPE)
+                ->exists();
+
+            if ($alreadyLogged) {
+                Log::info("[SERVICE ORDER CHARGE] Charge for SO {$order->id} already logged, not queueing a second invoice line");
+                return;
+            }
+
+            // 'Unused' is the status calculateServiceFees() selects on; it flips the row to 'Used'
+            // once it has been folded into an invoice.
+            DB::table('service_charge_logs')->insert([
+                'organization_id' => $order->organization_id ?? null,
+                'account_no' => $order->account_no,
+                'service_order_id' => $order->id,
+                'service_charge' => $serviceCharge,
+                'service_charge_type' => self::SO_CHARGE_TYPE,
+                'status' => 'Unused',
+                'remarks' => 'Service Order #' . $order->id . ' completed',
+                'created_by' => $updatedByUser,
+                'updated_by' => $updatedByUser,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            Log::info("[SERVICE ORDER CHARGE] Queued ₱{$serviceCharge} onto the next invoice for {$order->account_no}");
+        } catch (\Throwable $e) {
+            Log::error('[SERVICE ORDER CHARGE] Failed for SO ' . ($order->id ?? '?') . ': ' . $e->getMessage());
+        }
+    }
+
     public function index(Request $request): JsonResponse
     {
         try {
@@ -801,17 +904,7 @@ class ServiceOrderController extends Controller
             }
 
             if ($shouldAddServiceCharge && $statusChanged && $request->has('service_charge')) {
-                $serviceCharge = floatval($request->service_charge);
-                if ($serviceCharge > 0) {
-                    $billingAccount = DB::selectOne("SELECT account_balance FROM billing_accounts WHERE account_no = ?", [$order->account_no]);
-                    if ($billingAccount) {
-                        $currentBalance = floatval($billingAccount->account_balance);
-                        $newBalance = $currentBalance + $serviceCharge;
-                        DB::update("UPDATE billing_accounts SET account_balance = ?, balance_update_date = ? WHERE account_no = ?",
-                        [$newBalance, now(), $order->account_no]);
-                        Log::info("Updated account balance from {$currentBalance} to {$newBalance} (added service charge: {$serviceCharge})");
-                    }
-                }
+                $this->applyServiceOrderCharge($order, floatval($request->service_charge), $updatedByUser);
             }
 
             if ($request->has('updated_by')) {

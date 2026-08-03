@@ -69,6 +69,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
     // instead of buying a plan/plan-change (no plan_id is sent when this is on).
     const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
+    // Prepaid-only: start the newly bought plan immediately, forfeiting the days remaining on the
+    // current one, instead of queueing the switch for when the period lapses. Opt-in, and only
+    // ever offered when there is actually something to forfeit — see canActivateNow.
+    const [activateNow, setActivateNow] = useState<boolean>(false);
     // Convenience fee rate the ISP adds on top of an online payment (2.5 = 2.5%). Disclosed under
     // the amount field so the customer is not surprised by a higher total at the gateway. 0 = none.
     const [convenienceFeePercentage, setConvenienceFeePercentage] = useState<number>(0);
@@ -335,6 +339,25 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // than apply immediately, so the confirm-payment modal can say which will happen.
     const isPrepaidPeriodActive = prepaidDaysLeft !== null && prepaidDaysLeft > 0;
 
+    /**
+     * Whether "Activate Now" is worth offering.
+     *
+     * All three conditions matter:
+     *  - a genuine switch    activating the plan already in force forfeits days for nothing
+     *  - a live period       once it has lapsed the new plan starts immediately regardless, so
+     *                        there is no decision left to make
+     *  - not paying balance  "Pay Current Balance" sends no plan at all
+     *
+     * The server independently refuses to forfeit days when the switch is not genuine
+     * (PrepaidPlanChangeService::isGenuineSwitch), so this governs the UI, not the outcome.
+     */
+    const canActivateNow = isPrepaid
+        && !payCurrentBalance
+        && isPrepaidPeriodActive
+        && !!selectedPlan
+        && !!currentPlan
+        && selectedPlan.id !== currentPlan.id;
+
     const dueDateLabel = isPrepaid ? 'Expires' : 'Due';
     const dueDateValue = isPrepaid ? (prepaidExpiryString ?? 'Not started') : dueDateString;
     // null when there is nothing meaningful to say (postpaid, or a prepaid clock not yet started).
@@ -426,6 +449,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         const price = Number(plan.price ?? 0);
         setPayCurrentBalance(false);
         setSelectedPlanId(plan.id);
+        // Deliberately reset: forfeiting days is a decision about ONE specific switch, so it has
+        // to be made again for a different plan rather than carried over silently.
+        setActivateNow(false);
         setPaymentAmount(price);
         setIsPlanListOpen(false);
         setErrorMessage('');
@@ -459,6 +485,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const handleSelectPayCurrentBalance = () => {
         setPayCurrentBalance(true);
         setSelectedPlanId(null);
+        setActivateNow(false);
         setPaymentAmount(balance);
         setIsPlanListOpen(false);
         setErrorMessage('');
@@ -471,6 +498,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         setShowPaymentVerifyModal(false);
         setIsPlanListOpen(false);
         setPayCurrentBalance(false);
+        setActivateNow(false);
         setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
@@ -513,10 +541,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         try {
             // plan_id only for prepaid: it is the plan being switched TO. Postpaid is settling a
             // balance and never changes plan, so it sends nothing.
+            // activate_now is re-checked against canActivateNow rather than sent raw: the flag
+            // is only meaningful for the exact selection it was ticked for, and the server
+            // ignores it without a genuine plan switch anyway.
             const response = await paymentService.createPayment(
                 accountNo,
                 paymentAmount,
-                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null
+                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null,
+                activateNow && canActivateNow
             );
 
             if (response.status === 'success' && response.payment_url) {
@@ -904,11 +936,51 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                             </p>
                                         ) : selectedPlan && currentPlan && selectedPlan.id !== currentPlan.id ? (
                                             <p className="text-xs text-gray-500 mt-2">
-                                                {isPrepaidPeriodActive && prepaidExpiresAt
-                                                    ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
-                                                    : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
+                                                {activateNow
+                                                    ? `${selectedPlan.name} starts as soon as this payment is confirmed.`
+                                                    : isPrepaidPeriodActive && prepaidExpiresAt
+                                                        ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
+                                                        : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
                                             </p>
                                         ) : null}
+
+                                        {/* Activate Now — only worth offering while there are days
+                                            left to forfeit AND the selection is a real switch.
+                                            Outside those conditions the new plan already starts
+                                            immediately, so the choice would be meaningless. */}
+                                        {canActivateNow && (
+                                            <div className="mt-3 pt-3 border-t border-gray-200">
+                                                <label className="flex items-start gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={activateNow}
+                                                        onChange={(e) => setActivateNow(e.target.checked)}
+                                                        className="mt-0.5 h-4 w-4 cursor-pointer"
+                                                        style={{ accentColor: colorPalette?.primary || '#0f172a' }}
+                                                    />
+                                                    <span className="text-sm font-medium text-gray-700">
+                                                        Activate Now
+                                                    </span>
+                                                </label>
+
+                                                {activateNow ? (
+                                                    <div className="mt-2 rounded border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                                        <strong>Heads up:</strong> {selectedPlan?.name} starts as soon as
+                                                        your payment is confirmed and your service period resets to 30 days
+                                                        from today. You will lose the{' '}
+                                                        {prepaidDaysLeft !== null && prepaidDaysLeft > 0
+                                                            ? `${prepaidDaysLeft} day${prepaidDaysLeft === 1 ? '' : 's'}`
+                                                            : 'days'}{' '}
+                                                        remaining on your current plan. This cannot be undone.
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-gray-500 mt-1 ml-6">
+                                                        Tick to switch immediately instead of waiting for your current
+                                                        period to end.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 

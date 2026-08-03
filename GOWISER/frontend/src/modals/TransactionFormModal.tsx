@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { Calendar, ChevronDown, Minus, Plus, Camera, Loader2 } from 'lucide-react';
 import { transactionService } from '../services/transactionService';
@@ -45,7 +45,24 @@ interface TransactionFormData {
   // Prepaid only: id of the plan this payment buys. Stays null for postpaid accounts, whose
   // plan field remains read-only.
   selectedPlanId: number | null;
+  // Prepaid only: start the bought plan immediately, forfeiting the days left on the current
+  // one, instead of queueing the switch for when the period lapses.
+  activateNow: boolean;
 }
+
+/**
+ * Transaction types, by account type.
+ *
+ * Mirrors Transaction::typesForGenerationType() on the backend, which validates every write
+ * against the same rule — 'Top Up' and 'Recurring Fee' are mutually exclusive by account type,
+ * and the other three are legal on both. The two lists must be kept in step; this one exists so
+ * the dropdown never offers an option the server would reject, not as the enforcement.
+ *
+ * First entry is the type-specific one and is what a fresh form defaults to.
+ */
+const SHARED_TRANSACTION_TYPES = ['Service Charge', 'Installation Fee'];
+const PREPAID_TRANSACTION_TYPES = ['Top Up', ...SHARED_TRANSACTION_TYPES];
+const POSTPAID_TRANSACTION_TYPES = ['Recurring Fee', ...SHARED_TRANSACTION_TYPES];
 
 const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   isOpen,
@@ -89,10 +106,14 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       paymentMethod: '',
       referenceNo: '',
       orNo: '',
+      // Corrected to 'Top Up' by the effect below once the account is known to be prepaid.
+      // Initialised to the postpaid default because billingRecord is not reliably populated at
+      // the point this initialiser runs.
       transactionType: 'Recurring Fee',
       remarks: '',
       image: null,
-      selectedPlanId: null
+      selectedPlanId: null,
+      activateNow: false
     };
   });
 
@@ -105,6 +126,38 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
 
+  // Types offerable for this account, plus — when editing — whatever the row already is.
+  //
+  // The stored type is kept even if it is no longer offered: 'Security Deposit' has been retired,
+  // but a pending transaction recorded before that must still be editable, and correcting its OR
+  // number must not silently convert it into a Recurring Fee. The backend applies the same
+  // allowance (TransactionController::resolveTypeRule).
+  const storedTransactionType: string | null = initialTransactionData?.transaction_type ?? null;
+  const transactionTypes = useMemo(() => {
+    const base = isPrepaid ? PREPAID_TRANSACTION_TYPES : POSTPAID_TRANSACTION_TYPES;
+
+    return storedTransactionType && !base.includes(storedTransactionType)
+      ? [...base, storedTransactionType]
+      : base;
+  }, [isPrepaid, storedTransactionType]);
+
+  // 'Top Up' is the prepaid analogue of 'Recurring Fee'; only one of the two is ever valid, and
+  // the backend rejects the wrong one. Two cases to correct once the account is known:
+  //   - a fresh form initialised to the postpaid default before billingRecord arrived
+  //   - editing a transaction whose stored type predates this split, or was recorded against an
+  //     account whose generation_type has since been changed
+  // Anything already in the list — including a retired type carried by the row being edited — is
+  // left exactly as it is.
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setFormData(prev => {
+      if (transactionTypes.includes(prev.transactionType)) return prev;
+
+      return { ...prev, transactionType: transactionTypes[0] };
+    });
+  }, [isOpen, transactionTypes]);
+
   // Mirrors the backend's extractPlanName(): first token, before any ' - ' or space. Used to
   // work out which plan the account is currently on so it can be preselected.
   const extractPlanName = (raw?: string | null): string => {
@@ -114,6 +167,28 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (value.includes(' ')) return value.split(' ')[0].trim();
     return value.trim();
   };
+
+  // Only a plan CHANGE can be activated early — activating "now" on the plan already in force
+  // would forfeit the customer's remaining days and buy them nothing. The backend applies the
+  // same rule independently (PrepaidPlanChangeService::isGenuineSwitch), so this drives the UI
+  // rather than being the guarantee.
+  const currentPlanId = plans.find(p => p.name === extractPlanName(billingRecord?.plan))?.id ?? null;
+  const isPlanSwitch = formData.selectedPlanId !== null && formData.selectedPlanId !== currentPlanId;
+
+  // A plan is bought by a TOP UP and nothing else. A prepaid Service Charge, Installation Fee or
+  // Security Deposit pays for something other than service time and must not move the customer's
+  // plan — the backend enforces the same via Transaction::grantsService(), which is what actually
+  // stops it. Postpaid never gets a picker at all; its plan field stays read-only.
+  const showPlanPicker = isPrepaid && formData.transactionType === 'Top Up';
+  const showActivateNow = showPlanPicker && isPlanSwitch;
+
+  // Keep the flag honest when the selection stops being a switch — otherwise a box ticked while
+  // plan B was selected would still be sent after the user reverted to their current plan.
+  useEffect(() => {
+    if (!showActivateNow && formData.activateNow) {
+      setFormData(prev => ({ ...prev, activateNow: false }));
+    }
+  }, [showActivateNow, formData.activateNow]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -413,7 +488,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (!formData.plan.trim()) newErrors.plan = 'Plan is required';
     // Prepaid buys a plan with the payment, so the choice must be explicit — the field is
     // preselected to the current plan, so this only fires if staff blank it out.
-    if (isPrepaid && !formData.selectedPlanId) newErrors.plan = 'Select the plan this payment is for';
+    if (showPlanPicker && !formData.selectedPlanId) newErrors.plan = 'Select the plan this payment is for';
     if (!formData.accountBalance.trim()) newErrors.accountBalance = 'Account Balance is required';
     if (!formData.paymentDate.trim()) newErrors.paymentDate = 'Payment Date is required';
     if (!formData.receivedPayment.trim()) newErrors.receivedPayment = 'Received Payment is required';
@@ -487,8 +562,10 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         status: 'Pending',
         image_url: imageUrl,
         created_by_user: formData.processedBy,
-        // Prepaid only. Never sent for postpaid, so their plan can't be changed by a payment.
-        ...(isPrepaid && formData.selectedPlanId ? { selected_plan_id: formData.selectedPlanId } : {}),
+        // Prepaid only. Never sent for postpaid, so their plan can't be changed by a payment —
+        // the backend rejects both fields outright on a postpaid account.
+        ...(showPlanPicker && formData.selectedPlanId ? { selected_plan_id: formData.selectedPlanId } : {}),
+        ...(showActivateNow ? { activate_now: formData.activateNow } : {}),
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
@@ -499,15 +576,24 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       setUploadProgress(100);
 
       if (result.success) {
-        const isRecurringFee = formData.transactionType === 'Recurring Fee';
+        // Both recurring types settle the account and so wait for approval; 'Top Up' is simply
+        // the prepaid name for the same thing.
+        const needsApproval = formData.transactionType === 'Recurring Fee'
+          || formData.transactionType === 'Top Up';
         setModal({
           isOpen: true,
           type: 'success',
-          title: isEdit ? 'Success' : (isRecurringFee ? 'Pending Approval' : 'Success'),
-          message: isEdit 
+          title: isEdit ? 'Success' : (needsApproval ? 'Pending Approval' : 'Success'),
+          message: isEdit
             ? 'Transaction updated successfully!'
-            : (isRecurringFee
-              ? 'Recurring Fee transaction has been submitted successfully.\n\nThis transaction requires approval before the account balance is updated. Please approve it in the Transaction List.'
+            : (needsApproval
+              ? `${formData.transactionType} transaction has been submitted successfully.`
+                + '\n\nThis transaction requires approval before the account balance is updated.'
+                + ' Please approve it in the Transaction List.'
+                + (formData.activateNow
+                  ? '\n\nOn approval the new plan starts immediately and any remaining days on the'
+                    + ' current plan are forfeited.'
+                  : '')
               : 'Transaction created successfully!'),
           onConfirm: () => {
             onSave(formData);
@@ -660,7 +746,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Plan<span className="text-red-500">*</span>
             </label>
 
-            {isPrepaid ? (
+            {showPlanPicker ? (
               <>
                 <div className="relative">
                   <select
@@ -715,6 +801,42 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                     Prepaid account — selecting a different plan schedules the switch for when the
                     current prepaid period ends. If the period has already lapsed it applies on approval.
                   </p>
+                )}
+
+                {/* Activate Now — only offered when the selection is a genuine switch, since
+                    activating the plan already in force would forfeit the customer's remaining
+                    days for nothing. Hidden (and reset) otherwise. */}
+                {showActivateNow && (
+                  <div className="mt-3">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={formData.activateNow}
+                        onChange={(e) => setFormData(prev => ({ ...prev, activateNow: e.target.checked }))}
+                        className="mt-0.5 h-4 w-4 cursor-pointer accent-orange-500"
+                      />
+                      <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Activate Now
+                      </span>
+                    </label>
+
+                    {formData.activateNow ? (
+                      <div className={`mt-2 rounded border px-3 py-2 text-xs ${isDarkMode
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                        : 'border-amber-400 bg-amber-50 text-amber-700'
+                        }`}>
+                        <strong>Warning:</strong> on approval the new plan starts immediately and the
+                        prepaid period is reset to 30 days from the payment date. Any days remaining on
+                        the current plan are forfeited and cannot be restored. Any scheduled plan change
+                        is cancelled.
+                      </div>
+                    ) : (
+                      <p className={`text-xs mt-1 ml-6 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        Leave unticked to keep the current plan until the period ends, then switch
+                        automatically. The customer keeps the days they already paid for.
+                      </p>
+                    )}
+                  </div>
                 )}
               </>
             ) : (
@@ -892,8 +1014,10 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Transaction Type<span className="text-red-500">*</span>
             </label>
+            {/* Three columns for the three offered types. A retired type carried by a row being
+                edited becomes a fourth and simply wraps to the next line. */}
             <div className="grid grid-cols-3 gap-2">
-              {['Recurring Fee', 'Installation Fee', 'Security Deposit'].map((type) => {
+              {transactionTypes.map((type) => {
                 const isSelected = formData.transactionType === type;
                 return (
                   <button
@@ -924,9 +1048,13 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               })}
             </div>
 
+            {/* Only reachable when EDITING a transaction recorded before Security Deposit was
+                retired — it is no longer in either dropdown. Kept so such a row still explains
+                itself, and because the backend still handles the value exactly this way. */}
             {formData.transactionType === 'Security Deposit' && (
               <p className="text-orange-500 text-xs mt-2">
                 Note: Security deposits do not affect the account balance or invoices.
+                This type is no longer available for new transactions.
               </p>
             )}
             {errors.transactionType && <p className="text-red-500 text-xs mt-1">{errors.transactionType}</p>}

@@ -44,6 +44,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
     // instead of buying a plan/plan-change (no plan_id is sent when this is on).
     const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
+    // Prepaid-only: start the newly bought plan immediately, forfeiting the days remaining on the
+    // current one, instead of queueing the switch for when the period lapses. Opt-in, and only
+    // ever offered when there is actually something to forfeit — see canActivateNow.
+    const [activateNow, setActivateNow] = useState<boolean>(false);
     // Prepaid onboarding re-price: a customer who has not paid their first bill yet may still swap
     // plan, which re-prices that unpaid bill. The server quotes the real amount (plan + VAT minus
     // withholding) so the tax maths is never duplicated here.
@@ -262,6 +266,28 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const pendingPlan = useMemo(
         () => (pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null),
         [plans, pendingPlanId]
+    );
+
+    /**
+     * Whether "Activate Now" is worth offering. Mirrors the web portal exactly.
+     *
+     * All three conditions matter:
+     *  - a genuine switch    activating the plan already in force forfeits days for nothing
+     *  - a live period       once it has lapsed the new plan starts immediately regardless, so
+     *                        there is no decision left to make
+     *  - not paying balance  "Pay Current Balance" sends no plan at all
+     *
+     * The server independently refuses to forfeit days when the switch is not genuine
+     * (PrepaidPlanChangeService::isGenuineSwitch), so this governs the UI, not the outcome.
+     */
+    const canActivateNow = useMemo(
+        () => isPrepaid
+            && !payCurrentBalance
+            && isPrepaidPeriodActive
+            && !!selectedPlan
+            && !!currentPlan
+            && selectedPlan.id !== currentPlan.id,
+        [isPrepaid, payCurrentBalance, isPrepaidPeriodActive, selectedPlan, currentPlan]
     );
 
     // Load the plan list once, only for prepaid customers — postpaid never sees the picker.
@@ -560,6 +586,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         const price = Number(plan.price ?? 0);
         setPayCurrentBalance(false);
         setSelectedPlanId(plan.id);
+        // Deliberately reset: forfeiting days is a decision about ONE specific switch, so it has
+        // to be made again for a different plan rather than carried over silently.
+        setActivateNow(false);
         setPaymentAmount(price);
         setIsPlanListOpen(false);
         setErrorMessage('');
@@ -594,6 +623,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const handleSelectPayCurrentBalance = () => {
         setPayCurrentBalance(true);
         setSelectedPlanId(null);
+        setActivateNow(false);
         setPaymentAmount(balance);
         setIsPlanListOpen(false);
         setErrorMessage('');
@@ -607,6 +637,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         setShowPaymentVerifyModal(false);
         setIsPlanListOpen(false);
         setPayCurrentBalance(false);
+        setActivateNow(false);
         setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
@@ -650,11 +681,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
         try {
             const redirectUrl = LinkingExpo.createURL('payment-success');
+            // activate_now is re-checked against canActivateNow rather than sent raw: the flag
+            // is only meaningful for the exact selection it was ticked for, and the server
+            // ignores it without a genuine plan switch anyway.
             const response = await paymentService.createPayment(
                 accountNo,
                 paymentAmount,
                 redirectUrl,
-                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null
+                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null,
+                activateNow && canActivateNow
             );
 
             if (response.status === 'success' && response.payment_url) {
@@ -1192,11 +1227,61 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                         </Text>
                                     ) : selectedPlan && currentPlan && selectedPlan.id !== currentPlan.id ? (
                                         <Text style={styles.planNoteText}>
-                                            {isPrepaidPeriodActive && prepaidExpiresAt
-                                                ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
-                                                : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
+                                            {activateNow
+                                                ? `${selectedPlan.name} starts as soon as this payment is confirmed.`
+                                                : isPrepaidPeriodActive && prepaidExpiresAt
+                                                    ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
+                                                    : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
                                         </Text>
                                     ) : null}
+
+                                    {/* Activate Now — only worth offering while there are days left
+                                        to forfeit AND the selection is a real switch. Outside those
+                                        conditions the new plan already starts immediately, so the
+                                        choice would be meaningless. */}
+                                    {canActivateNow && (
+                                        <View style={styles.activateNowWrap}>
+                                            <Pressable
+                                                onPress={() => setActivateNow(!activateNow)}
+                                                style={styles.activateNowRow}
+                                                accessibilityRole="checkbox"
+                                                accessibilityState={{ checked: activateNow }}
+                                                accessibilityLabel="Activate Now"
+                                            >
+                                                <View
+                                                    style={[
+                                                        styles.activateNowBox,
+                                                        activateNow && {
+                                                            backgroundColor: colorPalette?.primary || '#7c3aed',
+                                                            borderColor: colorPalette?.primary || '#7c3aed',
+                                                        },
+                                                    ]}
+                                                >
+                                                    {activateNow && <Text style={styles.activateNowTick}>✓</Text>}
+                                                </View>
+                                                <Text style={styles.activateNowLabel}>Activate Now</Text>
+                                            </Pressable>
+
+                                            {activateNow ? (
+                                                <View style={styles.activateNowWarning}>
+                                                    <Text style={styles.activateNowWarningText}>
+                                                        Heads up: {selectedPlan?.name} starts as soon as your payment is
+                                                        confirmed and your service period resets to 30 days from today.
+                                                        You will lose the{' '}
+                                                        {prepaidDaysLeft !== null && prepaidDaysLeft > 0
+                                                            ? `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'}`
+                                                            : 'days'}{' '}
+                                                        remaining on your current plan. This cannot be undone.
+                                                    </Text>
+                                                </View>
+                                            ) : (
+                                                <Text style={styles.activateNowHint}>
+                                                    Tick to switch immediately instead of waiting for your current
+                                                    period to end.
+                                                </Text>
+                                            )}
+                                        </View>
+                                    )}
                                 </View>
                             )}
 
@@ -1550,6 +1635,22 @@ const styles = StyleSheet.create({
     planLoadingText: { marginLeft: 8, fontSize: 14, color: '#6b7280' },
     planEmptyText: { fontSize: 13, color: '#b45309', paddingVertical: 8 },
     planNoteText: { fontSize: 12, color: '#6b7280', marginTop: 8, lineHeight: 17 },
+    // Activate Now. Separated from the plan note above by a hairline rule, because ticking it is
+    // an irreversible choice and should not read as more of the same explanatory copy.
+    activateNowWrap: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' },
+    activateNowRow: { flexDirection: 'row', alignItems: 'center' },
+    activateNowBox: {
+        width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: '#9ca3af',
+        alignItems: 'center', justifyContent: 'center', marginRight: 8,
+    },
+    activateNowTick: { color: '#ffffff', fontSize: 12, fontWeight: '700', lineHeight: 14 },
+    activateNowLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
+    activateNowHint: { fontSize: 12, color: '#6b7280', marginTop: 6, marginLeft: 26, lineHeight: 17 },
+    activateNowWarning: {
+        marginTop: 8, borderWidth: 1, borderColor: '#fbbf24', backgroundColor: '#fffbeb',
+        borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8,
+    },
+    activateNowWarningText: { fontSize: 12, color: '#92400e', lineHeight: 17 },
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
     feeNoteText: { fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 16 },

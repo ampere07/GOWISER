@@ -132,6 +132,7 @@ class XenditPaymentController extends Controller
                     'billing_accounts.id',
                     'billing_accounts.account_no',
                     'billing_accounts.account_balance',
+                    'billing_accounts.generation_type',
                     DB::raw("CONCAT(customers.first_name, ' ', IFNULL(customers.middle_initial, ''), ' ', customers.last_name) as full_name"),
                     'customers.email_address',
                     'customers.contact_number_primary',
@@ -144,6 +145,44 @@ class XenditPaymentController extends Controller
                     'status' => 'error',
                     'message' => 'Account not found'
                 ], 404);
+            }
+
+            /*
+             * Prepaid checkout options, carried on the pending_payments row until the Xendit
+             * webhook settles it — which can be minutes or hours later, long after this request
+             * has gone. PaymentWorkerService reads both back at that point and hands them to
+             * PrepaidPlanChangeService::settlePayment().
+             *
+             *   selected_plan_id  the plan this payment buys.
+             *   activate_now      start it immediately, forfeiting the days left on the current
+             *                     plan, instead of queueing the switch for the period boundary.
+             *
+             * Both are ignored for postpaid: a postpaid payment settles invoices and never
+             * changes plan, so honouring them would be acting on a request the rest of the
+             * pipeline has no path for.
+             */
+            $isPrepaid = BillingAccount::isPrepaidType($account->generation_type ?? null);
+            $selectedPlanId = null;
+            $activateNow = false;
+
+            if ($isPrepaid) {
+                $requestedPlanId = $request->input('plan_id');
+
+                // Validated against plan_list rather than trusted: this value later drives a
+                // RADIUS bandwidth profile, and an unknown id would leave the switch half-done.
+                if (filled($requestedPlanId) && is_numeric($requestedPlanId) && AppPlan::find((int) $requestedPlanId)) {
+                    $selectedPlanId = (int) $requestedPlanId;
+                } elseif (filled($requestedPlanId)) {
+                    Log::warning('Payment: unknown plan_id at checkout, ignoring plan change', [
+                        'account_no' => $accountNo,
+                        'plan_id' => $requestedPlanId,
+                    ]);
+                }
+
+                // Only meaningful alongside a plan. settlePayment() independently refuses to
+                // forfeit days when the "switch" is to the plan already in force, so this is the
+                // outer of two guards, not the only one.
+                $activateNow = $selectedPlanId !== null && $request->boolean('activate_now');
             }
 
             // Note: Duplicate check now handled by frontend via check-pending endpoint
@@ -322,6 +361,17 @@ class XenditPaymentController extends Controller
                 $paymentRow['amount'] = $amount;
             }
 
+            // Column-guarded for the same reason: on a deployment that has not run
+            // 2026_07_25_000001 / 2026_08_03_000003 the payment still goes through, it just
+            // settles without the plan change — which is the pre-feature behaviour, not a failure.
+            if (Schema::hasColumn('pending_payments', 'selected_plan_id')) {
+                $paymentRow['selected_plan_id'] = $selectedPlanId;
+            }
+
+            if (Schema::hasColumn('pending_payments', 'activate_now')) {
+                $paymentRow['activate_now'] = $activateNow;
+            }
+
             DB::table('pending_payments')->insert($paymentRow);
 
             Log::info('Payment created successfully', [
@@ -331,7 +381,11 @@ class XenditPaymentController extends Controller
                 'convenience_fee_percentage' => $convenienceFeePercentage,
                 'convenience_fee' => $convenienceFee,
                 'charged_amount' => $chargeAmount,
-                'payment_id' => $paymentId
+                'payment_id' => $paymentId,
+                // The prepaid intent recorded on the row, so a plan change that fails to
+                // materialise at settlement can be traced back to what was actually asked for.
+                'selected_plan_id' => $selectedPlanId,
+                'activate_now' => $activateNow,
             ]);
 
             event(new PaymentUpdated(['action' => 'created', 'reference_no' => $referenceNo, 'account_no' => $accountNo, 'amount' => $amount]));

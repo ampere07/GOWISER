@@ -298,19 +298,28 @@ class PaymentWorkerService
                     $this->workerLog("Reconnect attempt for $ref: $reconnectStatus");
 
                     // Prepaid: a settling payment extends (if still active) or restarts (if
-                    // expired) the prepaid service period. No-op for postpaid accounts.
-                    $prepaidRenewal = app(\App\Services\PrepaidRenewalService::class)->renewByAccountNo($accountNo);
+                    // expired) the prepaid service period, and acts on any plan the customer
+                    // picked at checkout — queued for when their current period lapses, or
+                    // applied immediately if they ticked "Activate Now" (or the period had
+                    // already expired). No-op for postpaid accounts.
+                    //
+                    // settlePayment() owns the ordering between the two: activate_now decides
+                    // whether the period is RESET or EXTENDED, so the renewal cannot be decided
+                    // independently of the plan change. Mirrors TransactionController.
+                    $settled = app(\App\Services\PrepaidPlanChangeService::class)->settlePayment(
+                        $accountNo,
+                        $payment->selected_plan_id ?? null,
+                        (bool) ($payment->activate_now ?? false)
+                    );
+
+                    $prepaidRenewal = $settled['renewal'];
+                    $planChange = $settled['plan_change'];
+
                     if (!empty($prepaidRenewal['prepaid'])) {
-                        $this->workerLog("Prepaid period {$prepaidRenewal['mode']} for $ref — new expiry: {$prepaidRenewal['new_expiry']}");
+                        $this->workerLog("Prepaid period {$prepaidRenewal['mode']} for $ref — new expiry: {$prepaidRenewal['new_expiry']}"
+                            . (!empty($prepaidRenewal['forfeited_days']) ? " ({$prepaidRenewal['forfeited_days']} day(s) forfeited)" : ''));
                     }
 
-                    // Prepaid plan change: if the customer picked a plan at checkout, either queue
-                    // it for when their current period lapses (they are mid-period on a plan they
-                    // already paid for) or apply it now (their period had expired). MUST run after
-                    // the renewal above — it reads that call's `mode` / `previous_expiry` to know
-                    // which case applies, since the renewal has already moved prepaid_expires_at.
-                    $planChange = app(\App\Services\PrepaidPlanChangeService::class)
-                        ->handleSettledPayment($accountNo, $payment->selected_plan_id ?? null, $prepaidRenewal);
                     if (($planChange['action'] ?? 'none') !== 'none') {
                         $this->workerLog("Prepaid plan {$planChange['action']} for $ref — plan: {$planChange['plan']}"
                             . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));

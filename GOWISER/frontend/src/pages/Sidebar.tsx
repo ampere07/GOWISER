@@ -3,6 +3,7 @@ import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { roleService } from '../services/userService';
 import { getPayableAlertCount } from '../services/monthlyPayableService';
+import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
 import pusher from '../services/pusherService';
 
 // Locked role IDs (1-8) use hardcoded allowedRoles; custom roles (9+) use permissions array
@@ -38,6 +39,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
   const [tooltipItem, setTooltipItem] = useState<{ id: string; label: string; y: number } | null>(null);
   const [fetchedPermissions, setFetchedPermissions] = useState<string[] | null>(null);
   const [payableAlerts, setPayableAlerts] = useState(0);
+  const [navBadges, setNavBadges] = useState<NavBadgeCounts>(EMPTY_NAV_BADGE_COUNTS);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -148,6 +150,66 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     };
   }, [canSeePayables]);
 
+  /**
+   * Whether this session sees the operational menus the badges belong to.
+   *
+   * Customers never see Application / Job Order / Service Order / Work Order / Transaction List,
+   * so their session must not poll a staff endpoint for counts it would only discard.
+   */
+  const isStaff = useMemo(() => {
+    const role = (userRole || '').toLowerCase().trim();
+    return role !== 'customer' && String(roleId ?? '') !== '3';
+  }, [userRole, roleId]);
+
+  /**
+   * Attention counts for the operational menus.
+   *
+   * Refreshed the same three ways as the payables badge above, for the same reasons: the
+   * broadcasts cover other people's work, the interval covers anything nothing broadcasts (a
+   * cron creating rows, a status aged into "overdue"), and the initial call covers first paint.
+   *
+   * Cleanup unbinds the handlers but never calls pusher.unsubscribe() — every one of these
+   * channels is also listened to by the corresponding page, and unsubscribing would cut it off.
+   */
+  useEffect(() => {
+    if (!isStaff) {
+      setNavBadges(EMPTY_NAV_BADGE_COUNTS);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = () => {
+      getNavBadgeCounts().then(counts => {
+        if (!cancelled && mountedRef.current) setNavBadges(counts);
+      });
+    };
+
+    load();
+    const interval = setInterval(load, 2 * 60 * 1000);
+
+    // One channel per badge, bound to the event that page already broadcasts on a change.
+    const subscriptions: [string, string][] = [
+      ['applications', 'new-application'],
+      ['job-orders', 'job-order-done'],
+      ['service-orders', 'service-order-updated'],
+      ['work-orders', 'work-order-updated'],
+      ['transactions', 'transaction-updated'],
+    ];
+
+    const bound = subscriptions.map(([channelName, event]) => {
+      const channel = pusher.subscribe(channelName);
+      channel.bind(event, load);
+      return { channel, event };
+    });
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      bound.forEach(({ channel, event }) => channel.unbind(event, load));
+    };
+  }, [isStaff]);
+
   const menuItems: MenuItem[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, allowedRoles: ['administrator', 'superadmin'] },
     { id: 'live-monitor', label: 'Monitoring', icon: Activity, allowedRoles: ['superadmin', 'administrator'] },
@@ -158,7 +220,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       allowedRoles: ['administrator', 'customer'],
       children: [
         { id: 'customer', label: 'Customer', icon: User, allowedRoles: ['administrator', 'headtech'] },
-        { id: 'transaction-list', label: 'Transaction List', icon: Receipt, allowedRoles: ['administrator'] },
+        // Badge: transactions awaiting approval or processing (Pending / QUEUED).
+        { id: 'transaction-list', label: 'Transaction List', icon: Receipt, allowedRoles: ['administrator'], badge: navBadges.transaction },
         { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw, allowedRoles: ['superadmin', 'administrator'] },
         { id: 'payment-portal', label: 'Payment Portal', icon: DollarSign, allowedRoles: ['administrator'] },
         { id: 'soa', label: 'Statements', icon: FileText, allowedRoles: ['administrator'] },
@@ -171,10 +234,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         { id: 'discounts', label: 'Discounts', icon: Tag, allowedRoles: ['administrator'] }
       ]
     },
-    { id: 'application-management', label: 'Application', icon: FileCheck, allowedRoles: ['administrator', 'headtech'] },
-    { id: 'job-order', label: 'Job Order', icon: Wrench, allowedRoles: ['administrator', 'technician', 'agent', 'headtech'] },
-    { id: 'service-order', label: 'Service Order', icon: Wrench, allowedRoles: ['administrator', 'technician', 'headtech'] },
-    { id: 'work-order', label: 'Work Order', icon: Wrench, allowedRoles: ['administrator', 'agent', 'Osp', 'headtech'] },
+    // Badges below count what still needs attention — see navBadgeService for each rule.
+    { id: 'application-management', label: 'Application', icon: FileCheck, allowedRoles: ['administrator', 'headtech'], badge: navBadges.application },
+    { id: 'job-order', label: 'Job Order', icon: Wrench, allowedRoles: ['administrator', 'technician', 'agent', 'headtech'], badge: navBadges.job_order },
+    { id: 'service-order', label: 'Service Order', icon: Wrench, allowedRoles: ['administrator', 'technician', 'headtech'], badge: navBadges.service_order },
+    { id: 'work-order', label: 'Work Order', icon: Wrench, allowedRoles: ['administrator', 'agent', 'Osp', 'headtech'], badge: navBadges.work_order },
     { id: 'lcp-nap-location', label: 'LCP/NAP Location', icon: MapPinned, allowedRoles: ['administrator', 'technician', 'Osp', 'headtech'] },
     { id: 'sms-blast', label: 'SMS Blast', icon: MessageSquare, allowedRoles: ['administrator'] },
     { id: 'reports', label: 'Reports', icon: FileText, allowedRoles: ['administrator', 'superadmin'] },

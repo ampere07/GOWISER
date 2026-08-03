@@ -3407,6 +3407,10 @@ Route::prefix('notifications')->group(function () {
     Route::get('/unread-count', [\App\Http\Controllers\NotificationController::class , 'getUnreadCount']);
     Route::get('/debug-timezone', [\App\Http\Controllers\NotificationController::class , 'debugTimezone']);
     Route::get('/consolidated', [ConsolidatedNotificationController::class , 'index']);
+    // Attention counts for the sidebar menu badges and the header bell. Behind auth:sanctum
+    // because the counts are scoped to the caller's organization — an unauthenticated request
+    // would otherwise be told how much work exists across every tenant.
+    Route::middleware('auth:sanctum')->get('/nav-badges', [\App\Http\Controllers\Api\NavBadgeCountController::class , 'index']);
 });
 
 Route::post('/debug/verify-password', function (Request $request) {

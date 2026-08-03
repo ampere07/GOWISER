@@ -186,8 +186,18 @@ export const paymentService = {
    * backend holds it on the pending payment and, once the payment settles, either queues the
    * switch for when the current prepaid period lapses or applies it immediately if the period
    * had already expired.
+   *
+   * `activateNow` overrides that queueing: the plan starts the moment the payment settles and the
+   * days left on the current one are forfeited. Only sent alongside a planId; the backend ignores
+   * it without a genuine plan switch.
    */
-  createPayment: async (accountNo: string, amount: number, redirectUrl?: string, planId?: number | null): Promise<PaymentResponse> => {
+  createPayment: async (
+    accountNo: string,
+    amount: number,
+    redirectUrl?: string,
+    planId?: number | null,
+    activateNow?: boolean
+  ): Promise<PaymentResponse> => {
     try {
       console.log('Payment Service - Creating payment:', { accountNo, amount });
 
@@ -219,6 +229,9 @@ export const paymentService = {
 
       if (planId) {
         payload.plan_id = planId;
+        // Only meaningful with a plan. Sent explicitly (not omitted when false) so the row records
+        // a deliberate "queue it" rather than an absence the server has to guess at.
+        payload.activate_now = !!activateNow;
       }
 
       console.log('Payment payload:', payload);

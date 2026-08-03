@@ -84,16 +84,100 @@ class PrepaidPlanChangeService
     }
 
     /**
+     * Settle the prepaid side of a payment: renew the period, then act on any plan bought with it.
+     *
+     * The single entry point for BOTH payment pipelines (TransactionController on approval,
+     * PaymentWorkerService on webhook settlement). They previously each called
+     * PrepaidRenewalService and then handleSettledPayment() in sequence, which was fine while the
+     * two steps were independent. "Activate Now" couples them — whether the period is RESET or
+     * EXTENDED now depends on whether a genuine plan switch is happening — so the ordering and the
+     * decision live here once rather than being duplicated and drifting apart.
+     *
+     * Safe to call unconditionally on every settled payment; postpaid accounts fall straight
+     * through both steps untouched.
+     *
+     * @param bool $activateNow Customer opted to start the new plan immediately, forfeiting the
+     *   days left on the current one. HONOURED ONLY when the selected plan actually differs from
+     *   the one in force — see isGenuineSwitch(). A same-plan top-up with the box ticked would
+     *   otherwise destroy the customer's remaining days and buy them nothing.
+     *
+     * @return array{renewal:array, plan_change:array}
+     */
+    public function settlePayment(
+        string $accountNo,
+        $selectedPlanId,
+        bool $activateNow = false,
+        ?Carbon $paymentDate = null
+    ): array {
+        $effectiveActivateNow = $activateNow && $this->isGenuineSwitch($accountNo, $selectedPlanId);
+
+        if ($activateNow && !$effectiveActivateNow) {
+            Log::info('[PREPAID PLAN] "Activate Now" ignored — no plan switch to activate', [
+                'account_no' => $accountNo,
+                'selected_plan_id' => $selectedPlanId,
+            ]);
+        }
+
+        $renewal = app(PrepaidRenewalService::class)
+            ->renewByAccountNo($accountNo, $paymentDate, $effectiveActivateNow);
+
+        return [
+            'renewal' => $renewal,
+            'plan_change' => $this->handleSettledPayment($accountNo, $selectedPlanId, $renewal, $effectiveActivateNow),
+        ];
+    }
+
+    /**
+     * Is $selectedPlanId a real move off the plan currently in force?
+     *
+     * Deliberately conservative: anything it cannot positively confirm as a switch (missing
+     * account, unknown plan, no selection) comes back false, so an unclear case extends the period
+     * rather than forfeiting days the customer paid for.
+     */
+    protected function isGenuineSwitch(string $accountNo, $selectedPlanId): bool
+    {
+        if (empty($selectedPlanId)) {
+            return false;
+        }
+
+        try {
+            $account = BillingAccount::with('customer')->where('account_no', $accountNo)->first();
+
+            if (!$account || !BillingAccount::isPrepaidType($account->generation_type)) {
+                return false;
+            }
+
+            if (!AppPlan::find($selectedPlanId)) {
+                return false;
+            }
+
+            $currentPlan = $this->resolveCurrentPlan($account);
+
+            return !$currentPlan || (int) $currentPlan->id !== (int) $selectedPlanId;
+        } catch (\Throwable $e) {
+            Log::error('[PREPAID PLAN] Could not determine whether ' . $accountNo
+                . ' is switching plan, treating as no switch: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Decide what to do with a plan the customer selected, at the point their payment settles.
      *
      * Safe to call unconditionally on every settled payment: it no-ops when no plan was
      * selected, when the account is not prepaid, or when the selected plan is the one they are
      * already on (a plain renewal).
      *
+     * Prefer {@see settlePayment()}, which sequences this correctly against the period renewal.
+     * This stays public for callers that have already renewed the period themselves.
+     *
      * @param array $prepaidRenewal The array returned by PrepaidRenewalService::renew().
+     * @param bool $activateNow Apply the switch immediately instead of queueing it. The caller is
+     *   responsible for having passed the same flag to the renewal, so that the reset expiry and
+     *   the immediate switch agree with each other.
      * @return array{action:string, reason?:string, plan?:string, effective_at?:string}
      */
-    public function handleSettledPayment(string $accountNo, $selectedPlanId, array $prepaidRenewal): array
+    public function handleSettledPayment(string $accountNo, $selectedPlanId, array $prepaidRenewal, bool $activateNow = false): array
     {
         try {
             if (empty($selectedPlanId)) {
@@ -122,6 +206,48 @@ class PrepaidPlanChangeService
 
             $currentPlan = $this->resolveCurrentPlan($account);
             $pendingPlanId = $account->pending_plan_id ? (int) $account->pending_plan_id : null;
+            $isSwitch = !$currentPlan || (int) $currentPlan->id !== (int) $newPlan->id;
+
+            // "Activate Now": the customer asked for the new plan to start immediately and accepted
+            // losing the rest of the period they had paid for. This OVERRIDES every queueing rule
+            // below, including an existing reservation for this same plan — asking for it now is
+            // precisely a request to stop waiting for it. applyPlan() clears the queue as part of
+            // its transaction, so the reservation cannot outlive the switch it described.
+            //
+            // The renewal has already reset prepaid_expires_at to payment date + 30 (mode
+            // 'activated'); this is the other half of that same decision. The $isSwitch guard is
+            // belt-and-braces for direct callers — settlePayment() has already applied it via
+            // isGenuineSwitch() — because forfeiting days to "switch" to the current plan is pure
+            // loss to the customer.
+            if ($activateNow && $isSwitch) {
+                $applied = $this->applyPlan(
+                    $account,
+                    $newPlan,
+                    'Prepaid plan change activated immediately at customer request',
+                    $currentPlan?->id
+                );
+
+                $forfeited = (int) ($prepaidRenewal['forfeited_days'] ?? 0);
+
+                Log::info('[PREPAID PLAN] Plan change activated immediately', [
+                    'account_no' => $accountNo,
+                    'from_plan' => $currentPlan->plan_name ?? null,
+                    'to_plan' => $newPlan->plan_name,
+                    'cancelled_queued_plan_id' => $pendingPlanId,
+                    'forfeited_days' => $forfeited,
+                    'new_expiry' => $prepaidRenewal['new_expiry'] ?? null,
+                ]);
+                $this->writeLog("[ACTIVATED NOW] {$accountNo} | " . ($currentPlan->plan_name ?? '(unknown)')
+                    . " -> {$newPlan->plan_name} | {$forfeited} day(s) forfeited"
+                    . ($pendingPlanId !== null ? " | queued plan id {$pendingPlanId} dropped" : '')
+                    . " | RADIUS: {$applied['radius']}");
+
+                return [
+                    'action' => 'activated',
+                    'plan' => $newPlan->plan_name,
+                    'forfeited_days' => $forfeited,
+                ];
+            }
 
             // Already queued this exact plan: this payment is a top-up of a switch they have
             // already bought. Leave the reservation's effective date ALONE — re-queueing it at

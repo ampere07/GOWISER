@@ -189,8 +189,16 @@ export const paymentService = {
    * @param planId Prepaid only — the plan the customer is paying to switch TO. The backend records
    *   it as selected_plan_id and queues or applies the switch on confirmation. Omitted/null for
    *   postpaid, which is just settling a balance and never changes plan.
+   * @param activateNow Prepaid only — start that plan the moment the payment settles, forfeiting
+   *   the days left on the current one, instead of queueing the switch for the period boundary.
+   *   Only sent alongside a planId; the backend ignores it without a genuine plan switch.
    */
-  createPayment: async (accountNo: string, amount: number, planId?: number | null): Promise<PaymentResponse> => {
+  createPayment: async (
+    accountNo: string,
+    amount: number,
+    planId?: number | null,
+    activateNow?: boolean
+  ): Promise<PaymentResponse> => {
     try {
       console.log('Payment Service - Creating payment:', { accountNo, amount });
       
@@ -218,6 +226,9 @@ export const paymentService = {
 
       if (planId) {
         payload.plan_id = planId;
+        // Only meaningful with a plan. Sent explicitly (not omitted when false) so the row records
+        // a deliberate "queue it" rather than an absence the server has to guess at.
+        payload.activate_now = !!activateNow;
       }
 
       console.log('Payment payload:', payload);
