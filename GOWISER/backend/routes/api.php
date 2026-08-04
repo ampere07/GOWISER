@@ -2713,6 +2713,10 @@ Route::prefix('transactions')->group(function () {
     Route::post('/upload-images', [\App\Http\Controllers\TransactionController::class , 'uploadImages']);
     Route::post('/batch-approve', [\App\Http\Controllers\TransactionController::class , 'batchApprove']);
     Route::get('/{id}', [\App\Http\Controllers\TransactionController::class , 'show']);
+    // Print-ready projection for the receipt / invoice templates. Registered ahead of the
+    // parameterised routes below only for readability — it is a two-segment path, so the
+    // single-segment `/{id}` above can never swallow it.
+    Route::get('/{id}/receipt', [\App\Http\Controllers\TransactionController::class , 'receipt']);
     Route::put('/{id}', [\App\Http\Controllers\TransactionController::class , 'update']);
     Route::post('/{id}/approve', [\App\Http\Controllers\TransactionController::class , 'approve']);
     Route::post('/{id}/revert', [\App\Http\Controllers\TransactionController::class , 'revert']);
@@ -2727,6 +2731,20 @@ Route::prefix('transaction-reverts')->group(function () {
     Route::get('/{id}', [\App\Http\Controllers\TransactionRevertController::class , 'show']);
     Route::put('/{id}/status', [\App\Http\Controllers\TransactionRevertController::class , 'updateStatus']);
     Route::post('/broadcast-viewing', [\App\Http\Controllers\TransactionRevertController::class , 'broadcastViewing']);
+});
+
+/*
+ * Prepaid Expiration Override Routes.
+ *
+ * billing_accounts.prepaid_expires_at is read-only on the Edit Billing Details form; these
+ * endpoints are the only way it moves outside of a payment. Requests are raised from the clock
+ * icon on Customer Details and decided in Billing -> Prepaid Override.
+ */
+Route::prefix('prepaid-overrides')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'index']);
+    Route::post('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'updateStatus']);
 });
 
 // Rebates endpoint for frontend

@@ -320,7 +320,9 @@ class ExpensesLogController extends Controller
             'barangay' => 'nullable|string|max:150',
             'city' => 'nullable|string|max:300',
             'received_date' => 'nullable|date',
-            'receipt' => 'nullable|file|mimes:jpg,jpeg,png,gif,webp,pdf|max:10240',
+            // pdf stays in the list: a receipt is not always a photo, and dropping it
+            // would 422 uploads that work today.
+            'receipt' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff,pdf|max:10240',
         ];
     }
 

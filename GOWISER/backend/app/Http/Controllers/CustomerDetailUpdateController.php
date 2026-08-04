@@ -277,8 +277,10 @@ class CustomerDetailUpdateController extends Controller
                 'withholding_enabled' => 'nullable|boolean',
                 // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
                 'withholding_percentage' => 'nullable|numeric|min:0|max:100',
-                // End of the prepaid service period. Only sent for prepaid accounts; nullable so
-                // an account whose clock has not started yet can be saved with it empty.
+                // ACCEPTED BUT IGNORED — see the write block below. Kept in the validator so a
+                // stale client posting the field gets the same 422 for a malformed date as it
+                // always did, rather than having its whole submission behave differently
+                // depending on which build it is running.
                 'prepaid_expires_at' => 'nullable|date',
             ]);
 
@@ -396,11 +398,29 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['withholding_percentage'] = $validated['withholding_percentage'] ?? null;
             }
 
+            /*
+             * prepaid_expires_at is NOT writable here, for any role.
+             *
+             * A single mistyped date on this form could hand out — or take away — months of service
+             * with no record of who did it or why. Adjustments now go through the Prepaid Override
+             * approval queue instead (Billing -> Prepaid Override), where they are reviewed by a
+             * second person, applied under a lock, and audited on both sides of the move. See
+             * {@see \App\Services\PrepaidOverrideService}.
+             *
+             * The field is read-only in the UI too, so anything arriving here is either a stale
+             * client or a direct API call. Both are dropped rather than rejected: the rest of the
+             * billing details in the same submission are legitimate and must still save, and
+             * failing the whole request would block ordinary edits on every prepaid account. The
+             * warning is what makes the drop visible instead of silent.
+             */
             if ($request->has('prepaid_expires_at')) {
-                $prepaidExpiry = $validated['prepaid_expires_at'] ?? null;
-                $updateData['prepaid_expires_at'] = ($prepaidExpiry === null || $prepaidExpiry === '')
-                    ? null
-                    : \Carbon\Carbon::parse($prepaidExpiry);
+                \Log::warning('Ignored prepaid_expires_at on billing details update — use the Prepaid Override workflow', [
+                    'account_no'       => $accountNo,
+                    'submitted_value'  => $request->input('prepaid_expires_at'),
+                    'current_value'    => optional($billingAccount->prepaid_expires_at)->toDateTimeString(),
+                    'user_id'          => $request->user() ? $request->user()->id : null,
+                    'updated_by_input' => $request->input('updatedBy'),
+                ]);
             }
 
             $billingAccount->update($updateData);

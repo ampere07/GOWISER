@@ -1044,7 +1044,16 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         loggedInUserId = parsedUser.id || parsedUser.user?.id || '';
       }
 
-      const dataWithUpdatedBy = { ...formData, updatedBy: loggedInUserId };
+      const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId };
+
+      /*
+       * prepaid_expires_at is loaded into the form purely to be DISPLAYED — the input is
+       * read-only and the field now moves only through the Prepaid Override approval workflow.
+       * Stripped before the request so an ordinary billing-details save does not post a value it
+       * has no authority over. The backend drops it as well, but it logs a warning when it does,
+       * and every save of a prepaid account would otherwise raise one for a change nobody made.
+       */
+      delete dataWithUpdatedBy.prepaid_expires_at;
 
       const saveResult: any = await onSave(dataWithUpdatedBy, editType);
 
@@ -1688,7 +1697,14 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 {/* Prepaid Expiration — only meaningful for prepaid accounts, so it is shown only
                     when Billing Type is Prepaid. This is the end of the paid-for service period:
                     it gates access (AutoDisconnectService restricts once it lapses) and is what a
-                    queued plan change waits for. */}
+                    queued plan change waits for.
+
+                    READ-ONLY for every role. A mistyped date here could hand out — or take away —
+                    months of service with nothing recording who did it or why, so adjustments go
+                    through the Prepaid Override approval queue instead: raise one from the clock
+                    icon on Customer Details, and a second person approves it in Billing ->
+                    Prepaid Override. The backend drops this field on this endpoint too, so a stale
+                    client cannot write it either. */}
                 {isPrepaidBillingType && (
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
@@ -1697,24 +1713,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     <input
                       type="datetime-local"
                       value={formData.prepaid_expires_at || ''}
-                      onChange={(e) => handleInputChange('prepaid_expires_at', e.target.value)}
-                      onFocus={(e) => {
-                        if (colorPalette?.primary) {
-                          e.currentTarget.style.borderColor = colorPalette.primary;
-                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
-                        }
-                      }}
-                      onBlur={(e) => {
-                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
-                        e.currentTarget.style.boxShadow = 'none';
-                      }}
-                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                      readOnly
+                      disabled
+                      tabIndex={-1}
+                      aria-readonly="true"
+                      title="Prepaid expiration is adjusted through the Prepaid Override approval workflow"
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors cursor-not-allowed opacity-70 ${isDarkMode ? 'border-gray-700 bg-gray-800 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'
                         }`}
                     />
                     <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                       {formData.prepaid_expires_at
                         ? 'End of the current paid period. Service is restricted once this passes; a payment extends it by 30 days.'
                         : 'Empty means the prepaid clock has not started — it begins on their first payment.'}
+                    </p>
+                    <p className={`text-xs mt-1 font-medium ${isDarkMode ? 'text-yellow-500' : 'text-yellow-700'}`}>
+                      Not editable here. Use the Prepaid Override action on Customer Details to
+                      request a change — it takes effect once approved.
                     </p>
                   </div>
                 )}

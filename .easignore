@@ -1,0 +1,36 @@
+# Dependencies & Build artifacts
+node_modules/
+.expo/
+.expexport/
+dist/
+build/
+
+# Non-mobile project subdirectories in GOWISER repo
+MONITOR/
+APPLY/
+SYNC.pdf
+SYNC_Complete_System_Manual.pdf
+GOWISER.zip
+claude_prompt_zamboanga_migration.md
+radius_billing_sync.php
+sync_db_schema.php
+
+# Storage symlinks & backend storage
+**/storage/app/public
+**/public/storage
+
+# Environment files & secrets
+.env
+.env.*
+!.env.example
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.log

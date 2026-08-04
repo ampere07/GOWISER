@@ -866,7 +866,32 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
-            DB::table('service_orders')->where('id', $id)->update($data);
+            // A service order coming back from Failed or Reschedule is a NEW visit, so the
+            // timings the previous attempt left on the row are cleared. Folded into $data so
+            // the reset lands in the same UPDATE as the status change and is picked up by the
+            // change log below — see VisitTimerResetService for why a stale start_time is
+            // worse than none.
+            $data = app(\App\Services\VisitTimerResetService::class)->applyTo(
+                $data,
+                $serviceOrder->visit_status ?? null,
+                $data['visit_status'] ?? null,
+                [
+                    'entity' => 'service_order',
+                    'id' => $id,
+                    'ticket_id' => $serviceOrder->ticket_id ?? null,
+                    'actor' => $updatedByUser,
+                ]
+            );
+
+            // The row's own write is transactional: the status change and the timing reset it
+            // triggers have to land together, or a half-applied save leaves an In Progress
+            // visit still carrying the previous attempt's clock. Scoped to this statement on
+            // purpose — the RADIUS and reconnection work further down makes outbound HTTP
+            // calls, and holding a transaction open across those would pin row locks for the
+            // length of a network round trip.
+            DB::transaction(function () use ($id, $data) {
+                DB::table('service_orders')->where('id', $id)->update($data);
+            });
 
             if (isset($data['assigned_email']) && $data['assigned_email'] !== ($serviceOrder->assigned_email ?? null)) {
                 try {

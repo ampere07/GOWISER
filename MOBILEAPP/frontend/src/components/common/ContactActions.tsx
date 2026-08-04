@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, Pressable, StyleSheet, Alert, Linking, Platform } from 'react-native';
 import { Phone, MessageSquare } from 'lucide-react-native';
+import * as SMS from 'expo-sms';
 import { TECH_SPIEL_SMS } from '../../services/smsTemplateRegistry';
 
 /**
@@ -25,6 +26,7 @@ interface ContactActionsProps {
   valueStyle?: any;
   /** Shown when no number is recorded. */
   emptyLabel?: string;
+  /** Icon colour. Defaults to the same neutral the address pin uses. */
   accent?: string;
 }
 
@@ -62,43 +64,54 @@ const ContactActions: React.FC<ContactActionsProps> = ({
   smsBody = TECH_SPIEL_SMS.body,
   valueStyle,
   emptyLabel = 'Not provided',
-  accent = '#2563eb',
+  accent = '#4b5563',
 }) => {
   const dialable = toDialable(value);
 
-  const open = useCallback(async (url: string, action: string) => {
+  const openUrl = useCallback(async (url: string): Promise<boolean> => {
     try {
-      // canOpenURL is checked on native only. On web it reports false for tel:
-      // and sms: in several browsers that then handle the link perfectly well,
-      // so trusting it there would disable a working button.
-      if (Platform.OS !== 'web') {
-        const supported = await Linking.canOpenURL(url);
-
-        if (!supported) {
-          Alert.alert('Unavailable', `This device cannot ${action} from the app.`);
-          return;
-        }
-      }
-
       await Linking.openURL(url);
-    } catch (err: any) {
-      Alert.alert('Error', `Could not ${action}: ${err?.message ?? 'unknown error'}`);
+      return true;
+    } catch {
+      return false;
     }
   }, []);
 
   const handleCall = useCallback(
-    () => open(`tel:${dialable}`, 'start a call'),
-    [open, dialable]
+    () => openUrl(`tel:${dialable}`),
+    [openUrl, dialable]
   );
 
-  const handleSms = useCallback(() => {
-    // iOS separates the body with '&', Android and most others with '?'. Getting
-    // this wrong drops the prefilled message and opens an empty composer, which
-    // is the failure this whole feature exists to avoid.
-    const separator = Platform.OS === 'ios' ? '&' : '?';
+  const handleSms = useCallback(async () => {
+    // Primary method: expo-sms native composer
+    try {
+      const isAvailable = await SMS.isAvailableAsync();
+      if (isAvailable) {
+        await SMS.sendSMSAsync([dialable], smsBody);
+        return;
+      }
+    } catch {
+      // Fall through to URL scheme fallbacks if native SMS module fails
+    }
 
-    open(`sms:${dialable}${separator}body=${encodeURIComponent(smsBody)}`, 'open messages');
-  }, [open, dialable, smsBody]);
+    const separator = Platform.OS === 'ios' ? '&' : '?';
+    const encodedBody = encodeURIComponent(smsBody);
+
+    // Fallback 1: standard sms: schema with body
+    let ok = await openUrl(`sms:${dialable}${separator}body=${encodedBody}`);
+    if (ok) return;
+
+    // Fallback 2: smsto: schema (Android alternative)
+    ok = await openUrl(`smsto:${dialable}?body=${encodedBody}`);
+    if (ok) return;
+
+    // Fallback 3: plain sms: without body
+    ok = await openUrl(`sms:${dialable}`);
+    if (ok) return;
+
+    // Fallback 4: dialer
+    await openUrl(`tel:${dialable}`);
+  }, [openUrl, dialable, smsBody]);
 
   if (!dialable) {
     return (
@@ -120,15 +133,11 @@ const ContactActions: React.FC<ContactActionsProps> = ({
           accessibilityRole="button"
           accessibilityLabel={`Call ${dialable}`}
           // Generous hit area: these are tapped one-handed, outdoors, often in
-          // gloves. The visual button stays small so the row does not grow.
+          // gloves. The icon stays small so the row does not grow.
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={({ pressed }) => [
-            styles.button,
-            { borderColor: accent, opacity: pressed ? 0.6 : 1 },
-          ]}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
         >
-          <Phone width={14} height={14} color={accent} />
-          <Text style={[styles.buttonText, { color: accent }]}>Call</Text>
+          <Phone width={20} height={20} color={accent} />
         </Pressable>
 
         <Pressable
@@ -136,13 +145,9 @@ const ContactActions: React.FC<ContactActionsProps> = ({
           accessibilityRole="button"
           accessibilityLabel={`Send SMS to ${dialable}`}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={({ pressed }) => [
-            styles.button,
-            { borderColor: accent, opacity: pressed ? 0.6 : 1 },
-          ]}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
         >
-          <MessageSquare width={14} height={14} color={accent} />
-          <Text style={[styles.buttonText, { color: accent }]}>SMS</Text>
+          <MessageSquare width={20} height={20} color={accent} />
         </Pressable>
       </View>
     </View>
@@ -151,25 +156,17 @@ const ContactActions: React.FC<ContactActionsProps> = ({
 
 const styles = StyleSheet.create({
   row: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
     gap: 8,
     width: '100%',
   },
-  number: { flexShrink: 1 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  button: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderRadius: 9999,
-  },
-  buttonText: { fontSize: 12, fontWeight: '600' },
+  number: { flex: 1, flexShrink: 1 },
+  // Without labels the icons need their own breathing room, or two adjacent
+  // 20px glyphs read as one control.
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
 });
 
 export default ContactActions;

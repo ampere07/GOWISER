@@ -16,6 +16,7 @@ const SYSTEM_PAGES = [
   { id: 'customer', label: 'Customer' },
   { id: 'transaction-list', label: 'Transaction List' },
   { id: 'transactions-revert', label: 'Revert Requests' },
+  { id: 'prepaid-override', label: 'Prepaid Override' },
   { id: 'payment-portal', label: 'Payment Portal' },
   { id: 'soa', label: 'Statements' },
   { id: 'invoice', label: 'Invoice' },
@@ -79,6 +80,9 @@ const CUSTOMER_SUB_PERMISSIONS = [
   { id: 'customer.details-edit', label: 'Details Edit' },
   { id: 'customer.attachment', label: 'Attachment' },
   { id: 'customer.transact', label: 'Transact' },
+  // Raises a Prepaid Override request from the customer toolbar. Granting days still needs a
+  // second person to approve it in Billing -> Prepaid Override.
+  { id: 'customer.prepaid-override', label: 'Prepaid Override' },
 ];
 
 const TRANSACTION_SUB_PERMISSIONS = [

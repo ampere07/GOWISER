@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft, Printer
 } from 'lucide-react';
 import gowiserLogo from '../assets/gowiserlogo.png';
-import { transactionService } from '../services/transactionService';
+import { transactionService, TransactionReceipt } from '../services/transactionService';
 import { relatedDataService } from '../services/relatedDataService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import LoadingModal from './common/LoadingModalGlobal';
@@ -251,6 +251,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+  const [preparingReceipt, setPreparingReceipt] = useState(false);
   const [showCustomerDetails, setShowCustomerDetails] = useState(false);
   const [loadingCustomerOverlay, setLoadingCustomerOverlay] = useState(false);
   const [selectedCustomerForOverlay, setSelectedCustomerForOverlay] = useState<BillingDetailRecord | null>(null);
@@ -445,9 +446,21 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
 
   const hasActiveOverlay = selectedCustomerForOverlay || loadingCustomerOverlay;
 
-  const formatCurrency = (amount: number | string) => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    return `₱${numAmount.toFixed(2)}`;
+  /**
+   * Money as "₱1234.56". Unchanged formatting — only the parsing in front of it is new.
+   *
+   * Anything that is not a number becomes 0. `received_payment` is NULL on some rows carried
+   * over from the old database, and its decimal cast means it can also arrive as a string
+   * carrying thousands separators — both used to reach toFixed() as NaN and print the literal
+   * "₱NaN" on the slip and in the detail panel.
+   */
+  const formatCurrency = (amount: number | string | null | undefined) => {
+    const numAmount =
+      typeof amount === 'number'
+        ? amount
+        : parseFloat(String(amount ?? '').replace(/[^0-9.-]/g, ''));
+
+    return `₱${(Number.isFinite(numAmount) ? numAmount : 0).toFixed(2)}`;
   };
 
   const formatDate = (dateStr?: string | null, includeTime: boolean = false): string => {
@@ -699,14 +712,57 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     setExpandedModalSection(null);
   };
 
-  // Resolve the human-readable payment method the same way the detail field does.
+  /**
+   * Statuses that mean the money was never collected, so there is nothing to receipt.
+   *
+   * Mirrors TransactionReceiptFormatter::UNSETTLED_STATUSES — keep the two in step.
+   *
+   * An exclusion list rather than a check for 'Done'. The current vocabulary is
+   * Pending/Done/Processing/Cancelled/Failed, but rows migrated from the old database also
+   * carry 'Approved', 'Completed', 'Paid' and NULL. Gating on 'Done' hid the print button on
+   * every one of them, which is exactly the reprint a customer walks in asking for. A blank
+   * status counts as settled: it only occurs on migrated history, where the row exists
+   * because the payment was taken.
+   */
+  const UNSETTLED_STATUSES = [
+    'pending', 'processing', 'cancelled', 'canceled', 'failed',
+    'void', 'voided', 'reverted', 'declined',
+  ];
+
+  const isReceiptPrintable = !UNSETTLED_STATUSES.includes(
+    (transaction.status || '').trim().toLowerCase()
+  );
+
+  /** First value that survives a trim, or undefined when there is none. */
+  const firstFilled = (...values: Array<unknown>): string | undefined => {
+    for (const value of values) {
+      if (value === null || value === undefined) continue;
+      const text = String(value).trim();
+      if (text !== '') return text;
+    }
+    return undefined;
+  };
+
+  /**
+   * Resolve the human-readable payment method the same way the detail field does.
+   *
+   * The column holds two different things depending on when the row was written: the method
+   * NAME on rows written by this system, and the payment_methods row ID on rows migrated from
+   * the old database. Both are looked up. A numeric value that matches no known method is
+   * dropped rather than printed — "Payment Method: 3" on a receipt is worse than a dash,
+   * because it reads as a real value.
+   */
   const getPaymentMethodName = (): string => {
-    return (
-      transaction.payment_method_info?.payment_method ||
-      paymentMethods?.find(m => String(m.id) === String(transaction.payment_method))?.payment_method ||
-      transaction.payment_method ||
-      '-'
-    );
+    const fromRelation = firstFilled(transaction.payment_method_info?.payment_method);
+    if (fromRelation) return fromRelation;
+
+    const raw = firstFilled(transaction.payment_method);
+    if (!raw) return '-';
+
+    const matched = paymentMethods?.find(m => String(m.id) === raw || String(m.payment_method) === raw);
+    if (matched?.payment_method) return matched.payment_method;
+
+    return /^\d+$/.test(raw) ? '-' : raw;
   };
 
   /**
@@ -718,16 +774,31 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
    *
    * Deliberately carries a disclaimer stating it cannot be used to claim input
    * tax, so it must not be presented as a BIR Official Receipt.
+   *
+   * `remote` is the backend's resolved projection (see TransactionReceiptFormatter) and wins
+   * wherever it has a value, because it can reach data this component cannot: a transaction
+   * migrated from the old database often has no hydrated `account` relation — closed accounts
+   * and account numbers that picked up padding in the export both break the join — which
+   * takes the customer name, contact and address with it. The local derivation stays as the
+   * fallback so the slip still prints when that call fails.
    */
-  const buildReceiptData = (): ReceiptData => {
+  const buildReceiptData = (remote?: TransactionReceipt | null): ReceiptData => {
     const customer = transaction.account?.customer;
     const location = [customer?.address, customer?.barangay, customer?.city, customer?.region]
       .filter(Boolean).join(', ');
 
+    // created_at last: migrated rows routinely carry neither payment date, and a slip reading
+    // "No date" is a slip the cashier has to apologise for.
+    const paidAt = firstFilled(
+      remote?.paid_at,
+      transaction.date_processed,
+      transaction.payment_date,
+      transaction.created_at,
+    );
+
     const timeStr = (() => {
-      const raw = transaction.date_processed || transaction.payment_date;
-      if (!raw) return '-';
-      const d = new Date(raw);
+      if (!paidAt) return '-';
+      const d = new Date(paidAt);
       if (isNaN(d.getTime())) return '-';
       let h = d.getHours();
       const ampm = h >= 12 ? 'PM' : 'AM';
@@ -735,32 +806,75 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ampm}`;
     })();
 
-    const planText = customer?.desired_plan ? ` (${customer.desired_plan})` : '';
+    const plan = firstFilled(remote?.plan, customer?.desired_plan);
+    const planText = plan ? ` (${plan})` : '';
+
+    const amount = remote && Number.isFinite(remote.amount)
+      ? remote.amount
+      : transaction.received_payment;
 
     return {
       company: RECEIPT_COMPANY,
       // Prefer the DB-configured logo (same one the Header shows); fall back to the bundled asset.
       logoSrc: receiptLogoUrl || gowiserLogo,
-      receiptNo: String(transaction.or_no || transaction.reference_no || transaction.id || '-'),
-      dateStr: formatDate(transaction.date_processed || transaction.payment_date),
+      receiptNo: firstFilled(
+        remote?.receipt_no,
+        transaction.or_no,
+        transaction.reference_no,
+        transaction.id,
+      ) ?? '-',
+      dateStr: paidAt ? formatDate(paidAt) : '-',
       timeStr,
-      customerName: customer?.full_name || '-',
-      accountNo: String(transaction.account?.account_no || '-'),
-      contact: customer?.contact_number_primary || '-',
-      address: location,
-      description: `${transaction.transaction_type || 'Payment'}${planText}`,
-      amount: formatCurrency(transaction.received_payment || 0),
-      paymentMethod: getPaymentMethodName(),
-      referenceNo: transaction.reference_no || undefined,
-      processedBy: transaction.processed_by_user || undefined,
+      customerName: firstFilled(remote?.customer_name, customer?.full_name) ?? '-',
+      // The transaction's OWN account_no before the relation's: the column is always
+      // populated, the relation is what goes missing on migrated rows.
+      accountNo: firstFilled(
+        remote?.account_no,
+        transaction.account_no,
+        transaction.account?.account_no,
+      ) ?? '-',
+      contact: firstFilled(remote?.contact, customer?.contact_number_primary) ?? '-',
+      address: firstFilled(remote?.address, location) ?? '',
+      description: `${firstFilled(remote?.description, transaction.transaction_type) ?? 'Payment'}${planText}`,
+      amount: formatCurrency(amount ?? 0),
+      paymentMethod: firstFilled(remote?.payment_method, getPaymentMethodName()) ?? '-',
+      referenceNo: firstFilled(remote?.reference_no, transaction.reference_no),
+      processedBy: firstFilled(
+        remote?.processed_by,
+        transaction.processed_by_user,
+        transaction.approved_by,
+      ),
     };
   };
 
-  // Opens the preview instead of printing straight away, so the cashier can pick
-  // the paper format and check the slip before committing it to a thermal roll.
-  const handlePrintReceipt = () => {
-    setReceiptData(buildReceiptData());
-    setShowReceiptPreview(true);
+  /**
+   * Opens the preview instead of printing straight away, so the cashier can pick the paper
+   * format and check the slip before committing it to a thermal roll.
+   *
+   * The backend projection is fetched first but never blocks: on any failure the preview
+   * opens on the locally derived payload instead. Enrichment that can stop a receipt being
+   * printed is worse than no enrichment.
+   */
+  const handlePrintReceipt = async () => {
+    if (preparingReceipt) return;
+
+    setPreparingReceipt(true);
+
+    let remote: TransactionReceipt | null = null;
+
+    try {
+      const result = await transactionService.getTransactionReceipt(transaction.id);
+      remote = result.data;
+    } catch (err) {
+      console.error('[TransactionListDetails] Receipt enrichment failed, using local data:', err);
+    }
+
+    try {
+      setReceiptData(buildReceiptData(remote));
+      setShowReceiptPreview(true);
+    } finally {
+      setPreparingReceipt(false);
+    }
   };
 
   return (
@@ -889,16 +1003,16 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                 </button>
               )}
 
-            {/* Print Official Receipt — only for completed (Done) transactions */}
-            {(transaction.status || '').toLowerCase() === 'done' && (
+            {/* Print Official Receipt — for any transaction whose money was collected */}
+            {isReceiptPrintable && (
               <button
                 onClick={handlePrintReceipt}
-                disabled={loading}
+                disabled={loading || preparingReceipt}
                 className={`p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
                   ? 'text-gray-400 hover:text-white hover:bg-gray-700'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
                   }`}
-                title="Print Receipt"
+                title={preparingReceipt ? 'Preparing receipt…' : 'Print Receipt'}
               >
                 <Printer size={16} />
               </button>

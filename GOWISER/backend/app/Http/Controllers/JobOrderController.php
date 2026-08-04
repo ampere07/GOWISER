@@ -28,6 +28,7 @@ use Illuminate\Support\Facades\Hash;
 use App\Services\GoogleDriveService;
 use App\Services\PppoeUsernameService;
 use App\Services\RadiusServerResolver;
+use App\Services\VisitTimerResetService;
 use App\Models\RadiusConfig;
 use App\Models\ActivityLog;
 use App\Events\JobOrderViewingUpdate;
@@ -803,7 +804,23 @@ class JobOrderController extends Controller
             ]);
 
             $oldStatus = $jobOrder->onsite_status;
-            
+
+            // A job order coming back from Failed or Reschedule is a NEW attempt, so the
+            // timings left behind by the previous one are cleared before the fill — see
+            // VisitTimerResetService for why a stale start_time is worse than none. Folded
+            // into $data rather than saved separately so it lands in the same UPDATE as the
+            // status change and shows up in the audit trail diff below.
+            $data = app(VisitTimerResetService::class)->applyTo(
+                $data,
+                $oldStatus,
+                $data['onsite_status'] ?? null,
+                [
+                    'entity' => 'job_order',
+                    'id' => $jobOrder->id,
+                    'actor' => $data['updated_by_user_email'] ?? null,
+                ]
+            );
+
             $jobOrder->fill($data);
             $dirtyAttributes = $jobOrder->getDirty();
             
@@ -1845,16 +1862,16 @@ class JobOrderController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'folder_name' => 'required|string|max:255',
-                'signed_contract_image' => 'nullable|image|max:10240',
-                'setup_image' => 'nullable|image|max:10240',
-                'box_reading_image' => 'nullable|image|max:10240',
-                'router_reading_image' => 'nullable|image|max:10240',
-                'port_label_image' => 'nullable|image|max:10240',
-                'client_signature_image' => 'nullable|image|max:10240',
-                'client_tagging_image' => 'nullable|image|max:10240',
-                'speed_test_image' => 'nullable|image|max:10240',
-                'proof_image' => 'nullable|image|max:10240',
-                'house_front_image' => 'nullable|image|max:10240',
+                'signed_contract_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'setup_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'box_reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'router_reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'port_label_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'client_signature_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'client_tagging_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'speed_test_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'proof_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'house_front_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
             ]);
 
             if ($validator->fails()) {

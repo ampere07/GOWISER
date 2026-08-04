@@ -30,6 +30,7 @@ import Customer from './Customer';
 import BillingListView from './BillingListView';
 import TransactionList from './TransactionList';
 import TransactionsRevert from './TransactionsRevert';
+import PrepaidOverride from './PrepaidOverride';
 import PaymentPortal from './PaymentPortal';
 import JobOrder from './JobOrder';
 import WorkOrder from './WorkOrder';
@@ -146,6 +147,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     const [jobOrderAutoOpenId, setJobOrderAutoOpenId] = useState('');
     const [applicationAutoOpenId, setApplicationAutoOpenId] = useState('');
     const [revertAutoOpenId, setRevertAutoOpenId] = useState('');
+    const [prepaidOverrideAutoOpenId, setPrepaidOverrideAutoOpenId] = useState('');
     const [serviceOrderAutoOpenId, setServiceOrderAutoOpenId] = useState('');
     const [customerAutoOpenPayModal, setCustomerAutoOpenPayModal] = useState(false);
     const [planInitialSearch, setPlanInitialSearch] = useState('');
@@ -356,6 +358,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 );
             case 'transactions-revert':
                 return <TransactionsRevert autoOpenRevertId={revertAutoOpenId} />;
+            case 'prepaid-override':
+                return <PrepaidOverride autoOpenOverrideId={prepaidOverrideAutoOpenId} />;
             case 'payment-portal':
                 return <PaymentPortal />;
             case 'job-order':
@@ -466,6 +470,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             setApplicationAutoOpenId(extra || '');
         } else if (section === 'transactions-revert') {
             setRevertAutoOpenId(extra || '');
+        } else if (section === 'prepaid-override') {
+            setPrepaidOverrideAutoOpenId(extra || '');
         } else if (section === 'service-order') {
             setServiceOrderAutoOpenId(extra || '');
         }

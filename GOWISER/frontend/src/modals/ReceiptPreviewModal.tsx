@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Printer, Download, ArrowLeft, Receipt, FileText, Loader2 } from 'lucide-react';
 import {
   buildReceiptHtml,
+  normalizeReceiptData,
   receiptFileName,
   ReceiptData,
   ReceiptFormat,
@@ -11,7 +12,12 @@ import {
 interface ReceiptPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
-  data: ReceiptData | null;
+  /**
+   * Partial on purpose. A receipt for a transaction migrated from the old database can be
+   * missing an OR number, a customer or a payment method, and the modal is expected to print
+   * it anyway — normalizeReceiptData fills the gaps. See utils/receiptTemplates.
+   */
+  data: Partial<ReceiptData> | null;
   isDarkMode?: boolean;
   /** Format shown when the modal opens. */
   initialFormat?: ReceiptFormat;
@@ -46,9 +52,14 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
   const [frameHeight, setFrameHeight] = useState<number | null>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
+  // Normalised once, here, rather than at each use. The toolbar reads receiptNo and
+  // customerName directly, and a legacy transaction can arrive without either — rendering
+  // "OR # undefined" above a slip that prints correctly would be worse than the gap itself.
+  const receipt = useMemo(() => (data ? normalizeReceiptData(data) : null), [data]);
+
   const html = useMemo(
-    () => (data ? buildReceiptHtml(data, format) : ''),
-    [data, format]
+    () => (receipt ? buildReceiptHtml(receipt, format) : ''),
+    [receipt, format]
   );
 
   // A new document invalidates the measured height; drop it so the placeholder
@@ -91,7 +102,7 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
    * is blocked, which is better than not printing at all.
    */
   const handlePrint = useCallback(() => {
-    if (!data) return;
+    if (!receipt) return;
     setError(null);
 
     const autoPrint =
@@ -120,11 +131,11 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
     }
 
     setError('Your browser blocked the print window. Please allow pop-ups for this site.');
-  }, [data, format, html]);
+  }, [receipt, format, html]);
 
   /** Render the current format to PDF and download it. */
   const handleDownloadPdf = useCallback(async () => {
-    if (!data || isDownloading) return;
+    if (!receipt || isDownloading) return;
 
     setError(null);
     setIsDownloading(true);
@@ -166,7 +177,7 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
       await html2pdf()
         .set({
           margin: format === 'a4' ? 0 : 2,
-          filename: `${receiptFileName(data, format)}.pdf`,
+          filename: `${receiptFileName(receipt, format)}.pdf`,
           image: { type: 'jpeg', quality: 0.98 },
           html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
           jsPDF: {
@@ -186,9 +197,9 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
       if (host.parentNode) host.parentNode.removeChild(host);
       setIsDownloading(false);
     }
-  }, [data, format, html, isDownloading]);
+  }, [receipt, format, html, isDownloading]);
 
-  if (!isOpen || !data) return null;
+  if (!isOpen || !receipt) return null;
 
   const surface = isDarkMode ? 'bg-gray-900' : 'bg-white';
   const barSurface = isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200';
@@ -229,7 +240,7 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
           <div className="min-w-0">
             <h2 className={`text-lg font-bold leading-tight ${titleText}`}>Receipt</h2>
             <p className={`text-xs truncate ${subText}`}>
-              OR # {data.receiptNo} — {data.customerName}
+              OR # {receipt.receiptNo} — {receipt.customerName}
             </p>
           </div>
 
@@ -288,7 +299,7 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
         >
           <iframe
             ref={frameRef}
-            title={`Receipt ${data.receiptNo} preview`}
+            title={`Receipt ${receipt.receiptNo} preview`}
             srcDoc={html}
             // Same-origin so print() can be called on it as the popup fallback,
             // and so its content height can be measured for auto-sizing.

@@ -1062,7 +1062,13 @@ class MonitorController extends Controller
                     ->whereNotNull('job_orders.assigned_email')
                     ->where('job_orders.assigned_email', '!=', '');
 
-                $jobs = $applyScope($jobs, 'job_orders.timestamp');
+                // Scoped on updated_at, not on timestamp. `timestamp` is when the job order was
+                // RAISED; a JO raised last month and worked on today would fall outside a
+                // 'today' scope and never reach the board, while one raised today and untouched
+                // since would sit on it all day. This queue reports on ACTIVITY, so the window
+                // has to be the last time the row actually moved — the same column the tech
+                // performance widgets above already scope on.
+                $jobs = $applyScope($jobs, 'job_orders.updated_at');
 
                 // 2) Service Orders
                 $services = DB::table('service_orders')
@@ -1090,7 +1096,9 @@ class MonitorController extends Controller
                     ->whereNotNull('service_orders.assigned_email')
                     ->where('service_orders.assigned_email', '!=', '');
 
-                $services = $applyScope($services, 'service_orders.timestamp');
+                // updated_at for the same reason as the job orders above — an SO raised days
+                // ago and visited today belongs on today's board.
+                $services = $applyScope($services, 'service_orders.updated_at');
 
                 $all = $jobs->union($services)->get();
 

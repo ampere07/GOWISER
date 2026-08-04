@@ -307,6 +307,73 @@ class TransactionController extends Controller
         }
     }
 
+    /**
+     * The print-ready projection of one transaction, for the receipt / invoice templates.
+     *
+     * Separate from show() because it answers a different question. show() returns the row as
+     * stored; this returns the row as it must PRINT, with every field resolved to something
+     * displayable — see TransactionReceiptFormatter for why migrated rows need that and what
+     * each fallback chain is for.
+     *
+     * The client keeps its own derivation and only prefers this block when the call succeeds,
+     * so a receipt still prints if this endpoint is unreachable.
+     */
+    public function receipt(string $id): JsonResponse
+    {
+        try {
+            $authUser = auth()->user();
+            $organizationId = $authUser ? $authUser->organization_id : null;
+            $roleId = $authUser ? $authUser->role_id : null;
+            $isSuperAdmin = !$authUser || $roleId == 7 || !$organizationId;
+
+            // Same eager loads as show(): the formatter reads through these relations first and
+            // only falls back to a direct lookup when one of them comes back empty, so loading
+            // them here is what keeps a page of reprints from turning into an N+1.
+            $transaction = Transaction::with(['account.customer', 'processor', 'paymentMethodInfo'])
+                ->findOrFail($id);
+
+            if (!$isSuperAdmin && $organizationId && $transaction->organization_id !== $organizationId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized access to transaction'
+                ], 403);
+            }
+
+            $formatter = app(\App\Services\TransactionReceiptFormatter::class);
+
+            if (!$formatter->isPrintable($transaction->status)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No receipt is available for a transaction that has not been settled',
+                    'status' => $transaction->status,
+                ], 409);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $formatter->format($transaction),
+            ]);
+        }
+        catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Transaction not found'
+            ], 404);
+        }
+        catch (\Exception $e) {
+            \Log::error('Error building transaction receipt: ' . $e->getMessage(), [
+                'transaction_id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to build receipt',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function approve(Request $request, string $id): JsonResponse
     {
         try {

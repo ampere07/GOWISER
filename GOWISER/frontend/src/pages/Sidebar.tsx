@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock, TimerReset } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { roleService } from '../services/userService';
 import { getPayableAlertCount } from '../services/monthlyPayableService';
@@ -223,6 +223,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         // Badge: transactions awaiting approval or processing (Pending / QUEUED).
         { id: 'transaction-list', label: 'Transaction List', icon: Receipt, allowedRoles: ['administrator'], badge: navBadges.transaction },
         { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw, allowedRoles: ['superadmin', 'administrator'] },
+        // Approval queue for manual changes to a prepaid customer's expiry. The date is no longer
+        // editable on the customer form, so this is where every adjustment is reviewed.
+        // TimerReset rather than Clock — Overdue two rows down already owns Clock in this menu.
+        { id: 'prepaid-override', label: 'Prepaid Override', icon: TimerReset, allowedRoles: ['superadmin', 'administrator'] },
         { id: 'payment-portal', label: 'Payment Portal', icon: DollarSign, allowedRoles: ['administrator'] },
         { id: 'soa', label: 'Statements', icon: FileText, allowedRoles: ['administrator'] },
         { id: 'invoice', label: 'Invoice', icon: Receipt, allowedRoles: ['administrator'] },

@@ -49,22 +49,137 @@ export const RECEIPT_DISCLAIMER =
   'This document is a temporary proof of payment/acknowledgment only and is not valid for '
   + 'claiming input tax or official accounting purposes.';
 
+/** Printed wherever a value cannot be resolved at all. */
+const PLACEHOLDER = '-';
+
 /** HTML-escape a value for interpolation into a template. */
 const esc = (v: unknown): string =>
-  String(v ?? '-')
+  String(v ?? PLACEHOLDER)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
+/** First value that is neither null/undefined nor blank once trimmed. */
+const firstFilled = (values: unknown[], fallback = PLACEHOLDER): string => {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text !== '') return text;
+  }
+  return fallback;
+};
+
+/**
+ * Company block used when the caller supplies none, or an incomplete one.
+ *
+ * Empty strings rather than a placeholder: a masthead reading "TIN: -" looks like a data
+ * error, whereas an absent line simply is not printed. The name is the exception — the slip
+ * has to say who issued it, and it is referenced in three places in each template.
+ */
+const FALLBACK_COMPANY: ReceiptCompany = {
+  name: 'OFFICIAL RECEIPT',
+  address: '',
+  tin: '',
+  sec: '',
+  bpNo: '',
+  tel: '',
+  email: '',
+};
+
+/**
+ * Fill in whatever the caller left out, so a template only ever renders complete data.
+ *
+ * The templates are handed transactions from two eras. Rows written by this system arrive
+ * with every field populated; rows migrated from the old database arrive with NULL OR
+ * numbers, no processed-by, no service period, sometimes no customer at all — and, for the
+ * oldest of them, a `company` that was never attached because the caller read it off a
+ * relation that did not hydrate.
+ *
+ * Guarding here rather than at each call site is deliberate: the templates interpolate
+ * `d.company.name` and `d.amount` directly, so a single missing branch is a blank slip or a
+ * `Cannot read properties of undefined` thrown mid-print — with the print dialog already
+ * open and a customer waiting at the counter. Every field is resolved to a printable string
+ * before any markup is built.
+ *
+ * Idempotent: normalising an already-normalised payload returns the same values, so the
+ * preview, the print window and the PDF export can each call it without compounding
+ * fallbacks.
+ */
+export const normalizeReceiptData = (data: Partial<ReceiptData> | null | undefined): ReceiptData => {
+  const source = data ?? {};
+  const company = source.company ?? ({} as Partial<ReceiptCompany>);
+
+  const periodLabel = firstFilled([source.periodLabel], '');
+  const referenceNo = firstFilled([source.referenceNo], '');
+  const processedBy = firstFilled([source.processedBy], '');
+
+  return {
+    company: {
+      name: firstFilled([company.name], FALLBACK_COMPANY.name),
+      address: firstFilled([company.address], FALLBACK_COMPANY.address),
+      tin: firstFilled([company.tin], FALLBACK_COMPANY.tin),
+      sec: firstFilled([company.sec], FALLBACK_COMPANY.sec),
+      bpNo: firstFilled([company.bpNo], FALLBACK_COMPANY.bpNo),
+      tel: firstFilled([company.tel], FALLBACK_COMPANY.tel),
+      email: firstFilled([company.email], FALLBACK_COMPANY.email),
+    },
+    // Blank rather than a placeholder: the <img> is hidden by its own onerror handler, and a
+    // src of "-" would fire a pointless request for a relative path first.
+    logoSrc: firstFilled([source.logoSrc], ''),
+    receiptNo: firstFilled([source.receiptNo]),
+    dateStr: firstFilled([source.dateStr]),
+    timeStr: firstFilled([source.timeStr]),
+    customerName: firstFilled([source.customerName]),
+    accountNo: firstFilled([source.accountNo]),
+    contact: firstFilled([source.contact]),
+    // The templates already render `d.address || '-'`, so an empty string is safe here and
+    // keeps "no address on file" distinguishable from a literal dash in the data.
+    address: firstFilled([source.address], ''),
+    description: firstFilled([source.description], 'Payment'),
+    amount: firstFilled([source.amount], '₱0.00'),
+    paymentMethod: firstFilled([source.paymentMethod]),
+    // Optional lines: the templates test them for truthiness before printing a row, so '' is
+    // what omits the line entirely.
+    ...(periodLabel ? { periodLabel } : {}),
+    ...(referenceNo ? { referenceNo } : {}),
+    ...(processedBy ? { processedBy } : {}),
+  };
+};
+
 /** Filename stem for downloads, e.g. "Receipt_2026-004293_A4". */
-export const receiptFileName = (data: ReceiptData, format: ReceiptFormat): string => {
-  const safeNo = String(data.receiptNo).replace(/[^A-Za-z0-9._-]+/g, '_');
+export const receiptFileName = (data: Partial<ReceiptData> | null | undefined, format: ReceiptFormat): string => {
+  const safeNo = normalizeReceiptData(data).receiptNo.replace(/[^A-Za-z0-9._-]+/g, '_');
   return `Receipt_${safeNo}_${format === 'a4' ? 'A4' : '80mm'}`;
 };
 
-export const buildReceiptHtml = (data: ReceiptData, format: ReceiptFormat): string =>
-  format === 'a4' ? buildA4Invoice(data) : buildPos80Receipt(data);
+export const buildReceiptHtml = (
+  data: Partial<ReceiptData> | null | undefined,
+  format: ReceiptFormat
+): string => {
+  const safe = normalizeReceiptData(data);
+  return format === 'a4' ? buildA4Invoice(safe) : buildPos80Receipt(safe);
+};
+
+/**
+ * "Label: value" for the parts that are actually present, joined by `sep`.
+ *
+ * The company registration details are printed as pairs ("TIN: … | SEC: …"). A migrated
+ * deployment may hold only some of them, and interpolating the blanks straight in yields
+ * "TIN:  | SEC: " — a line that reads as a rendering fault rather than as absent data. Pairs
+ * with nothing behind them are dropped, and the separator disappears with them.
+ */
+const metaPairs = (pairs: Array<[string, string]>, sep: string): string =>
+  pairs
+    .filter(([, value]) => value !== '')
+    .map(([label, value]) => `${esc(label)}: ${esc(value)}`)
+    .join(sep);
+
+/** A `<div class="muted">` line that is omitted entirely when its value is blank. */
+const mutedLine = (value: string, label?: string): string =>
+  value === ''
+    ? ''
+    : `<div class="muted">${label ? `${esc(label)}: ` : ''}${esc(value)}</div>`;
 
 // ── 80mm thermal slip ────────────────────────────────────────────────────────
 
@@ -111,13 +226,16 @@ const buildPos80Receipt = (d: ReceiptData): string => `<!DOCTYPE html>
 </head>
 <body>
   <div class="center">
-    <img class="logo" src="${esc(d.logoSrc)}" alt="logo" onerror="this.style.display='none'" />
+    ${d.logoSrc ? `<img class="logo" src="${esc(d.logoSrc)}" alt="logo" onerror="this.style.display='none'" />` : ''}
     <div class="company">${esc(d.company.name)}</div>
-    <div class="muted">${esc(d.company.address)}</div>
-    <div class="muted">TIN: ${esc(d.company.tin)} | SEC: ${esc(d.company.sec)}</div>
-    <div class="muted">BP No: ${esc(d.company.bpNo)}</div>
-    <div class="muted">Tel: ${esc(d.company.tel)}</div>
-    <div class="muted">${esc(d.company.email)}</div>
+    ${mutedLine(d.company.address)}
+    ${(() => {
+      const regs = metaPairs([['TIN', d.company.tin], ['SEC', d.company.sec]], ' | ');
+      return regs ? `<div class="muted">${regs}</div>` : '';
+    })()}
+    ${mutedLine(d.company.bpNo, 'BP No')}
+    ${mutedLine(d.company.tel, 'Tel')}
+    ${mutedLine(d.company.email)}
   </div>
 
   <hr class="divider" />
@@ -154,8 +272,8 @@ const buildPos80Receipt = (d: ReceiptData): string => `<!DOCTYPE html>
   <div class="center thanks">Keep this receipt for your records.</div>
   <div class="center thanks">For inquiries, please contact us.</div>
   <div class="center thanks" style="margin-top:6px; font-weight:bold;">${esc(d.company.name)}</div>
-  <div class="center thanks">Tel: ${esc(d.company.tel)}</div>
-  <div class="center thanks">${esc(d.company.email)}</div>
+  ${d.company.tel ? `<div class="center thanks">Tel: ${esc(d.company.tel)}</div>` : ''}
+  ${d.company.email ? `<div class="center thanks">${esc(d.company.email)}</div>` : ''}
 </body>
 </html>`;
 
@@ -246,13 +364,15 @@ const buildA4Invoice = (d: ReceiptData): string => `<!DOCTYPE html>
     <table>
       <tr>
         <td style="width:58%;">
-          <img class="logo" src="${esc(d.logoSrc)}" alt="logo" onerror="this.style.display='none'" />
+          ${d.logoSrc ? `<img class="logo" src="${esc(d.logoSrc)}" alt="logo" onerror="this.style.display='none'" />` : ''}
           <div class="company-name">${esc(d.company.name)}</div>
           <div class="company-meta">
-            ${esc(d.company.address)}<br />
-            TIN: ${esc(d.company.tin)} &nbsp;|&nbsp; SEC: ${esc(d.company.sec)}<br />
-            BP No: ${esc(d.company.bpNo)} &nbsp;|&nbsp; Tel: ${esc(d.company.tel)}<br />
-            ${esc(d.company.email)}
+            ${[
+              d.company.address ? esc(d.company.address) : '',
+              metaPairs([['TIN', d.company.tin], ['SEC', d.company.sec]], ' &nbsp;|&nbsp; '),
+              metaPairs([['BP No', d.company.bpNo], ['Tel', d.company.tel]], ' &nbsp;|&nbsp; '),
+              d.company.email ? esc(d.company.email) : '',
+            ].filter(Boolean).join('<br />')}
           </div>
         </td>
         <td style="width:42%;">
@@ -332,8 +452,11 @@ const buildA4Invoice = (d: ReceiptData): string => `<!DOCTYPE html>
   </table>
 
   <div class="footer">
-    ${esc(d.company.name)} &nbsp;&middot;&nbsp; Tel: ${esc(d.company.tel)}
-    &nbsp;&middot;&nbsp; ${esc(d.company.email)}
+    ${[
+      esc(d.company.name),
+      d.company.tel ? `Tel: ${esc(d.company.tel)}` : '',
+      d.company.email ? esc(d.company.email) : '',
+    ].filter(Boolean).join(' &nbsp;&middot;&nbsp; ')}
   </div>
 
 </body>

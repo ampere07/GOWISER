@@ -13,6 +13,7 @@ import { useNapStore } from '../store/napStore';
 import { useOrganizationStore } from '../store/organizationStore';
 import { useOverdueStore } from '../store/overdueStore';
 import { usePaymentPortalStore } from '../store/paymentPortalStore';
+import { usePrepaidOverrideStore } from '../store/prepaidOverrideStore';
 import { useReconnectionStore } from '../store/reconnectionStore';
 import { useRoleStore } from '../store/roleStore';
 import { useServiceOrderStore } from '../store/serviceOrderStore';
@@ -152,6 +153,13 @@ export const resetAllStores = () => {
   usePaymentPortalStore.setState({
     paymentPortalRecords: [],
     totalCount: 0,
+    isLoading: false,
+    error: null,
+    lastUpdated: null,
+  });
+
+  usePrepaidOverrideStore.setState({
+    overrideRequests: [],
     isLoading: false,
     error: null,
     lastUpdated: null,
