@@ -27,7 +27,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const { width, height } = useWindowDimensions();
     const isMobile = width < 768;
     const isShort = height < 700;
-    const { customerDetail, payments, invoiceRecords, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
+    const { customerDetail, payments, invoiceRecords, billingType, isPrepaid, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
     const [user, setUser] = useState<any>(null);
 
     const [isPaymentProcessing, setIsPaymentProcessing] = useState<boolean>(false);
@@ -172,14 +172,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const address = customerDetail?.address || 'No Address';
     const installationDate = customerDetail?.billingAccount?.dateInstalled || 'Pending';
     const rawBalance = Number(customerDetail?.billingAccount?.accountBalance || 0);
-    const usageType = customerDetail?.technicalDetails?.usageType || 'N/A';
     const emailAddress = customerDetail?.emailAddress || user?.email || 'N/A';
 
     // ── Prepaid state ───────────────────────────────────────────────────────
-    // Letters-only comparison so both the canonical 'Prepaid' and the older 'Pre Paid' resolve —
-    // an account that has not been through the rename must still get the plan picker.
-    const isPrepaid = String(customerDetail?.billingAccount?.generation_type ?? '')
-        .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+    // Resolved centrally in CustomerDataContext (see utils/billingType), which mirrors the
+    // backend's BillingAccount::isPrepaidType() — so both the canonical 'Prepaid' and the older
+    // 'Pre Paid' resolve, and an account that has not been through the rename still gets the
+    // plan picker. `billingType` is the same value as the customer-facing label.
 
     // A prepaid customer never carries a negative (credit) balance: paying only extends the
     // prepaid period, it does not bank a credit, so a fully-paid prepaid account reads as 0 —
@@ -896,8 +895,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{planName}</Text>
                                         </View>
                                         <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                                            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 }}>Usage Type</Text>
-                                            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{usageType}</Text>
+                                            {/* Was "Usage Type", which read N/A for every customer because the
+                                                usage type is an internal technical-details field that is not
+                                                captured for retail accounts. Billing type is the value the
+                                                customer actually needs here — it explains why they see an
+                                                expiry instead of a due date, and top-ups instead of bills. */}
+                                            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 }}>Billing Type</Text>
+                                            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{billingType}</Text>
                                         </View>
                                     </View>
                                 </View>

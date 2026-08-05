@@ -14,6 +14,7 @@ import {
   SubscriberAnalyticsData,
   TechData,
   WidgetQuery,
+  WorkStreamsResponse,
 } from '../types/reporting';
 
 /**
@@ -159,6 +160,30 @@ export const reportingService = {
       async () => {
         const response = await api.get<{ status: string; data: ExecutiveOverviewData }>(
           '/executive/overview',
+          { params: clean({ date_from: widget?.dateFrom, date_to: widget?.dateTo }) }
+        );
+
+        return response.data.data;
+      },
+      CACHE_MS
+    ),
+
+  /**
+   * One window of the Applications / Job Orders / Service Orders widgets.
+   *
+   * Separate from the overview because those three carry independent ranges, and
+   * moving one must not re-run the financial fan-out behind the rest of the page.
+   *
+   * The cache key is the range, so the common case — all three widgets still on
+   * the page default — is one HTTP request serving all of them, and only a
+   * widget someone has actually moved issues one of its own.
+   */
+  getExecutiveWorkStreams: async (widget?: WidgetQuery): Promise<WorkStreamsResponse> =>
+    requestCache.get(
+      `reporting_executive_streams_${widget?.dateFrom ?? ''}_${widget?.dateTo ?? ''}`,
+      async () => {
+        const response = await api.get<{ status: string; data: WorkStreamsResponse }>(
+          '/executive/work-streams',
           { params: clean({ date_from: widget?.dateFrom, date_to: widget?.dateTo }) }
         );
 

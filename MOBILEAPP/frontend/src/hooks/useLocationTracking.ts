@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isBackgroundLocationTrackingEnabled } from '../config/featureFlags';
+import { requestBackgroundPermission, requestForegroundPermission } from '../services/locationGateway';
 import { startTechLocationUpdates, stopTechLocationUpdates } from '../services/locationTask';
 
 function isTechnician(user: any): boolean {
@@ -11,13 +12,22 @@ function isTechnician(user: any): boolean {
 }
 
 /**
- * Starts continuous GPS reporting for the logged-in technician and keeps it
- * running while the app is open — including in the background — via the OS
- * location task (see services/locationTask.ts). Location permission is only
- * ever requested for a logged-in technician. Tracking stops on logout (unmount).
+ * Starts continuous GPS reporting for the logged-in technician and keeps it running while the app
+ * is open — including in the background — via the OS location task (see services/locationTask).
+ *
+ * Permission is requested for a logged-in technician and nobody else: prompting a customer or an
+ * office user for their location would be both useless and alarming. Tracking stops on logout
+ * (unmount).
+ *
+ * Mounted unconditionally by Dashboard, so the guards run in this order and all three must pass:
+ * the feature flag, then the technician role check, then the OS permission.
  */
 export function useLocationTracking() {
   useEffect(() => {
+    // Kill switch for a Play Store build that cannot ship location permissions. Read before the
+    // async work so the cleanup below stays consistent with what actually ran.
+    if (!isBackgroundLocationTrackingEnabled()) return;
+
     let cancelled = false;
 
     (async () => {
@@ -28,15 +38,15 @@ export function useLocationTracking() {
         // Permission prompt + tracking are strictly technician-only.
         if (!isTechnician(user)) return;
 
-        const fg = await Location.requestForegroundPermissionsAsync();
-        if (fg.status !== 'granted') {
-          console.warn('[location] foreground permission not granted:', fg.status);
+        const status = await requestForegroundPermission('useLocationTracking');
+        if (status !== 'granted') {
+          console.warn('[location] foreground permission not granted:', status);
           return;
         }
 
         // Background permission lets updates continue when the app is minimized.
         // If denied, tracking still works while the app is in the foreground.
-        await Location.requestBackgroundPermissionsAsync().catch(() => null);
+        await requestBackgroundPermission('useLocationTracking').catch(() => null);
 
         if (cancelled) return;
         await startTechLocationUpdates();

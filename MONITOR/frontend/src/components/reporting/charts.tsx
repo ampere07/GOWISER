@@ -18,7 +18,7 @@ import {
 import { Bar, Doughnut, Pie } from 'react-chartjs-2';
 import { useTheme } from '../../hooks/useTheme';
 import { formatMoney, formatMoneyShort, formatNumber } from '../../utils/format';
-import { TrendPoint } from '../../types/reporting';
+import { TrendPoint, WorkTimelinePoint } from '../../types/reporting';
 
 /**
  * Chart.js v4 is tree-shaken: nothing is available until it is registered, and
@@ -213,6 +213,150 @@ export const TrendChart: React.FC<TrendChartProps> = ({ points, height = 340 }) 
   );
 };
 
+/** Applications blue, job orders green, service orders amber. */
+export const STREAM_COLORS = {
+  applications: '#0d6efd',
+  job_orders: '#20c997',
+  service_orders: '#fd7e14',
+} as const;
+
+interface WorkStreamChartProps {
+  points: WorkTimelinePoint[];
+  height?: number;
+  /**
+   * Bars for the pipeline panel, lines everywhere else.
+   *
+   * Grouped bars read better beside a table of the same numbers: the eye moves
+   * between a bar and its row without having to interpolate a point off a line.
+   * Lines remain the default for the standalone chart, where the question is the
+   * shape of the trend rather than the value on a given day.
+   */
+  variant?: 'line' | 'bar';
+}
+
+/**
+ * Applications, job orders and service orders day by day on one axis.
+ *
+ * Three lines rather than stacked bars. The question this answers is whether one
+ * stream is diverging from the others — installations climbing while repairs
+ * stay flat — and stacking hides exactly that by making every series' position
+ * depend on the ones below it. Lines also survive an empty day, which the
+ * backend emits as a real zero rather than a gap (see workTimeline), so a quiet
+ * week reads as a trough instead of two busy days drawn side by side.
+ *
+ * Counts, not money, so the axis starts at zero: unlike net income these cannot
+ * go negative, and a floating baseline would exaggerate a two-job difference.
+ */
+export const WorkStreamChart: React.FC<WorkStreamChartProps> = ({
+  points,
+  height = 300,
+  variant = 'line',
+}) => {
+  const theme = useChartTheme();
+
+  const data = useMemo(
+    () => ({
+      labels: points.map((point) => point.label),
+      datasets: (
+        [
+          ['applications', 'Applied'],
+          ['job_orders', 'Installed'],
+          ['service_orders', 'Repaired'],
+        ] as const
+      ).map(([key, label]) => ({
+        label,
+        data: points.map((point) => point[key]),
+        ...(variant === 'bar'
+          ? {
+              type: 'bar' as const,
+              backgroundColor: STREAM_COLORS[key],
+              borderColor: STREAM_COLORS[key],
+              borderWidth: 0,
+              borderRadius: 3,
+              // Grouped, never stacked: stacking makes each series' position
+              // depend on the ones below it, which hides the divergence the
+              // chart exists to show.
+              stack: undefined,
+            }
+          : {
+              type: 'line' as const,
+              borderColor: STREAM_COLORS[key],
+              backgroundColor: `${STREAM_COLORS[key]}22`,
+              borderWidth: 2,
+              // Points are hidden on a long range and shown on a short one:
+              // thirty markers is a readable series, three hundred is a solid
+              // band.
+              pointRadius: points.length > 45 ? 0 : 3,
+              pointHoverRadius: 4,
+              pointBackgroundColor: STREAM_COLORS[key],
+              fill: false,
+              tension: 0.25,
+            }),
+      })),
+    }),
+    [points, variant]
+  );
+
+  const options = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index' as const, intersect: false },
+      plugins: {
+        legend: {
+          position: 'top' as const,
+          labels: {
+            color: theme.tick,
+            boxWidth: 12,
+            boxHeight: 12,
+            padding: 16,
+            font: { size: 11 },
+          },
+        },
+        tooltip: {
+          ...theme.tooltip,
+          callbacks: {
+            label: (context: any) => ` ${context.dataset.label}: ${formatNumber(context.raw)}`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          grid: { color: theme.grid },
+          border: { display: false },
+          ticks: {
+            color: theme.tick,
+            font: { size: 10 },
+            // Counts are whole. Without this a range whose peak is 3 draws
+            // gridlines at 0.5, 1.5, 2.5 and invites reading half a job order.
+            precision: 0,
+          },
+        },
+        x: {
+          grid: { display: false },
+          border: { color: theme.grid },
+          ticks: {
+            color: theme.tick,
+            font: { size: 10 },
+            maxRotation: 45,
+            minRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 16,
+          },
+        },
+      },
+    }),
+    [theme]
+  );
+
+  return (
+    <div style={{ height }} className="relative">
+      <Bar options={options as any} data={data as any} />
+    </div>
+  );
+};
+
 interface SliceChartProps {
   labels: string[];
   values: number[];
@@ -394,17 +538,13 @@ const sliceOptions = (
   layout: labelled ? { padding: { left: 92, right: 92, top: 12, bottom: 12 } } : undefined,
   plugins: {
     legend: {
-      // Redundant once every slice is named beside itself, and it costs the
-      // vertical space the labels need.
-      display: !labelled,
-      position: 'bottom' as const,
-      labels: {
-        color: theme.tick,
-        boxWidth: 10,
-        boxHeight: 10,
-        padding: 10,
-        font: { size: 10 },
-      },
+      // Never Chart.js's own. When there is room, each slice is named beside
+      // itself and a legend is redundant; when there is not, SliceLegend below
+      // renders one in HTML instead. Chart.js draws its legend inside the canvas
+      // at a fixed font size, which on a phone came out as unreadable 10px text
+      // carrying only the category name — no value, no share — and silently
+      // dropped entries once they ran out of canvas.
+      display: false,
     },
     tooltip: {
       ...theme.tooltip,
@@ -458,6 +598,70 @@ const useHasLabelRoom = (): [React.RefObject<HTMLDivElement | null>, boolean] =>
   return [ref, roomy];
 };
 
+/**
+ * The legend shown when the chart is too narrow for outside labels — which is
+ * every phone, and plenty of half-width desktop panels.
+ *
+ * HTML rather than Chart.js's canvas legend, because the canvas one was the bug:
+ * it renders at a fixed pixel size that does not scale with the device, it wraps
+ * by dropping entries rather than reflowing them, and its label is the category
+ * name alone. A reader on a phone saw "PLAN-C" and no number at all, while the
+ * desktop reader saw "PLAN-C · 1,969 · 54.9%" — the same chart making two
+ * different claims about how much it knew.
+ *
+ * Laid out as a two-column grid that collapses to one on the narrowest screens,
+ * with the figure right-aligned so the numbers form a readable column instead of
+ * ragging off the end of names of different lengths.
+ */
+const SliceLegend: React.FC<{
+  labels: string[];
+  values: number[];
+  colors: string[];
+  unit: 'money' | 'count';
+}> = ({ labels, values, colors, unit }) => {
+  const isDarkMode = useTheme();
+  const format = sliceFormat(unit);
+  const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+
+  if (total <= 0) return null;
+
+  return (
+    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-3 list-none">
+      {labels.map((label, index) => {
+        const value = Number(values[index] || 0);
+        const share = total > 0 ? (value / total) * 100 : 0;
+
+        return (
+          <li key={`${label}-${index}`} className="flex items-center gap-2 min-w-0 text-xs">
+            <span
+              className="inline-block w-2.5 h-2.5 rounded-sm flex-shrink-0"
+              style={{ backgroundColor: colors[index % colors.length] }}
+              aria-hidden
+            />
+            <span className={`truncate ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              {label}
+            </span>
+            <span
+              className={`ml-auto flex-shrink-0 tabular-nums font-medium ${
+                isDarkMode ? 'text-gray-100' : 'text-gray-900'
+              }`}
+            >
+              {format(value)}
+            </span>
+            <span
+              className={`flex-shrink-0 tabular-nums w-12 text-right ${
+                isDarkMode ? 'text-gray-500' : 'text-gray-500'
+              }`}
+            >
+              {share.toFixed(1)}%
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
 /** Donut, for compositions where the total itself is not the point. */
 export const DonutChart: React.FC<SliceChartProps> = ({
   labels,
@@ -473,17 +677,25 @@ export const DonutChart: React.FC<SliceChartProps> = ({
   const labelled = showValues && roomy;
 
   return (
-    <div ref={ref} style={{ height }} className="relative">
-      <Doughnut
-        options={sliceOptions(theme, unit, labelled) as any}
-        // Passed per-instance rather than registered globally, so the bar and
-        // line charts elsewhere are untouched by it.
-        plugins={labelled ? [sliceLabelPlugin(sliceFormat(unit), theme.tick, theme.strong)] : []}
-        data={{
-          labels,
-          datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }],
-        }}
-      />
+    // The ref measures the available width, so it must sit on the element that
+    // actually spans the panel — not on the fixed-height canvas box below it.
+    <div ref={ref}>
+      <div style={{ height }} className="relative">
+        <Doughnut
+          options={sliceOptions(theme, unit, labelled) as any}
+          // Passed per-instance rather than registered globally, so the bar and
+          // line charts elsewhere are untouched by it.
+          plugins={labelled ? [sliceLabelPlugin(sliceFormat(unit), theme.tick, theme.strong)] : []}
+          data={{
+            labels,
+            datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }],
+          }}
+        />
+      </div>
+
+      {!labelled && (
+        <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
+      )}
     </div>
   );
 };
@@ -503,22 +715,28 @@ export const PieChart: React.FC<SliceChartProps> = ({
   const labelled = showValues && roomy;
 
   return (
-    <div ref={ref} style={{ height }} className="relative">
-      <Pie
-        options={sliceOptions(theme, unit, labelled) as any}
-        plugins={labelled ? [sliceLabelPlugin(sliceFormat(unit), theme.tick, theme.strong)] : []}
-        data={{
-          labels,
-          datasets: [
-            {
-              data: values,
-              backgroundColor: colors,
-              borderWidth: 1,
-              borderColor: theme.isDarkMode ? '#0f172a' : '#ffffff',
-            },
-          ],
-        }}
-      />
+    <div ref={ref}>
+      <div style={{ height }} className="relative">
+        <Pie
+          options={sliceOptions(theme, unit, labelled) as any}
+          plugins={labelled ? [sliceLabelPlugin(sliceFormat(unit), theme.tick, theme.strong)] : []}
+          data={{
+            labels,
+            datasets: [
+              {
+                data: values,
+                backgroundColor: colors,
+                borderWidth: 1,
+                borderColor: theme.isDarkMode ? '#0f172a' : '#ffffff',
+              },
+            ],
+          }}
+        />
+      </div>
+
+      {!labelled && (
+        <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
+      )}
     </div>
   );
 };

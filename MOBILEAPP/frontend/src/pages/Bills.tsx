@@ -35,11 +35,34 @@ interface PaymentRecord {
     amount: number;
     source: 'Online' | 'Manual';
     status?: string;
+    type?: string | null;
 }
 
+type BillsTab = 'soa' | 'invoices' | 'payments';
+
 interface BillsProps {
-    initialTab?: 'soa' | 'invoices' | 'payments';
+    initialTab?: BillsTab;
 }
+
+/**
+ * Which tabs each billing type gets.
+ *
+ * Postpaid is unchanged: a statement of account, the invoices behind it, and the payments made
+ * against them. Prepaid has neither — invoice generation is disabled entirely for prepaid accounts
+ * (all prepaid operations run off transaction receipts), so an SOA or Invoices tab could only ever
+ * render empty. Prepaid therefore gets the payment history on its own, which for these accounts IS
+ * the top-up history.
+ */
+const TABS_BY_BILLING_TYPE: Record<'prepaid' | 'postpaid', BillsTab[]> = {
+    prepaid: ['payments'],
+    postpaid: ['soa', 'invoices', 'payments'],
+};
+
+const TAB_ICONS: Record<BillsTab, typeof FileText> = {
+    soa: FileText,
+    invoices: File,
+    payments: Clock,
+};
 
 const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-';
@@ -239,7 +262,10 @@ const HistoryCard = React.memo(({ record }: { record: PaymentRecord }) => {
         <View style={styles.card}>
             <View style={[styles.cardRow, { marginBottom: 14 }]}>
                 <View>
-                    <Text style={styles.labelText}>Payment Date</Text>
+                    {/* Manual transactions carry their transaction_type ('Top Up', 'Service Charge',
+                        …) so a prepaid customer can tell a top-up from a repair charge in the same
+                        list. Online portal payments have no such column and keep the plain label. */}
+                    <Text style={styles.labelText}>{record.type ? `${record.type} Date` : 'Payment Date'}</Text>
                     <Text style={styles.valueText}>{formatDate(record.date)}</Text>
                 </View>
                 <View style={[styles.alignEnd, { flex: 1, marginLeft: 16 }]}>
@@ -267,16 +293,49 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
     const { width, height } = useWindowDimensions();
     const isMobile = width < 768;
     const isShort = height < 700;
-    const { customerDetail, payments: paymentRecords, soaRecords, invoiceRecords, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
+    const { customerDetail, payments: paymentRecords, soaRecords, invoiceRecords, isPrepaid, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
     const accountNo = customerDetail?.billingAccount?.accountNo || '';
     const balance = Number(customerDetail?.billingAccount?.accountBalance || 0);
-    const [activeTab, setActiveTab] = useState<'soa' | 'invoices' | 'payments'>(initialTab);
 
-    const [tabMeasurements, setTabMeasurements] = useState<Record<'soa' | 'invoices' | 'payments', { x: number, width: number }>>({
-        soa: { x: 0, width: 0 },
-        invoices: { x: 0, width: 0 },
-        payments: { x: 0, width: 0 },
-    });
+    // Prepaid sees the history tab only; postpaid keeps SOA / Invoices / History.
+    const visibleTabs = useMemo(
+        () => TABS_BY_BILLING_TYPE[isPrepaid ? 'prepaid' : 'postpaid'],
+        [isPrepaid]
+    );
+    // 'History' is accurate for both, but a prepaid account's payments ARE its top-ups, so name
+    // them that way — it is the only tab those customers get and it has to be self-explanatory.
+    const historyLabel = isPrepaid ? 'Top-Up History' : 'History';
+    const tabLabels: Record<BillsTab, string> = { soa: 'SOA', invoices: 'Invoices', payments: historyLabel };
+
+    const [activeTab, setActiveTab] = useState<BillsTab>(initialTab);
+
+    /**
+     * Keep the selection inside the tabs this account actually has.
+     *
+     * Needed because billingType arrives asynchronously: the screen can mount on the 'soa' default
+     * (or be deep-linked to a tab by the dashboard) and only then learn the account is prepaid.
+     * Without this the customer would be left staring at a permanently empty SOA list.
+     */
+    useEffect(() => {
+        if (!visibleTabs.includes(activeTab)) {
+            setActiveTab(visibleTabs[visibleTabs.length - 1]);
+        }
+    }, [visibleTabs, activeTab]);
+
+    /**
+     * The tab the CONTENT is rendered from, as opposed to the one the user last pressed.
+     *
+     * They differ for exactly one render — the one between mounting on the postpaid default and
+     * the clamp effect above resolving a prepaid account — and everything below the tab strip
+     * reads this so the list, its empty state and its row type can never disagree with each other
+     * or briefly show a prepaid customer a postpaid tab's contents.
+     */
+    const effectiveTab: BillsTab = visibleTabs.includes(activeTab)
+        ? activeTab
+        : visibleTabs[visibleTabs.length - 1];
+
+    const [tabMeasurements, setTabMeasurements] = useState<Partial<Record<BillsTab, { x: number, width: number }>>>({});
+    const activeTabWidth = tabMeasurements[activeTab]?.width ?? 0;
     const slideAnim = React.useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -524,10 +583,10 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
     };
 
     const currentRecords = useMemo(() => {
-        if (activeTab === 'soa') return soaRecords;
-        if (activeTab === 'invoices') return invoiceRecords;
+        if (effectiveTab === 'soa') return soaRecords;
+        if (effectiveTab === 'invoices') return invoiceRecords;
         return paymentRecords;
-    }, [activeTab, soaRecords, invoiceRecords, paymentRecords]);
+    }, [effectiveTab, soaRecords, invoiceRecords, paymentRecords]);
 
     const paginatedData = useMemo(() => {
         const start = currentPage * ITEMS_PER_PAGE;
@@ -584,10 +643,12 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
                         {
                             position: 'absolute',
                             height: '100%',
-                            width: tabMeasurements[activeTab]?.width || 0,
+                            width: activeTabWidth,
                             left: 0,
                             bottom: 0,
-                            opacity: tabMeasurements[activeTab]?.width > 0 ? 1 : 0,
+                            // Hidden until the active tab has been measured, so the pill never
+                            // flashes at zero width on the first layout pass.
+                            opacity: activeTabWidth > 0 ? 1 : 0,
                             transform: [{ translateX: slideAnim }],
                             alignItems: 'center',
                         }
@@ -595,39 +656,30 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
                         <View style={[styles.tabIndicator, { backgroundColor: colorPalette?.primary || '#ef4444' }]} />
                     </Animated.View>
 
-                    <Pressable
-                        onLayout={(e) => {
-                            const { x, width } = e.nativeEvent.layout;
-                            setTabMeasurements(prev => ({ ...prev, soa: { x, width } }));
-                        }}
-                        onPress={() => setActiveTab('soa')}
-                        style={[styles.tabBase, { zIndex: 5, backgroundColor: 'transparent' }]}
-                    >
-                        <FileText width={16} height={16} color={activeTab === 'soa' ? (colorPalette?.primary || '#ef4444') : '#9ca3af'} />
-                        <Text style={[styles.tabText, activeTab === 'soa' ? styles.tabTextActive : styles.tabTextInactive]}>SOA</Text>
-                    </Pressable>
-                    <Pressable
-                        onLayout={(e) => {
-                            const { x, width } = e.nativeEvent.layout;
-                            setTabMeasurements(prev => ({ ...prev, invoices: { x, width } }));
-                        }}
-                        onPress={() => setActiveTab('invoices')}
-                        style={[styles.tabBase, { zIndex: 5, backgroundColor: 'transparent' }]}
-                    >
-                        <File width={16} height={16} color={activeTab === 'invoices' ? (colorPalette?.primary || '#ef4444') : '#9ca3af'} />
-                        <Text style={[styles.tabText, activeTab === 'invoices' ? styles.tabTextActive : styles.tabTextInactive]}>Invoices</Text>
-                    </Pressable>
-                    <Pressable
-                        onLayout={(e) => {
-                            const { x, width } = e.nativeEvent.layout;
-                            setTabMeasurements(prev => ({ ...prev, payments: { x, width } }));
-                        }}
-                        onPress={() => setActiveTab('payments')}
-                        style={[styles.tabBase, { zIndex: 5, backgroundColor: 'transparent' }]}
-                    >
-                        <Clock width={16} height={16} color={activeTab === 'payments' ? (colorPalette?.primary || '#ef4444') : '#9ca3af'} />
-                        <Text style={[styles.tabText, activeTab === 'payments' ? styles.tabTextActive : styles.tabTextInactive]}>History</Text>
-                    </Pressable>
+                    {visibleTabs.map((tab) => {
+                        const TabIcon = TAB_ICONS[tab];
+                        const isActive = activeTab === tab;
+                        return (
+                            <Pressable
+                                key={tab}
+                                onLayout={(e) => {
+                                    const { x, width } = e.nativeEvent.layout;
+                                    setTabMeasurements(prev => (
+                                        prev[tab]?.x === x && prev[tab]?.width === width
+                                            ? prev
+                                            : { ...prev, [tab]: { x, width } }
+                                    ));
+                                }}
+                                onPress={() => setActiveTab(tab)}
+                                style={[styles.tabBase, { zIndex: 5, backgroundColor: 'transparent' }]}
+                            >
+                                <TabIcon width={16} height={16} color={isActive ? (colorPalette?.primary || '#ef4444') : '#9ca3af'} />
+                                <Text style={[styles.tabText, isActive ? styles.tabTextActive : styles.tabTextInactive]}>
+                                    {tabLabels[tab]}
+                                </Text>
+                            </Pressable>
+                        );
+                    })}
                 </View>
             </View>
 
@@ -647,16 +699,16 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
                 ListEmptyComponent={() => (
                     <View style={styles.emptyContainer}>
                         <Text style={styles.emptyTitle}>
-                            {activeTab === 'soa' ? 'No Statements' : activeTab === 'invoices' ? 'No Invoices' : 'No History'}
+                            {effectiveTab === 'soa' ? 'No Statements' : effectiveTab === 'invoices' ? 'No Invoices' : `No ${historyLabel}`}
                         </Text>
                     </View>
                 )}
                 renderItem={({ item }) => (
-                    activeTab === 'payments'
+                    effectiveTab === 'payments'
                         ? <HistoryCard record={item as any} />
-                        : <BillCard 
-                            record={item} 
-                            type={activeTab === 'soa' ? 'soa' : 'invoice'} 
+                        : <BillCard
+                            record={item}
+                            type={effectiveTab === 'soa' ? 'soa' : 'invoice'}
                             primaryColor={primaryColor} 
                             onDownload={handleDownloadPDF}
                             isGenerating={isGeneratingPDF === item.id}

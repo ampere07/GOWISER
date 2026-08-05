@@ -42,6 +42,7 @@ class Permissions
     public const MODULE_AUDIT = 'audit';
     public const MODULE_SETTINGS = 'settings';
     public const MODULE_DATABASES = 'databases';
+    public const MODULE_MIKROTIK = 'mikrotik-radius';
 
     // ── Widgets ──────────────────────────────────────────────────────────
 
@@ -71,6 +72,26 @@ class Permissions
     public const ACTION_SETTINGS_MANAGE = 'action.settings.manage';
 
     /**
+     * Change a RADIUS group's rate limit or framed pool.
+     *
+     * Deliberately separate from MODULE_MIKROTIK. Reading the User Manager is a
+     * reasonable thing to grant an operations lead; re-shaping the speed profile
+     * every subscriber in a group receives is not the same act, and one grant
+     * covering both would hand out the second every time somebody wanted the
+     * first.
+     */
+    public const ACTION_MIKROTIK_WRITE = 'action.mikrotik.write';
+
+    /**
+     * Terminate live sessions.
+     *
+     * Its own grant again, and the narrowest one in this file. Everything else
+     * here changes what happens next; this disconnects people who are online
+     * right now.
+     */
+    public const ACTION_MIKROTIK_KICK = 'action.mikrotik.kick';
+
+    /**
      * Every module id, including the executive rollups this refactor left in
      * place. Order is the order the sidebar presents them.
      */
@@ -86,6 +107,7 @@ class Permissions
         self::MODULE_AUDIT,
         self::MODULE_SETTINGS,
         self::MODULE_DATABASES,
+        self::MODULE_MIKROTIK,
     ];
 
     public const WIDGETS = [
@@ -108,6 +130,8 @@ class Permissions
         self::ACTION_ROLES_MANAGE,
         self::ACTION_AUDIT_VIEW,
         self::ACTION_SETTINGS_MANAGE,
+        self::ACTION_MIKROTIK_WRITE,
+        self::ACTION_MIKROTIK_KICK,
     ];
 
     /**
@@ -143,6 +167,7 @@ class Permissions
         self::MODULE_AUDIT => 'Audit Trail',
         self::MODULE_SETTINGS => 'Settings',
         self::MODULE_DATABASES => 'Databases',
+        self::MODULE_MIKROTIK => 'Mikrotik Radius Shortcut',
 
         self::WIDGET_FINANCIAL_REVENUE => 'Revenue figures (unmasked)',
         self::WIDGET_FINANCIAL_CHANNELS => 'Income channels (Cash / PNB / Payment Portal)',
@@ -161,6 +186,8 @@ class Permissions
         self::ACTION_ROLES_MANAGE => 'Edit role permission maps',
         self::ACTION_AUDIT_VIEW => 'Read the audit trail',
         self::ACTION_SETTINGS_MANAGE => 'Change the logo and colour palette',
+        self::ACTION_MIKROTIK_WRITE => 'Change RADIUS group rate limits and pools',
+        self::ACTION_MIKROTIK_KICK => 'Disconnect live RADIUS sessions',
     ];
 
     /**

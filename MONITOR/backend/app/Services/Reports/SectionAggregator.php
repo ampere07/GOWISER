@@ -93,6 +93,16 @@ class SectionAggregator
             // Plans and sessions count subscribers; they carry no money, so
             // countOnly keeps a meaningless `total: 0` out of the payload.
             'plans' => $this->rank($payloads, 'plans', 'count', null, null, true),
+            'plan_distribution' => $this->mergePlanDistribution($payloads),
+            // Four counts over one population, so they sum across databases the
+            // same way they add up within one — see GowiserReportsDriver::networkStatus.
+            'network' => $this->sumFields($payloads, 'network', [
+                'online', 'offline', 'restricted', 'disconnected', 'total',
+                // Diagnostics, and subsets of `offline` rather than peers of it —
+                // summed the same way, never added into the four.
+                'not_found', 'no_session_row',
+            ]),
+            'sync_billable_accounts' => $this->sumPath($payloads, ['sync_billable_accounts']),
             'barangays' => $this->mergeBarangays($payloads),
             'growth' => [
                 'new_in_range' => $this->sumPath($payloads, ['growth', 'new_in_range']),
@@ -101,6 +111,74 @@ class SectionAggregator
             'overdue' => $this->mergeOverdue($payloads, $labels),
             'sessions' => $this->rank($payloads, 'sessions', 'count', null, null, true),
         ]);
+    }
+
+    /**
+     * Plan mix across every database, with the shares recomputed.
+     *
+     * Shares must never be summed or averaged. Two databases each reporting a
+     * plan at 40% of their own base do not make it 80%, or 40%, of the fleet —
+     * they make it whatever its merged headcount is over the merged total, which
+     * is what this recomputes. Merged on the plan *name* rather than its id
+     * because ids are per-database and the same plan carries different ones.
+     */
+    private function mergePlanDistribution(array $payloads): array
+    {
+        $plans = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['plan_distribution'] ?? [] as $row) {
+                $label = trim((string) ($row['label'] ?? ''));
+
+                if ($label === '') {
+                    continue;
+                }
+
+                $key = strtolower($label);
+
+                if (!isset($plans[$key])) {
+                    $plans[$key] = [
+                        // Null survives as null: the Unmapped / Legacy bucket has
+                        // no plan id anywhere, and coercing it to 0 would make it
+                        // look like a real plan whose row happens to be missing.
+                        'plan_id' => $row['plan_id'] ?? null,
+                        'label' => $label,
+                        // Prices can differ per database for the same plan name;
+                        // the highest is reported rather than an average nobody
+                        // charges. It is context for the row, not a total.
+                        'price' => 0.0,
+                        'count' => 0,
+                        'share_pct' => 0.0,
+                        'samples' => [],
+                    ];
+                }
+
+                $plans[$key]['count'] += (int) ($row['count'] ?? 0);
+                $plans[$key]['price'] = max($plans[$key]['price'], (float) ($row['price'] ?? 0));
+
+                // Unmatched legacy strings from every database, so the hint names
+                // examples from all of them rather than whichever answered first.
+                foreach ($row['samples'] ?? [] as $sample) {
+                    if (count($plans[$key]['samples']) < 8
+                        && !in_array($sample, $plans[$key]['samples'], true)) {
+                        $plans[$key]['samples'][] = $sample;
+                    }
+                }
+            }
+        }
+
+        $total = array_sum(array_column($plans, 'count'));
+
+        $rows = array_map(function (array $plan) use ($total) {
+            $plan['share_pct'] = $total > 0 ? round($plan['count'] / $total * 100, 1) : 0.0;
+            $plan['price'] = round($plan['price'], 2);
+
+            return $plan;
+        }, array_values($plans));
+
+        usort($rows, fn ($a, $b) => $b['count'] <=> $a['count']);
+
+        return $rows;
     }
 
     /**
@@ -185,7 +263,10 @@ class SectionAggregator
      */
     private function mergeBarangays(array $payloads): array
     {
-        $columns = ['total', 'active', 'vip', 'inactive', 'pullout', 'restricted', 'disconnected'];
+        $columns = [
+            'total', 'active', 'vip', 'inactive', 'pullout',
+            'online', 'offline', 'restricted', 'disconnected',
+        ];
         $rows = [];
 
         foreach ($payloads as $payload) {
@@ -323,6 +404,7 @@ class SectionAggregator
             'expense_period' => $first['expense_period'] ?? 'daily',
             'supports_expenses' => true,
             'kpi' => $kpi,
+            'rolling' => $this->mergeRolling($payloads),
             'series' => $this->mergeTrend($payloads, fn ($payload) => $payload['series'] ?? []),
             'trend' => [
                 'period' => $first['trend']['period'] ?? 'monthly',
@@ -345,6 +427,59 @@ class SectionAggregator
 
             'periods' => $this->mergePeriods($payloads),
         ]);
+    }
+
+    /**
+     * Month-to-date and seven-day collections across every database.
+     *
+     * Only the money is summed. The averages and the projection are recomputed
+     * from the merged totals for the same reason margin and collection rate are:
+     * adding eight daily averages together produces the fleet's *total* daily
+     * rate only by accident, and adding eight monthly projections produces a
+     * number eight times too large the moment any database is missing a day.
+     *
+     * The calendar fields are taken from the first database rather than summed,
+     * because "days in month" is a property of the month and not of the fleet.
+     */
+    private function mergeRolling(array $payloads): array
+    {
+        $present = array_filter($payloads, fn ($payload) => isset($payload['rolling']));
+
+        if ($present === []) {
+            return [];
+        }
+
+        $first = $this->first($present)['rolling'];
+
+        $totals = $this->sumFields($present, 'rolling', ['month_income', 'week_income']);
+
+        $monthIncome = (float) ($totals['month_income'] ?? 0);
+        $weekIncome = (float) ($totals['week_income'] ?? 0);
+
+        // Elapsed days is the widest any database reported, not a sum: eight
+        // branches reporting five days into the month are five days in, not forty.
+        $daysElapsed = 1;
+        $daysInMonth = (int) ($first['days_in_month'] ?? 30);
+
+        foreach ($present as $payload) {
+            $daysElapsed = max($daysElapsed, (int) ($payload['rolling']['days_elapsed'] ?? 1));
+        }
+
+        $dailyAverage = $monthIncome / $daysElapsed;
+
+        return [
+            'month_start' => $first['month_start'] ?? null,
+            'as_of' => $first['as_of'] ?? null,
+            'month_income' => round($monthIncome, 2),
+            'days_elapsed' => $daysElapsed,
+            'days_in_month' => $daysInMonth,
+            'daily_average' => round($dailyAverage, 2),
+            'projected_monthly' => round($dailyAverage * $daysInMonth, 2),
+            'week_from' => $first['week_from'] ?? null,
+            'week_income' => round($weekIncome, 2),
+            'week_days' => 7,
+            'weekly_average' => round($weekIncome / 7, 2),
+        ];
     }
 
     /**
@@ -720,6 +855,10 @@ class SectionAggregator
 
         return array_merge($this->envelope($payloads, $labels), [
             'queues' => $this->mergeQueues($payloads),
+            'work_streams' => $this->mergeWorkStreams($payloads),
+            'work_timeline' => $this->mergeWorkTimeline($payloads),
+            'work_cadence' => $this->mergeWorkCadence($payloads),
+            'resolution' => $this->mergeResolution($payloads, $labels),
             'series' => $this->mergeWorkSeries($payloads),
             'turnaround' => $this->mergeTurnaround($payloads),
             'turnaround_by_type' => $this->mergeTurnaroundByType($payloads),
@@ -811,6 +950,182 @@ class SectionAggregator
         usort($rows, fn ($a, $b) => $b['closed'] <=> $a['closed']);
 
         return $rows;
+    }
+
+    /**
+     * The three executive work streams across every database.
+     *
+     * Absent from a schema that has none of these tables — NETMANAGER models one
+     * `installations` queue and no applications at all — so a fleet where no
+     * database can answer returns [], and the dashboard reports the streams as
+     * unavailable rather than as three zeros.
+     *
+     * The Applications total is recomputed from the merged buckets rather than
+     * summed. The formula floors at zero (see StatusBuckets::applicationTotal),
+     * and adding two already-floored totals overstates a fleet where one database
+     * genuinely went negative.
+     */
+    private function mergeWorkStreams(array $payloads): array
+    {
+        $streams = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['work_streams'] ?? [] as $key => $stream) {
+                if (!isset($streams[$key])) {
+                    $streams[$key] = [
+                        'key' => $stream['key'] ?? $key,
+                        'label' => $stream['label'] ?? $key,
+                        'count' => 0,
+                        'buckets' => [],
+                        'statuses' => [],
+                    ];
+                }
+
+                $streams[$key]['count'] += (int) ($stream['count'] ?? 0);
+
+                foreach ($stream['buckets'] ?? [] as $bucket => $count) {
+                    $streams[$key]['buckets'][$bucket] =
+                        ($streams[$key]['buckets'][$bucket] ?? 0) + (int) $count;
+                }
+
+                foreach ($stream['statuses'] ?? [] as $status) {
+                    $label = (string) ($status['label'] ?? '');
+
+                    if ($label === '') {
+                        continue;
+                    }
+
+                    $streams[$key]['statuses'][$label] =
+                        ($streams[$key]['statuses'][$label] ?? 0) + (int) ($status['count'] ?? 0);
+                }
+            }
+        }
+
+        foreach ($streams as $key => $stream) {
+            arsort($stream['statuses']);
+
+            $stream['statuses'] = array_map(
+                fn ($label, $count) => ['label' => $label, 'count' => $count],
+                array_keys($stream['statuses']),
+                $stream['statuses']
+            );
+
+            if ($key === 'applications') {
+                $stream['total'] = StatusBuckets::applicationTotal($stream['buckets']);
+            }
+
+            $streams[$key] = $stream;
+        }
+
+        return $streams;
+    }
+
+    /**
+     * The today / week / month tallies across every database.
+     *
+     * Summed bucket by bucket. The `windows` block is taken from the first
+     * database that reported one rather than merged: every driver derives it
+     * from the same anchor, so they are identical, and a "merged" date range
+     * would only be a way for two of them to disagree.
+     */
+    private function mergeWorkCadence(array $payloads): array
+    {
+        $streams = ['applications', 'job_orders', 'service_orders'];
+        $merged = [];
+        $windows = [];
+
+        foreach ($payloads as $payload) {
+            $cadence = $payload['work_cadence'] ?? null;
+
+            if (!is_array($cadence) || $cadence === []) {
+                continue;
+            }
+
+            if ($windows === [] && is_array($cadence['windows'] ?? null)) {
+                $windows = $cadence['windows'];
+            }
+
+            foreach ($streams as $stream) {
+                if (!is_array($cadence[$stream] ?? null)) {
+                    continue;
+                }
+
+                $merged[$stream] = WorkCadence::merge($merged[$stream] ?? [], $cadence[$stream]);
+            }
+        }
+
+        // No database modelled any of this — an empty array rather than three
+        // zeroed streams, so the dashboard can say "not tracked here" instead of
+        // reporting a confident nil.
+        if ($merged === []) {
+            return [];
+        }
+
+        $merged['windows'] = $windows;
+
+        return $merged;
+    }
+
+    /**
+     * The single longest-outstanding ticket across the whole fleet.
+     *
+     * Not one per database: the question this answers is "which customer has
+     * been waiting longest", and there is only one answer to it. The database it
+     * came from is named on the row so the ticket can actually be found.
+     */
+    private function mergeResolution(array $payloads, array $labels): array
+    {
+        $longest = null;
+
+        foreach ($payloads as $key => $payload) {
+            $candidate = $payload['resolution']['longest_outstanding'] ?? null;
+
+            if (!is_array($candidate) || !isset($candidate['hours'])) {
+                continue;
+            }
+
+            if ($longest === null || (int) $candidate['hours'] > (int) $longest['hours']) {
+                $candidate['source'] = (string) $key;
+                $candidate['source_label'] = $labels[$key] ?? (string) $key;
+                $longest = $candidate;
+            }
+        }
+
+        return ['longest_outstanding' => $longest];
+    }
+
+    /** Applications, job orders and service orders per day, summed on the date. */
+    private function mergeWorkTimeline(array $payloads): array
+    {
+        $buckets = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($payload['work_timeline'] ?? [] as $point) {
+                $key = (string) ($point['period'] ?? '');
+
+                if ($key === '') {
+                    continue;
+                }
+
+                if (!isset($buckets[$key])) {
+                    $buckets[$key] = [
+                        'period' => $key,
+                        'label' => $point['label'] ?? $key,
+                        'applications' => 0,
+                        'job_orders' => 0,
+                        'service_orders' => 0,
+                    ];
+                }
+
+                foreach (['applications', 'job_orders', 'service_orders'] as $stream) {
+                    $buckets[$key][$stream] += (int) ($point[$stream] ?? 0);
+                }
+            }
+        }
+
+        ksort($buckets);
+
+        return array_values($buckets);
     }
 
     /**

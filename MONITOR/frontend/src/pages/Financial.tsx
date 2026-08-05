@@ -20,7 +20,6 @@ import WidgetRange from '../components/reporting/WidgetRange';
 import { AccentCard, MiniStat } from '../components/reporting/StatCard';
 import BreakdownTable from '../components/reporting/BreakdownTable';
 import PayablesPanel from '../components/reporting/PayablesPanel';
-import RouterReportsPanel from '../components/reporting/RouterReportsPanel';
 import { DonutChart, TrendChart } from '../components/reporting/charts';
 import {
   Bar,
@@ -49,7 +48,7 @@ import { reportingService } from '../services/reportingService';
 import { FinancialData, IncomeChannel } from '../types/reporting';
 import { ACTION, WIDGET } from '../types/rbac';
 import { UserData } from '../types/api';
-import { formatMoney, formatNumber, formatPercent, pluralise } from '../utils/format';
+import { formatDate, formatMoney, formatNumber, formatPercent, pluralise } from '../utils/format';
 
 interface FinancialProps {
   refreshToken: number;
@@ -91,7 +90,6 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const headlineRange = useWidgetRange('monthly');
   const trendRange = useWidgetRange('monthly');
   const channelsRange = useWidgetRange('monthly');
-  const metricsRange = useWidgetRange('monthly');
   const opexRange = useWidgetRange('monthly');
   const payablesRange = useWidgetRange('monthly');
   const breakdownRange = useWidgetRange('monthly');
@@ -140,6 +138,9 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const { data, loading, error, source, sourceLabel, substituted } = headline;
 
   const kpi = data?.kpi;
+  // Calendar-anchored, so it is read off the headline payload rather than
+  // fetched again: the figures are identical whatever range that widget is on.
+  const rolling = data?.rolling;
   const first = loading && !data;
   const surplus = (kpi?.net ?? 0) >= 0;
   const seesRevenue = can(WIDGET.financialRevenue);
@@ -344,56 +345,48 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           require={WIDGET.financialMetrics}
           fallback={<RestrictedPanel title="Financial Projections & Performance" height={160} />}
         >
+          {/* No date-range control on this panel, deliberately. Both figures are
+              anchored on the calendar — the last seven days and the current month
+              — so a range picker would appear to drive numbers it cannot change,
+              which is worse than not offering one. */}
           <Card flush>
             <CardHeader
               title="Sales Projections & Performance"
-              subtitle="Daily collection averages, monthly projections, and expected recurring revenue"
+              subtitle="Seven-day rolling average and the month-to-date projection"
               icon={<TrendingDown size={16} />}
-              actions={<WidgetRange state={metricsRange} />}
             />
             <CardBody>
               <PanelState
                 loading={headline.loading && !headline.data}
-                empty={!kpi}
+                empty={!rolling}
                 emptyMessage="Not enough data to calculate projections."
                 height={160}
               >
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                {/* Expected MRC and Collection Rate were removed from this panel:
+                    both are projections *against* a target rather than
+                    measurements of what happened, and both drove conversations
+                    about the assumption rather than the takings. The two figures
+                    left are what was actually collected and what that rate
+                    implies for the month. */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
                     <div className="flex items-center justify-between">
                       <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Expected MRC (Active &amp; Online)
+                        Weekly Sales Average
                       </p>
                       <MetricTooltip
-                        title="Expected Monthly Recurring Revenue"
-                        explanation="Sum of plan prices for all active and online prepaid subscribers."
-                        formula="SUM(Active & Online Subscribers × Plan Price)"
-                      />
-                    </div>
-                    <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                      {formatMoney(kpi?.expected_mrc ?? 0)}
-                    </p>
-                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      active + online subscriber base
-                    </p>
-                  </div>
-
-                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-                    <div className="flex items-center justify-between">
-                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Daily Sales Average
-                      </p>
-                      <MetricTooltip
-                        title="Daily Collection Average"
-                        explanation="Average total daily payments collected so far during this reporting period."
-                        formula="Total Period Income ÷ Days Elapsed"
+                        title="Seven-Day Rolling Average"
+                        explanation="Collections over the last seven calendar days, divided by seven. Always the past week, never the selected range — and always divided by seven, so a day with no takings stays in the denominator."
+                        formula="Last 7 Days' Income ÷ 7"
                       />
                     </div>
                     <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                      {formatMoney(kpi?.daily_average ?? 0)}
+                      {formatMoney(rolling?.weekly_average ?? 0)}
                     </p>
                     <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      over {kpi?.days_elapsed ?? 1} {pluralise(kpi?.days_elapsed ?? 1, 'day')}
+                      {rolling?.week_from
+                        ? `${formatMoney(rolling.week_income)} since ${formatDate(rolling.week_from)}`
+                        : 'past 7 days'}
                     </p>
                   </div>
 
@@ -404,34 +397,16 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
                       </p>
                       <MetricTooltip
                         title="Monthly Sales Projection"
-                        explanation="Estimated total collections for the full month based on current daily collection rate."
-                        formula="Daily Average × Total Days in Current Month"
+                        explanation="Collections so far this month, scaled to the whole month. Anchored on the current month rather than the selected range — projecting a month from one day's takings is not a forecast of anything."
+                        formula="(Month-to-Date Income ÷ Days Elapsed) × Days in Month"
                       />
                     </div>
                     <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-                      {formatMoney(kpi?.projected_monthly ?? 0)}
+                      {formatMoney(rolling?.projected_monthly ?? 0)}
                     </p>
                     <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      projected for {kpi?.days_in_month ?? 30} days
-                    </p>
-                  </div>
-
-                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-                    <div className="flex items-center justify-between">
-                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Collection Rate
-                      </p>
-                      <MetricTooltip
-                        title="Collection Efficiency Rate"
-                        explanation="Percentage of expected monthly recurring charges collected so far."
-                        formula="(Total Income ÷ Expected MRC) × 100"
-                      />
-                    </div>
-                    <p className="text-xl font-bold text-purple-600 dark:text-purple-400 mt-1">
-                      {formatPercent(kpi?.collection_rate ?? 0)}
-                    </p>
-                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      collections vs expected MRC
+                      {formatMoney(rolling?.month_income)} over {rolling?.days_elapsed ?? 1}{' '}
+                      {pluralise(rolling?.days_elapsed ?? 1, 'day')} of {rolling?.days_in_month ?? 30}
                     </p>
                   </div>
                 </div>
@@ -690,18 +665,16 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
             emptyMessage="No payments with notes for this period."
           />
 
-          {/* ── Branch comparison ─────────────────────────────────────── */}
-          <RouterReportsPanel
-            rows={data?.by_branch.rows ?? []}
-            label={data?.by_branch.label ?? ''}
-            period={filters.branchPeriod}
-            onPeriodChange={(branchPeriod) => update({ branchPeriod })}
-            year={filters.branchYear}
-            years={data?.by_branch.years ?? []}
-            onYearChange={(branchYear) => update({ branchYear })}
-            loading={first}
-            error={error}
-          />
+          {/* "Collections by Branch" stood here and has been removed as a
+              redundant report. GOWISER is a single operating company with no
+              branch dimension at all, so the panel drew one row called "All
+              accounts" — a pie chart of one wedge, at 100%, restating the total
+              already shown three panels above it.
+
+              The `by_branch` block is still in the API payload and still
+              computed by the drivers: NETMANAGER genuinely has routers, and
+              removing the field would break a published response shape for a
+              cosmetic gain. It is the panel that was redundant, not the data. */}
         </Restricted>
 
         <p className={`text-xs flex items-start gap-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>

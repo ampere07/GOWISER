@@ -70,6 +70,10 @@ class BillingAccount extends Model
         // re-notifying an expired customer every morning; resets itself when a payment moves
         // prepaid_expires_at forward.
         'prepaid_expiry_notified_for',
+        // The prepaid_expires_at value the PRE-expiry warning was last sent for. Kept separate
+        // from prepaid_expiry_notified_for above: both notices key off the same expiry timestamp,
+        // so one shared marker would let the early warning suppress the lapse notice that follows.
+        'prepaid_pre_expiry_notified_for',
         'created_by',
         'updated_by',
         'vip_expiration',
@@ -83,6 +87,7 @@ class BillingAccount extends Model
         'prepaid_expires_at' => 'datetime',
         'pending_plan_effective_at' => 'datetime',
         'prepaid_expiry_notified_for' => 'datetime',
+        'prepaid_pre_expiry_notified_for' => 'datetime',
         // NULL is preserved by these casts, which is what lets the billing generator tell
         // "never configured" (fall back to vat_type) apart from an explicit false.
         'vat_enabled' => 'boolean',

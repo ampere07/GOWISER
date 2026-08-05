@@ -78,6 +78,23 @@ class GenerateDailyBillingsCron extends Command
                 $logger->error('Prepaid expiry notices failed', ['error' => $prepaidEx->getMessage()]);
             }
 
+            // ── Prepaid PRE-expiry warnings ─────────────────────────────────────────────
+            // The heads-up sent billing_config.prepaid_pre_expiry_days BEFORE the period lapses,
+            // so the customer can renew before anything is restricted. Like the lapse notice above
+            // it raises no bill and runs every day, so it sits before the postpaid early return.
+            // Kept in its own try/catch so a failure here cannot take the lapse notices — or the
+            // billing run — down with it.
+            try {
+                $preExpiryNotices = $this->billingService->notifyPrepaidPreExpiryAccounts($today);
+                $logger->info('Prepaid pre-expiry notices completed', [
+                    'notified' => $preExpiryNotices['success'],
+                    'skipped'  => $preExpiryNotices['skipped'],
+                    'failed'   => $preExpiryNotices['failed'],
+                ]);
+            } catch (\Throwable $preExpiryEx) {
+                $logger->error('Prepaid pre-expiry notices failed', ['error' => $preExpiryEx->getMessage()]);
+            }
+
             $logger->info('Checking billing_accounts table for eligible accounts...', [
                 'criteria' => [
                     'billing_status_id' => 1,

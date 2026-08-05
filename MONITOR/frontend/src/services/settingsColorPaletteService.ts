@@ -20,10 +20,35 @@ export interface PaletteFormValues {
   accent: string;
 }
 
+/**
+ * The SYNC platform fee, per billable subscriber per month.
+ *
+ * Not branding, but it arrives on the same call because the Settings screen is
+ * where it is edited and one request is one way for that screen to load
+ * half-drawn instead of two.
+ */
+export interface SyncPriceSettings {
+  rate: number;
+  /** Billing statuses that are never charged for. Read-only — set by the brief. */
+  excluded_statuses: string[];
+}
+
+/**
+ * The hosting fee, a flat monthly infrastructure charge.
+ *
+ * Unlike SYNC pricing there is no per-subscriber multiplier — the rate is the
+ * total, and it is set once rather than computed.
+ */
+export interface HostingFeeSettings {
+  rate: number;
+}
+
 export interface BrandingSettings {
   /** Absolute URL of the uploaded logo, or null to fall back to the bundled mark. */
   logo: string | null;
   palettes: ColorPalette[];
+  sync_price: SyncPriceSettings;
+  hosting_fee: HostingFeeSettings;
 }
 
 /**
@@ -146,5 +171,43 @@ export const settingsColorPaletteService = {
   deletePalette: async (id: number): Promise<void> => {
     await api.delete(`/settings/palettes/${id}`);
     invalidateBranding();
+  },
+
+  /**
+   * Sets the SYNC price per customer.
+   *
+   * Drops the executive caches as well as the branding one: this figure lands
+   * under Expenses on the Executive Dashboard and therefore inside Net Income,
+   * and leaving the old total on screen for a cache TTL after someone has just
+   * corrected the rate is exactly the moment they would go looking for a bug.
+   */
+  updateSyncPrice: async (rate: number): Promise<SyncPriceSettings> => {
+    const response = await api.put<{ status: string; data: { sync_price: SyncPriceSettings } }>(
+      '/settings/sync-price',
+      { rate }
+    );
+
+    invalidateBranding();
+    requestCache.invalidatePrefix('reporting_executive');
+
+    return response.data.data.sync_price;
+  },
+
+  /**
+   * Sets the hosting fee (flat monthly charge).
+   *
+   * Drops the same caches as updateSyncPrice — this figure also lands under
+   * Expenses on the Executive Dashboard.
+   */
+  updateHostingFee: async (rate: number): Promise<HostingFeeSettings> => {
+    const response = await api.put<{ status: string; data: { hosting_fee: HostingFeeSettings } }>(
+      '/settings/hosting-fee',
+      { rate }
+    );
+
+    invalidateBranding();
+    requestCache.invalidatePrefix('reporting_executive');
+
+    return response.data.data.hosting_fee;
   },
 };

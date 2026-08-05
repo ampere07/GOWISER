@@ -6,7 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\AppSetting;
 use App\Models\AuditLog;
 use App\Models\ColorPalette;
+use App\Services\Reports\HostingFee;
+use App\Services\Reports\SyncPricing;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -42,6 +45,109 @@ class SettingsController extends Controller
             'data' => [
                 'logo' => $this->logoUrl(),
                 'palettes' => ColorPalette::orderBy('id')->get(),
+                'sync_price' => [
+                    'rate' => SyncPricing::rate(),
+                    'excluded_statuses' => SyncPricing::excludedStatuses(),
+                ],
+                'hosting_fee' => [
+                    'rate' => HostingFee::rate(),
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * The SYNC platform fee, per billable subscriber per month.
+     *
+     * A setting rather than config because it is renegotiated more often than the
+     * application is deployed, and it lands under Net Income on the Executive
+     * Dashboard — a figure that wrong should not need a release to correct.
+     *
+     * Which subscribers are billable is *not* editable here. VIP and Pullout are
+     * excluded by the brief and that exclusion is applied in SQL where the count
+     * is taken; making it a form field would let the headcount and the money be
+     * computed over different populations.
+     */
+    public function updateSyncPrice(Request $request)
+    {
+        $data = $request->validate([
+            // Capped rather than unbounded: this multiplies by the whole
+            // subscriber base, so a mis-keyed extra digit is a six-figure error in
+            // a figure nobody would recognise as wrong at a glance.
+            'rate' => ['required', 'numeric', 'min:0', 'max:100000'],
+        ]);
+
+        $rate = round((float) $data['rate'], 2);
+        $previous = SyncPricing::rate();
+
+        DB::transaction(function () use ($rate, $request) {
+            AppSetting::put(
+                SyncPricing::SETTING_KEY,
+                (string) $rate,
+                $request->user()?->username
+            );
+        });
+
+        AuditLog::record(
+            $request,
+            'settings.sync_price',
+            AppSetting::class,
+            SyncPricing::SETTING_KEY,
+            'SYNC price per customer changed',
+            AuditLog::diff(['rate' => $previous], ['rate' => $rate])
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'SYNC price per customer updated.',
+            'data' => [
+                'sync_price' => [
+                    'rate' => $rate,
+                    'excluded_statuses' => SyncPricing::excludedStatuses(),
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * The hosting fee, a flat monthly infrastructure charge.
+     *
+     * Same reasoning as updateSyncPrice: a setting rather than config because it
+     * is renegotiated more often than the application is deployed.
+     */
+    public function updateHostingFee(Request $request)
+    {
+        $data = $request->validate([
+            'rate' => ['required', 'numeric', 'min:0', 'max:10000000'],
+        ]);
+
+        $rate = round((float) $data['rate'], 2);
+        $previous = HostingFee::rate();
+
+        DB::transaction(function () use ($rate, $request) {
+            AppSetting::put(
+                HostingFee::SETTING_KEY,
+                (string) $rate,
+                $request->user()?->username
+            );
+        });
+
+        AuditLog::record(
+            $request,
+            'settings.hosting_fee',
+            AppSetting::class,
+            HostingFee::SETTING_KEY,
+            'Hosting fee changed',
+            AuditLog::diff(['rate' => $previous], ['rate' => $rate])
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Hosting fee updated.',
+            'data' => [
+                'hosting_fee' => [
+                    'rate' => $rate,
+                ],
             ],
         ]);
     }

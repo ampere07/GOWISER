@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Coins,
   Image as ImageIcon,
   Loader2,
   Palette,
@@ -70,7 +71,17 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
   const [editing, setEditing] = useState<ColorPalette | null>(null);
   const [form, setForm] = useState<PaletteFormValues | null>(null);
 
+  // Held as the raw input string rather than a number so a half-typed value is
+  // not coerced — "1." parses to 1 and would fight the person typing "1.50".
+  const [syncPriceDraft, setSyncPriceDraft] = useState('0');
+  const [hostingFeeDraft, setHostingFeeDraft] = useState('0');
+
   const editable = can(ACTION.settingsManage);
+
+  // Two decimals both sides, so the dirty check compares like with like: the
+  // server stores "150.00" and someone typing "150" has not changed anything.
+  const storedSyncPrice = (branding?.sync_price?.rate ?? 0).toFixed(2);
+  const storedHostingFee = (branding?.hosting_fee?.rate ?? 0).toFixed(2);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -86,6 +97,13 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
   }, []);
 
   useEffect(() => load(), [load, refreshToken]);
+
+  // Re-seeded whenever the stored rate changes — after a save, and after a poll
+  // that picked up someone else's. Keyed on the stored value rather than on
+  // `branding`, so a reload that changed only the palettes does not discard a
+  // rate somebody is halfway through typing.
+  useEffect(() => setSyncPriceDraft(storedSyncPrice), [storedSyncPrice]);
+  useEffect(() => setHostingFeeDraft(storedHostingFee), [storedHostingFee]);
 
   /** Reports the outcome, then reloads so the screen shows what was stored. */
   const run = async (key: string, action: () => Promise<unknown>, message: string) => {
@@ -105,6 +123,39 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
     } finally {
       setBusy(null);
     }
+  };
+
+  const saveSyncPrice = () => {
+    const rate = Number(syncPriceDraft);
+
+    // Rejected here as well as on the server. The server's message would be
+    // correct but generic, and this one can name the field the person is
+    // looking at.
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100000) {
+      setError('Enter a rate between 0 and 100,000.');
+      return;
+    }
+
+    run(
+      'sync-price',
+      () => settingsColorPaletteService.updateSyncPrice(rate),
+      'SYNC price per customer updated. The Executive Dashboard will use it on its next load.'
+    );
+  };
+
+  const saveHostingFee = () => {
+    const rate = Number(hostingFeeDraft);
+
+    if (!Number.isFinite(rate) || rate < 0 || rate > 10000000) {
+      setError('Enter a rate between 0 and 10,000,000.');
+      return;
+    }
+
+    run(
+      'hosting-fee',
+      () => settingsColorPaletteService.updateHostingFee(rate),
+      'Hosting fee updated. The Executive Dashboard will use it on its next load.'
+    );
   };
 
   const pickLogo = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -160,8 +211,8 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
         title="Settings"
         subtitle={
           editable
-            ? 'The logo and colours the whole portal renders in'
-            : 'Read-only — your role cannot change branding'
+            ? 'Branding, and the SYNC price the Executive Dashboard charges against'
+            : 'Read-only — your role cannot change these settings'
         }
       />
 
@@ -173,6 +224,171 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
           {notice}
         </div>
       )}
+
+      {/* ── SYNC price per customer ───────────────────────────────────── */}
+      <Card flush>
+        <CardHeader
+          title="SYNC Price per Customer"
+          subtitle="The platform fee charged per billable subscriber, per month"
+          icon={<Coins size={16} />}
+        />
+        <CardBody>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div>
+              <label
+                htmlFor="sync-price"
+                className={`block text-xs font-semibold mb-1.5 ${
+                  isDarkMode ? 'text-gray-300' : 'text-gray-600'
+                }`}
+              >
+                Rate per subscriber (₱)
+              </label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="sync-price"
+                  type="number"
+                  min={0}
+                  max={100000}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={syncPriceDraft}
+                  disabled={!editable || loading}
+                  onChange={(event) => setSyncPriceDraft(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && editable && saveSyncPrice()}
+                  className={`${controlClass} w-40 tabular-nums`}
+                  aria-describedby="sync-price-help"
+                />
+
+                {editable && (
+                  <Button
+                    variant="primary"
+                    icon={
+                      busy === 'sync-price' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Check size={14} />
+                      )
+                    }
+                    onClick={saveSyncPrice}
+                    title="Save the SYNC price per customer"
+                    // Disabled until the value differs from what is stored, so
+                    // the button is never a no-op that still writes an audit row.
+                    disabled={busy !== null || syncPriceDraft === storedSyncPrice}
+                  >
+                    Save
+                  </Button>
+                )}
+              </div>
+
+              <p
+                id="sync-price-help"
+                className={`text-[11px] mt-2 leading-relaxed ${
+                  isDarkMode ? 'text-gray-500' : 'text-gray-500'
+                }`}
+              >
+                SYNC is licensed per subscriber, so its cost is a headcount times this rate rather
+                than a line in any expenses ledger — which is why it is set here and not imported.
+                Leave it at 0 and the Executive Dashboard reports it as unconfigured rather than as
+                a ₱0.00 expense.
+              </p>
+            </div>
+
+            <div
+              className={`rounded-lg border p-4 ${
+                isDarkMode ? 'border-gray-800 bg-gray-950' : 'border-gray-200 bg-gray-50'
+              }`}
+            >
+              <p className={`text-xs font-semibold mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Excluded from the headcount
+              </p>
+
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {(branding?.sync_price?.excluded_statuses ?? []).map((status) => (
+                  <Pill key={status} tone="neutral">
+                    {status.replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                  </Pill>
+                ))}
+              </div>
+
+              <p className={`text-[11px] leading-relaxed ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                Fixed rather than editable. The exclusion is applied in the same query that takes the
+                count, so the headcount and the money can never be computed over different
+                populations — which is the failure a second setting here would invite.
+              </p>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* ── Hosting fee ──────────────────────────────────────────────────────────── */}
+      <Card flush>
+        <CardHeader
+          title="Hosting Fee"
+          subtitle="Flat monthly infrastructure charge"
+          icon={<Coins size={16} />}
+        />
+        <CardBody>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div>
+              <label
+                htmlFor="hosting-fee"
+                className={`block text-xs font-semibold mb-1.5 ${
+                  isDarkMode ? 'text-gray-300' : 'text-gray-600'
+                }`}
+              >
+                Monthly fee (₱)
+              </label>
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="hosting-fee"
+                  type="number"
+                  min={0}
+                  max={10000000}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={hostingFeeDraft}
+                  disabled={!editable || loading}
+                  onChange={(event) => setHostingFeeDraft(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && editable && saveHostingFee()}
+                  className={`${controlClass} w-40 tabular-nums`}
+                  aria-describedby="hosting-fee-help"
+                />
+
+                {editable && (
+                  <Button
+                    variant="primary"
+                    icon={
+                      busy === 'hosting-fee' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Check size={14} />
+                      )
+                    }
+                    onClick={saveHostingFee}
+                    title="Save the hosting fee"
+                    disabled={busy !== null || hostingFeeDraft === storedHostingFee}
+                  >
+                    Save
+                  </Button>
+                )}
+              </div>
+
+              <p
+                id="hosting-fee-help"
+                className={`text-[11px] mt-2 leading-relaxed ${
+                  isDarkMode ? 'text-gray-500' : 'text-gray-500'
+                }`}
+              >
+                A flat monthly charge for infrastructure — not per subscriber. Unlike the SYNC
+                platform fee, this is a single fixed amount regardless of the subscriber count.
+                Leave it at 0 and the Executive Dashboard reports it as unconfigured.
+              </p>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
       {/* ── System logo ───────────────────────────────────────────────── */}
       <Card flush>

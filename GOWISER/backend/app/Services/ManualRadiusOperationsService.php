@@ -844,6 +844,32 @@ class ManualRadiusOperationsService
     }
 
     /**
+     * The group a username currently sits in on the live RADIUS servers.
+     *
+     * A read-only window onto findRadiusUser() for callers that need to know the
+     * network's actual state before deciding to change it — the restricted-status
+     * enforcement command in particular, which must not issue a restrict for a
+     * user already restricted, and must not act at all on a user it could not
+     * confirm.
+     *
+     * Null means "no server could tell us", which covers both a missing user and
+     * an unreachable fleet. The two are deliberately not distinguished here
+     * because the correct response to either is the same: do nothing and report
+     * it. A caller that treated "not found" as "no group, restrict it" would turn
+     * a RADIUS outage into a mass disconnection.
+     */
+    public function findUserGroup(string $username): ?string
+    {
+        if (trim($username) === '') {
+            return null;
+        }
+
+        $located = $this->findRadiusUser($this->getRadiusEndpoints(), $username);
+
+        return $located === null ? null : (string) ($located['group'] ?? '');
+    }
+
+    /**
      * Core RADIUS operations (disconnect/reconnect)
      *
      * $dbStatus is the billing_status name to write once the RADIUS side is done, or NULL to

@@ -201,6 +201,13 @@ class NetmanagerReportsDriver implements ReportsDriver
                     : 0.0,
             ],
 
+            // Anchored on the calendar rather than on the selected range — see
+            // rollingIncome. Present here as well as on GOWISER so a fleet
+            // carrying both schemas projects from all of its collections; a
+            // driver that omitted this would be silently left out of the
+            // merged projection while still counting toward total income.
+            'rolling' => $this->rollingIncome($db, $anchor, $branch),
+
             // Day-by-day across the selected range.
             'series' => $this->dailySeries($db, $from, $to, $expensePeriod, $branch),
 
@@ -429,6 +436,128 @@ class NetmanagerReportsDriver implements ReportsDriver
 
             'recent' => $this->recentInstallations($db, $branch),
             'has_service_orders' => false,
+
+            // Today / this week / this month, independent of the range above.
+            // NETMANAGER's one queue is installations, so it contributes to that
+            // card and leaves applications and repairs at zero rather than
+            // inventing a split this schema cannot support. See workCadence.
+            'work_cadence' => $this->workCadence($db, $branch, $anchor),
+
+            // The oldest still-open installation, with the subscriber it belongs
+            // to. Answered here rather than left to GOWISER because the
+            // dashboard reports one longest-waiting customer for the whole
+            // fleet, and a branch that stayed silent would simply never win —
+            // its customers would be invisible to the figure by omission.
+            'resolution' => ['longest_outstanding' => $this->longestOutstanding($db, $branch, $anchor)],
+        ];
+    }
+
+    /**
+     * The oldest open installation and who is waiting on it.
+     *
+     * Open is defined by subtraction — anything not approved, done, completed or
+     * cancelled — matching installationBacklog, so the two cannot disagree about
+     * what "open" means. A status this driver has never seen therefore counts as
+     * outstanding, which is the safe direction: an unrecognised state is exactly
+     * the one worth surfacing.
+     *
+     * Aged from `created_at`, not `updated_at`: the figure is how long the
+     * customer has been waiting, and measuring from the last touch would reset
+     * that clock every time somebody opened the record.
+     *
+     * @return array{queue:string,label:string,reference:string,account_no:string,customer:string,status:string,opened_at:string,hours:int,days:int}|null
+     */
+    private function longestOutstanding(ConnectionInterface $db, ?int $branch, Carbon $anchor): ?array
+    {
+        try {
+            $row = $this->installations($db, $branch)
+                ->whereRaw("COALESCE(NULLIF(i.status, ''), 'Pending') NOT IN ('Approved', 'Done', 'Completed', 'Cancelled')")
+                ->whereNotNull('i.created_at')
+                ->select(
+                    'i.installation_id',
+                    'i.status',
+                    'i.created_at',
+                    's.account_number',
+                    's.firstname',
+                    's.lastname'
+                )
+                ->orderBy('i.created_at')
+                ->first();
+
+            if ($row === null || empty($row->created_at)) {
+                return null;
+            }
+
+            $opened = Carbon::parse($row->created_at);
+
+            // Clamped at zero: a row dated in the future — a mistyped year, which
+            // happens — would otherwise report a negative age and sort straight
+            // to the top of a "longest outstanding" comparison.
+            $hours = max(0, $opened->diffInHours($anchor->copy()->endOfDay(), false));
+
+            return [
+                'queue' => 'installations',
+                'label' => 'Installation',
+                'reference' => (string) ($row->installation_id ?? ''),
+                'account_no' => (string) ($row->account_number ?? ''),
+                'customer' => $this->fullName($row->firstname ?? '', $row->lastname ?? ''),
+                'status' => (string) ($row->status ?: 'Pending'),
+                'opened_at' => $opened->toDateTimeString(),
+                'hours' => $hours,
+                'days' => intdiv($hours, 24),
+            ];
+        } catch (\Throwable $e) {
+            report($e);
+
+            return null;
+        }
+    }
+
+    /**
+     * The installations queue counted on today, this week and this month.
+     *
+     * One query for all three windows — the union of them is a single span, and
+     * WorkCadence folds the day-and-status rows into the three tallies.
+     *
+     * `updated_at` with `created_at` behind it, per the brief: the card says
+     * "Installed Today", which is a claim about work that reached the done state
+     * today rather than work that was filed today.
+     *
+     * Applications and repairs are reported as blank tallies rather than
+     * omitted. A missing key would read downstream as "this fleet has no
+     * applications data" in exactly the same way as a zero, and the blank keeps
+     * the merge arithmetic in SectionAggregator uniform.
+     */
+    private function workCadence(ConnectionInterface $db, ?int $branch, Carbon $anchor): array
+    {
+        $floor = WorkCadence::floor($anchor)->toDateTimeString();
+        $ceil = $anchor->copy()->startOfDay()->addDay()->toDateTimeString();
+
+        // COALESCE rather than two indexed branches: `installations.updated_at`
+        // is NOT NULL in this schema, so the fallback is a formality and the
+        // expression never actually costs a scan the column could have served.
+        $dateSql = 'COALESCE(i.updated_at, i.created_at)';
+
+        $rows = $this->installations($db, $branch)
+            ->whereRaw("{$dateSql} >= ?", [$floor])
+            ->whereRaw("{$dateSql} < ?", [$ceil])
+            ->selectRaw("DATE({$dateSql}) AS day")
+            ->selectRaw("COALESCE(NULLIF(i.status, ''), 'Unspecified') AS label")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('day', 'label')
+            ->get()
+            ->map(fn ($row) => [
+                'day' => (string) $row->day,
+                'label' => (string) $row->label,
+                'count' => (int) $row->cnt,
+            ])
+            ->all();
+
+        return [
+            'windows' => WorkCadence::windows($anchor),
+            'applications' => WorkCadence::blank(StatusBuckets::applicationCadence()),
+            'job_orders' => WorkCadence::tally($rows, StatusBuckets::workOrders(), $anchor),
+            'service_orders' => WorkCadence::blank(StatusBuckets::workOrders()),
         ];
     }
 
@@ -1619,6 +1748,53 @@ class NetmanagerReportsDriver implements ReportsDriver
      * it unconditionally would silently drop payments whose subscriber row was
      * deleted, changing unfiltered totals.
      */
+    /**
+     * Month-to-date and last-seven-days collections, anchored on today.
+     *
+     * The GOWISER driver's rollingIncome carries the full reasoning; the short
+     * version is that both figures are defined against the calendar rather than
+     * against whatever window someone selected. Projecting a month from a Daily
+     * view meant one day's takings times thirty-one, which forecasts nothing,
+     * and the weekly figure is always divided by seven so a day with no
+     * collections stays in the denominator where it belongs.
+     *
+     * Scoped to the branch filter, like every other figure in this payload.
+     */
+    private function rollingIncome(ConnectionInterface $db, Carbon $anchor, ?int $branch): array
+    {
+        $monthStart = $anchor->copy()->startOfMonth()->toDateString();
+        $today = $anchor->copy()->toDateString();
+        $weekFrom = $anchor->copy()->subDays(6)->toDateString();
+
+        // Inclusive of both ends, so the first of the month is one day elapsed
+        // rather than zero — which would divide by zero on the 1st.
+        $daysElapsed = max(1, $anchor->copy()->startOfMonth()->diffInDays($anchor) + 1);
+        $daysInMonth = (int) $anchor->daysInMonth;
+
+        $collected = fn (string $from, string $to) => (float) $this->paidPayments($db, $branch)
+            ->whereBetween(DB::raw('DATE(py.payment_date)'), [$from, $to])
+            ->sum('py.amount');
+
+        $monthIncome = $collected($monthStart, $today);
+        $weekIncome = $collected($weekFrom, $today);
+
+        $dailyAverage = $monthIncome / $daysElapsed;
+
+        return [
+            'month_start' => $monthStart,
+            'as_of' => $today,
+            'month_income' => round($monthIncome, 2),
+            'days_elapsed' => $daysElapsed,
+            'days_in_month' => $daysInMonth,
+            'daily_average' => round($dailyAverage, 2),
+            'projected_monthly' => round($dailyAverage * $daysInMonth, 2),
+            'week_from' => $weekFrom,
+            'week_income' => round($weekIncome, 2),
+            'week_days' => 7,
+            'weekly_average' => round($weekIncome / 7, 2),
+        ];
+    }
+
     private function paidPayments(ConnectionInterface $db, ?int $branch): Builder
     {
         $query = $db->table('payments as py')->where('py.status', 'paid');

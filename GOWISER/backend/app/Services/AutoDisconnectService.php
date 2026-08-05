@@ -343,7 +343,23 @@ class AutoDisconnectService
         // Check if already inactive or pullout
         $billingStatus = $billingAccount->billingStatus ? $billingAccount->billingStatus->status_name : '';
         $this->writeLog("  [INFO] Current Status: {$billingStatus}");
-        
+
+        /*
+         * A VIP is never disconnected for non-payment. It is comped — not paying is the
+         * arrangement, not a default — and only vip:check-expiration ends it, on the
+         * vip_expiration date.
+         *
+         * The guard is needed because this sweep selects on unpaid invoices, not on billing
+         * status: an account comped after invoices already existed still has those invoices
+         * open, and they age into a due date like anyone else's. Without this, comping a
+         * customer bought them a disconnection a few days later, from a bill raised before
+         * the comping and never expected to be paid.
+         */
+        if (strcasecmp(trim($billingStatus), 'VIP') === 0) {
+            $this->writeLog("  [SKIP] VIP account — comped, never disconnected for non-payment (ends at vip_expiration)");
+            return ['success' => false, 'reason' => 'VIP account (comped)'];
+        }
+
         if (in_array($billingStatus, ['Inactive', 'Pullout', 'Disconnected', 'Offline', 'Restricted', 'Pullout Restricted'])) {
             $this->writeLog("  [SKIP] Status is already {$billingStatus}");
             return ['success' => false, 'reason' => "Already {$billingStatus}"];
@@ -856,8 +872,19 @@ class AutoDisconnectService
                         continue;
                     }
 
-                    // Check if account is already Pullout or Disconnected - skip entirely
                     $statusName = $billingAccount->billingStatus ? $billingAccount->billingStatus->status_name : null;
+
+                    // Comped accounts are out of the overdue flow entirely — same reasoning as the
+                    // VIP guard in processDisconnection(). Pulling out a VIP over an invoice it was
+                    // never going to pay would send a technician to collect a live customer's ONU.
+                    if (strcasecmp(trim((string) $statusName), 'VIP') === 0) {
+                        $this->writeLog("  [SKIP] VIP account — comped, never pulled out for non-payment");
+                        $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
+                        $skippedCount++;
+                        continue;
+                    }
+
+                    // Check if account is already Pullout or Disconnected - skip entirely
                     if (in_array($statusName, ['Pullout', 'Disconnected', 'Pullout Restricted'])) {
                         $this->writeLog("  [SKIP] Account status is already {$statusName} - no action needed");
                         $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");

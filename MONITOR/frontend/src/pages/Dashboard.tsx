@@ -12,6 +12,7 @@ import UserManagement from './UserManagement';
 import Roles from './Roles';
 import AuditTrail from './AuditTrail';
 import Settings from './Settings';
+import MikrotikRadius from './MikrotikRadius';
 import { UserData } from '../types/api';
 import { PermissionContext } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
@@ -198,6 +199,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         return <Tech refreshToken={refreshToken} />;
       case 'employee':
         return <Employee refreshToken={refreshToken} />;
+      case 'mikrotik-radius':
+        return <MikrotikRadius refreshToken={refreshToken} />;
       case 'databases':
       default:
         return <Databases refreshToken={refreshToken} />;

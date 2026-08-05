@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import apiClient from '../config/api';
+import { BillingType, isPrepaidGenerationType, resolveBillingType } from '../utils/billingType';
 
 interface PaymentRecord {
     id: string;
@@ -10,6 +11,12 @@ interface PaymentRecord {
     amount: number;
     source: 'Online' | 'Manual';
     status?: string;
+    /**
+     * transactions.transaction_type ('Top Up' | 'Recurring Fee' | 'Service Charge' | ...).
+     * Only present on manual transactions — an online portal payment has no such column.
+     * Carried through from the response already being fetched, so no extra request is made.
+     */
+    type?: string | null;
 }
 
 interface SOARecord {
@@ -49,6 +56,16 @@ interface CustomerDataContextType {
     soaRecords: SOARecord[];
     invoiceRecords: InvoiceRecord[];
     serviceOrders: ServiceOrderRecord[];
+    /**
+     * The account's billing type, resolved once here from billingAccount.generation_type.
+     *
+     * Screens must read this rather than re-deriving it: the dashboard, the Bills screen and the
+     * bottom navigation all branch on it, and three independent derivations would be three chances
+     * for the prepaid/postpaid rule to drift. Defaults to 'Postpaid' before the detail loads and
+     * for any non-customer role, which is the pre-existing behaviour for both.
+     */
+    billingType: BillingType;
+    isPrepaid: boolean;
     isLoading: boolean;
     error: string | null;
     refreshData: () => Promise<void>;
@@ -65,6 +82,13 @@ export const useCustomerDataContext = () => {
     }
     return context;
 };
+
+/**
+ * Non-throwing accessor for chrome that is shared across every role — the bottom navigation, for
+ * instance, wants the billing type when it happens to be rendering for a customer but must not
+ * crash a technician's session by demanding a customer-only provider.
+ */
+export const useCustomerDataContextOptional = () => useContext(CustomerDataContext);
 
 export const CustomerDataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [customerDetail, setCustomerDetail] = useState<CustomerDetailData | null>(null);
@@ -139,7 +163,8 @@ export const CustomerDataProvider: React.FC<{ children: ReactNode }> = ({ childr
                     reference: t.or_no || t.reference_no || `TR-${t.id}`,
                     amount: parseFloat(t.received_payment || t.amount || 0),
                     source: 'Manual' as const,
-                    status: t.status || 'Posted'
+                    status: t.status || 'Posted',
+                    type: t.transaction_type ?? null
                 })) : [];
 
                 const allPayments = [...formattedLogs, ...formattedTxs].sort((a, b) =>
@@ -192,6 +217,11 @@ export const CustomerDataProvider: React.FC<{ children: ReactNode }> = ({ childr
     const refreshData = useCallback(() => fetchData(true, false), [fetchData]);
     const silentRefresh = useCallback(() => fetchData(true, true), [fetchData]);
 
+    // Resolved once per detail change and shared by every consumer.
+    const generationType = customerDetail?.billingAccount?.generation_type;
+    const billingType = useMemo(() => resolveBillingType(generationType), [generationType]);
+    const isPrepaid = useMemo(() => isPrepaidGenerationType(generationType), [generationType]);
+
     return (
         <CustomerDataContext.Provider
             value={{
@@ -200,6 +230,8 @@ export const CustomerDataProvider: React.FC<{ children: ReactNode }> = ({ childr
                 soaRecords,
                 invoiceRecords,
                 serviceOrders,
+                billingType,
+                isPrepaid,
                 isLoading,
                 error,
                 refreshData,

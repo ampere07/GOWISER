@@ -35,6 +35,83 @@ use App\Events\JobOrderViewingUpdate;
 
 class JobOrderController extends Controller
 {
+    /**
+     * Fallback VIP billing status id.
+     *
+     * Matches the hard-coded value in vip:check-expiration, CustomerDetailUpdateController and
+     * EnhancedBillingGenerationServiceWithNotifications. Used only when the billing_status table
+     * cannot be read or has no row named 'VIP'.
+     */
+    private const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id, looked up once per request. */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Resolved by name so a reordered status table cannot silently break VIP approval, with the
+     * long-standing id as the fallback. Same resolution the rest of the app uses.
+     */
+    private function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
+        }
+
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
+     * Record that a VIP is actually in service, once RADIUS has confirmed it.
+     *
+     * Every PPPoE account is provisioned restricted and says so in three places — the job order,
+     * the technical details copied from it at approval, and the online-status row. Moving the
+     * RADIUS user onto the plan group changes none of them: ManualRadiusOperationsService writes
+     * the billing status and nothing else. A VIP therefore came out of a successful approval with
+     * full service and the word "Restricted" on the job order list, the customer list, the details
+     * panel, the invoice and the statement — every screen an operator would check to see whether
+     * the VIP had worked, saying it had not.
+     *
+     * Called only after reconnectUser() reports success, so these columns describe what RADIUS
+     * actually did. A queued/failed reconnect deliberately leaves them reading Restricted, which
+     * is then the truth and the thing worth chasing.
+     *
+     * Best-effort: the approval is long committed and a bookkeeping write must not surface as a
+     * failed approval. session_status is advisory in any case — RadiusStatusSyncService overwrites
+     * it from the live session on its next pass.
+     */
+    private function markVipInService(JobOrder $jobOrder, TechnicalDetail $technicalDetail, BillingAccount $billingAccount): void
+    {
+        try {
+            $jobOrder->update(['username_status' => JobOrder::USERNAME_STATUS_ACTIVE]);
+            $technicalDetail->update(['username_status' => JobOrder::USERNAME_STATUS_ACTIVE]);
+
+            OnlineStatus::where('account_id', $billingAccount->id)
+                ->update(['session_status' => 'Online']);
+
+            \Log::info('VIP marked in service after a confirmed RADIUS reconnect', [
+                'job_order_id' => $jobOrder->id,
+                'account_no' => $billingAccount->account_no,
+                'username_status' => JobOrder::USERNAME_STATUS_ACTIVE,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('VIP is in service on RADIUS but its status columns could not be updated', [
+                'job_order_id' => $jobOrder->id,
+                'account_no' => $billingAccount->account_no,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     public function index(Request $request): JsonResponse
     {
         try {
@@ -1273,21 +1350,35 @@ class JobOrderController extends Controller
             // instant approval commits — no window where a crash leaves it Active/unrestricted.
             $isPrepaidAccount = !$isVipApproval
                 && \App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type);
-            $newAccountStatusId = $isPrepaidAccount
-                ? (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4)
-                : 1;
+
+            /*
+             * A VIP is created ON the VIP billing status, not on Active.
+             *
+             * VIP is a billing status in this system, not a flag beside one. Everything that has
+             * to treat a comped account differently keys off that status and nothing else:
+             *
+             *   - EnhancedBillingGenerationServiceWithNotifications loads Active accounts only, so
+             *     the VIP status is what stops invoices, statements and notifications being
+             *     produced for an account that is never going to pay;
+             *   - vip:check-expiration selects billing_status_id = VIP, so the status is also what
+             *     makes vip_expiration mean anything — off it, the date is inert;
+             *   - AutoDisconnectService sweeps Active accounts with an overdue balance, and
+             *     radius:enforce-restricted excludes VIP by name.
+             *
+             * Creating the account Active therefore did not merely mislabel it. It put a comped
+             * customer into the ordinary billing run, and the invoice nobody was ever going to pay
+             * then aged into an overdue balance that auto-disconnect restricted — the VIP losing
+             * service, a cycle after being granted it, through the front door.
+             */
+            $vipStatusId = $this->getVipBillingStatusId();
+            $newAccountStatusId = match (true) {
+                $isVipApproval => $vipStatusId,
+                $isPrepaidAccount => (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4),
+                default => 1,
+            };
 
             if ($isVipApproval) {
-                // Deliberately NOT the VIP billing status: approval leaves a VIP account in the
-                // ordinary Active status so it behaves as a standard postpaid account from the
-                // moment it is created. vip_expiration is still recorded on the account below as
-                // a marker of the arrangement.
-                //
-                // Consequence worth knowing: vip:check-expiration selects accounts by
-                // billing_status_id = VIP, so accounts approved through this path are outside its
-                // sweep and their vip_expiration will not auto-restrict them. Setting the account
-                // to the VIP status by hand puts it back under that command.
-                \Log::info('Job order approved as VIP, created as a standard Active account', [
+                \Log::info('Job order approved as VIP — account created on the VIP billing status', [
                     'job_order_id' => $jobOrder->id,
                     'vip_expiration' => $jobOrder->vip_expiration,
                     'generation_type' => $jobOrder->generation_type,
@@ -1313,9 +1404,10 @@ class JobOrderController extends Controller
                 'vat_enabled' => (bool) ($jobOrder->vat_enabled ?? false),
                 'withholding_enabled' => (bool) ($jobOrder->withholding_enabled ?? false),
                 'withholding_percentage' => $jobOrder->withholding_percentage,
-                // Recorded as the marker of the VIP arrangement. The account itself is created
-                // Active (see above), so this date does not drive anything on its own —
-                // vip:check-expiration only acts on accounts carrying the VIP billing status.
+                // When the comping ends. Live rather than decorative now that the account is
+                // created on the VIP billing status: vip:check-expiration selects on that status
+                // and restricts the account on this date, exactly as it does for a VIP set from
+                // Customer Details.
                 'vip_expiration' => $jobOrder->vip_enabled ? $jobOrder->vip_expiration : null,
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
@@ -1397,15 +1489,16 @@ class JobOrderController extends Controller
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
                 'username' => $generatedUsername,
-                // A VIP is approved unrestricted and its RADIUS user sits in the plan group, so the
-                // row starts Online rather than blank — the account is in service from the moment
-                // approval commits and should read that way immediately, not after the next sync.
-                // Every other path keeps the blank placeholder it has always had.
+                // Blank placeholder for every path, VIP included. The VIP move onto the plan group
+                // happens after this transaction commits and can fail, so writing 'Online' here
+                // would be a claim made before the thing it claims has been attempted — and a
+                // stranded VIP would read as connected on every screen. It is written once the
+                // reconnect actually succeeds; see the VIP block after the commit.
                 //
                 // Advisory either way: RadiusStatusSyncService owns this column and overwrites it
                 // each pass from the RADIUS group plus live session — Online while a session is up,
                 // Offline if the ONU is down.
-                'session_status' => $isVipApproval ? 'Online' : '',
+                'session_status' => '',
             ]);
             
             $jobOrder->update([
@@ -1532,8 +1625,8 @@ class JobOrderController extends Controller
              * provisioned into the Restricted RADIUS group when the job order is marked Done
              * ({@see createRadiusAccountInternal()}, restricted-by-default), and the only thing
              * that has ever moved a user out of it is a payment landing. A VIP never pays, so
-             * without this the account is created Active with no bill and no restriction call —
-             * and the customer still has no service, because their RADIUS user is sitting in the
+             * without this the account is created VIP with no bill and no restriction call — and
+             * the customer still has no service, because their RADIUS user is sitting in the
              * Restricted group that nothing will ever move them out of.
              *
              * This is the one path that moves a VIP onto their plan group at approval, which is
@@ -1544,30 +1637,46 @@ class JobOrderController extends Controller
              * allowed to undo the approval.
              */
             if ($isVipApproval) {
+                /*
+                 * Which plan names the target RADIUS group.
+                 *
+                 * The application is the usual source, but it is not the only one and it is not
+                 * always filled: an approval that reuses an existing customer can carry the plan on
+                 * the customer record instead, and $planId was already resolved against plan_list
+                 * above. Reading only $application->desired_plan meant one blank column left a VIP
+                 * sitting in the Restricted group with nothing but a log line — the exact outcome
+                 * this whole block exists to prevent. Falling back costs one query and removes a
+                 * class of stranded VIPs.
+                 */
+                $vipPlan = $application->desired_plan
+                    ?: ($customer->desired_plan
+                        ?: ($planId ? DB::table('plan_list')->where('id', $planId)->value('plan_name') : null));
+
                 $vipReconnectParams = [
                     'accountNumber' => $accountNumber,
                     'username' => $generatedUsername,
-                    'plan' => $application->desired_plan,
+                    'plan' => $vipPlan,
                     'updatedBy' => $actionUserEmail,
                     'remarks' => 'VIP New Install - Auto Reconnect',
-                    // The approval transaction already committed this account's billing status
+                    // The approval transaction committed this account onto the VIP billing status
                     // deliberately; RADIUS must not be the thing that decides it. Without this,
-                    // reconnectUser() writes Active — harmless while approval creates VIPs as
-                    // Active, silently un-comping them the day that changes.
+                    // reconnectUser() writes Active — which would un-comp the account on the spot,
+                    // putting it straight back into the billing run.
                     'preserveBillingStatus' => true,
                 ];
 
                 $vipReconnectError = null;
 
-                if (empty($application->desired_plan)) {
+                if (empty($vipPlan)) {
                     // reconnectUser() names the target RADIUS group after the plan, so without one
                     // there is nothing to reconnect onto and no retry could ever succeed — logged
-                    // rather than queued. The account is Active in billing and needs a manual
+                    // rather than queued. The account is VIP in billing and needs a manual
                     // reconnect once a plan is on file.
-                    \Log::error('VIP new install could not be reconnected — no desired_plan on the application', [
+                    \Log::error('VIP new install could not be reconnected — no plan on the application, the customer or plan_list', [
                         'job_order_id' => $id,
                         'account_no' => $accountNumber,
                         'username' => $generatedUsername,
+                        'plan_id' => $planId,
                     ]);
                 } else {
                     try {
@@ -1579,9 +1688,11 @@ class JobOrderController extends Controller
                                 'job_order_id' => $id,
                                 'account_no' => $accountNumber,
                                 'username' => $generatedUsername,
-                                'plan' => $application->desired_plan,
+                                'plan' => $vipPlan,
                                 'billing_status_id' => $newAccountStatusId,
                             ]);
+
+                            $this->markVipInService($jobOrder, $technicalDetail, $billingAccount);
                         } else {
                             $vipReconnectError = $vipReconnect['message'] ?? 'RADIUS reconnect returned failure';
                         }

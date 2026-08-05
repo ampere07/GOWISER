@@ -44,6 +44,28 @@ class Kernel extends ConsoleKernel
             ->onFailure(function () {
                 \Illuminate\Support\Facades\Log::warning('Scheduled reporting:warm failed.');
             });
+
+        /*
+         * Performs the session kicks that were queued for the maintenance
+         * window.
+         *
+         * Frequent but not eager: the command exits immediately outside the
+         * configured window (see MikrotikKick::inWindow), so this schedule costs
+         * nothing for most of the day and needs no second place where the window
+         * is defined.
+         *
+         * withoutOverlapping because the work is disconnecting real sessions. Two
+         * concurrent runs claiming the same queue row would kick the same
+         * subscribers twice — the command claims each row before acting for the
+         * same reason, and the two guards are cheap next to that outcome.
+         */
+        $schedule->command('mikrotik:drain-kicks')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping(10)
+            ->runInBackground()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('Scheduled mikrotik:drain-kicks failed.');
+            });
     }
 
     /**

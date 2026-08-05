@@ -405,6 +405,186 @@ class BillingNotificationService
         }
     }
 
+    /**
+     * Warn a PREPAID customer their service period is ABOUT to lapse, days before it does.
+     *
+     * The counterpart to {@see notifyPrepaidExpiry()}, which fires only once the period has already
+     * gone — by then the customer is usually restricted. This is the heads-up that lets them renew
+     * before anything is cut, sent `billing_config.prepaid_pre_expiry_days` ahead of
+     * prepaid_expires_at.
+     *
+     * SMS only, deliberately. The lapse notice sends an email as well because it is standing in for
+     * a bill; this one is a nudge, and adding a second full billing email days before the first
+     * would read as duplicate billing to the customer.
+     *
+     * Uses its own 'PrepaidPreExpiry' template so operations can word the early warning differently
+     * from the lapse notice, and falls back to 'StatementofAccount' when that template is missing or
+     * has been deactivated — the same template {@see generatePrepaidExpirySmsMessage()} uses — so a
+     * fresh install that has not yet reviewed its templates still warns customers rather than
+     * silently sending nothing.
+     *
+     * Never throws: failures come back in `errors` so one account cannot abort a batch scan.
+     *
+     * @param  Carbon       $expiresAt      the upcoming prepaid_expires_at, shown as the due date
+     * @param  float        $renewalAmount  what settles the renewal, VAT/withholding applied
+     * @param  string|null  $timeSent       when set, SMS goes to the queue instead of sending now
+     * @return array{sms_sent: bool, sms_queued: bool, errors: array}
+     */
+    public function notifyPrepaidPreExpiry(
+        BillingAccount $account,
+        Carbon $expiresAt,
+        float $renewalAmount,
+        ?string $timeSent = null
+    ): array {
+        $results = [
+            'sms_sent' => false,
+            'sms_queued' => false,
+            'errors' => []
+        ];
+
+        try {
+            $customer = $account->customer;
+
+            if (!$customer) {
+                throw new \Exception("Customer not found for account {$account->account_no}");
+            }
+
+            if (empty($customer->contact_number_primary)) {
+                $results['errors'][] = 'Customer has no phone number';
+                Log::warning('Prepaid pre-expiry notice: customer has no phone number', [
+                    'account_no' => $account->account_no
+                ]);
+
+                return $results;
+            }
+
+            $smsMessage = $this->generatePrepaidPreExpirySmsMessage($account, $expiresAt, $renewalAmount);
+
+            if (!$smsMessage) {
+                $results['errors'][] = 'No usable SMS template for the prepaid pre-expiry notice';
+
+                return $results;
+            }
+
+            if (empty($timeSent)) {
+                $smsResult = $this->smsService->send([
+                    'contact_no' => $customer->contact_number_primary,
+                    'message' => $smsMessage
+                ]);
+                $results['sms_sent'] = $smsResult['success'];
+
+                if (!$smsResult['success']) {
+                    $results['errors'][] = "SMS failed: " . ($smsResult['error'] ?? 'Unknown');
+                }
+            } else {
+                $this->smsQueueService->queueSms([
+                    'account_no' => $account->account_no,
+                    'contact_no' => $customer->contact_number_primary,
+                    'message' => $smsMessage,
+                    'time_sent' => $timeSent
+                ]);
+                $results['sms_sent'] = true;
+                $results['sms_queued'] = true;
+            }
+
+            Log::info('Prepaid pre-expiry notification completed', [
+                'account_no' => $account->account_no,
+                'expires_at' => $expiresAt->toDateTimeString(),
+                'renewal_amount' => $renewalAmount,
+                'sms_sent' => $results['sms_sent'],
+                'sms_queued' => $results['sms_queued']
+            ]);
+
+        } catch (\Exception $e) {
+            $results['errors'][] = $e->getMessage();
+            Log::error('Prepaid pre-expiry notification failed', [
+                'account_no' => $account->account_no,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        return $results;
+    }
+
+    /**
+     * SMS body for the prepaid pre-expiry warning.
+     *
+     * Prefers the dedicated 'PrepaidPreExpiry' template and falls back to 'StatementofAccount'.
+     * Because that fallback is written against the full billing placeholder set, every amount alias
+     * is substituted here too — otherwise a fallback rendering would go out with a literal
+     * {{total_amount}} in it.
+     *
+     * Returns null when neither template is available, which the caller reports as an error rather
+     * than sending a half-rendered message.
+     */
+    protected function generatePrepaidPreExpirySmsMessage(
+        BillingAccount $account,
+        Carbon $expiresAt,
+        float $renewalAmount
+    ): ?string {
+        try {
+            $customer = $account->customer;
+
+            $template = DB::table('sms_templates')
+                ->where('template_type', 'PrepaidPreExpiry')
+                ->where('is_active', 1)
+                ->first();
+
+            if (!$template) {
+                $template = DB::table('sms_templates')
+                    ->where('template_type', 'StatementofAccount')
+                    ->where('is_active', 1)
+                    ->first();
+
+                if ($template) {
+                    Log::info('Prepaid pre-expiry SMS falling back to the StatementofAccount template', [
+                        'account_no' => $account->account_no
+                    ]);
+                }
+            }
+
+            if (!$template) {
+                Log::warning('Prepaid pre-expiry SMS skipped: no active PrepaidPreExpiry or StatementofAccount template', [
+                    'account_no' => $account->account_no
+                ]);
+                return null;
+            }
+
+            $paymentLink = config('app.payment_link', 'https://sync.gowiser.ph');
+            $planNameRaw = $account->plan ? $account->plan->plan_name : ($customer->desired_plan ?? 'N/A');
+            $planNameFormatted = str_replace('₱', 'P', $planNameRaw);
+            $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
+            $amount = number_format($renewalAmount, 2);
+
+            $message = $template->message_content;
+            $message = str_replace('{{customer_name}}', $customerName, $message);
+            $message = str_replace('{{account_no}}', $account->account_no, $message);
+            $message = str_replace('{{plan_name}}', $planNameFormatted, $message);
+            $message = str_replace('{{plan_nam}}', $planNameFormatted, $message);
+            $message = str_replace('{{amount_due}}', $amount, $message);
+            $message = str_replace('{{total_amount}}', $amount, $message);
+            $message = str_replace('{{total_due}}', $amount, $message);
+            $message = str_replace('{{amount}}', $amount, $message);
+            $message = str_replace('{{balance}}', $amount, $message);
+            $message = str_replace('{{due_date}}', $expiresAt->format('M d, Y'), $message);
+            $message = str_replace('{{payment_link}}', $paymentLink, $message);
+
+            // No statement exists, so the SOA date placeholders in the fallback template fall back
+            // to today — same as generatePrepaidExpirySmsMessage().
+            $todayStr = date('M d, Y');
+            $message = str_replace('{{soa_date}}', $todayStr, $message);
+            $message = str_replace('{{soa_data}}', $todayStr, $message);
+
+            return $this->replaceGlobalVariables($message);
+        } catch (\Exception $e) {
+            Log::error('Failed to generate prepaid pre-expiry SMS message', [
+                'account_no' => $account->account_no,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
     public function notifyOverdue(Invoice $invoice): array
     {
         $results = [

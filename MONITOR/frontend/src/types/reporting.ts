@@ -240,6 +240,15 @@ export interface BarangayRow {
   vip: number;
   inactive: number;
   pullout: number;
+  /**
+   * The network split, over the same rows as the billing split beside it.
+   *
+   * Mutually exclusive and in this precedence: disconnected, then restricted,
+   * then online, then offline — so the four sum to `total` exactly as the
+   * billing columns do. See GowiserReportsDriver::barangayBreakdown.
+   */
+  online: number;
+  offline: number;
   restricted: number;
   disconnected: number;
 }
@@ -252,6 +261,60 @@ export type BarangaySort =
   | 'inactive'
   | 'pullout'
   | 'total';
+
+/** Columns the executive dashboard's network-oriented barangay table sorts on. */
+export type BarangayNetworkSort =
+  | 'barangay'
+  | 'online'
+  | 'offline'
+  | 'restricted'
+  | 'disconnected'
+  | 'total';
+
+/** One plan's share of the subscriber base. */
+export interface PlanShare {
+  /**
+   * Null on the "Unmapped / Legacy Plan" bucket, which is not a plan and has no
+   * id in any database — see App\Services\Reports\PlanReconciler.
+   */
+  plan_id: number | null;
+  label: string;
+  price: number;
+  count: number;
+  share_pct: number;
+  /**
+   * On the unmapped bucket only: a few of the raw legacy strings that could not
+   * be matched, so the fix is a lookup rather than a database trawl.
+   */
+  samples?: string[];
+}
+
+/** Columns the plan distribution table sorts on. */
+export type PlanSort = 'label' | 'share_pct' | 'count';
+
+/**
+ * Online, offline, restricted and disconnected over one population.
+ *
+ * The four are mutually exclusive and sum to `total`, which the old pairing of
+ * RADIUS session counts with billing status counts did not — they were two
+ * different populations presented as one four-way split.
+ */
+export interface NetworkStatus {
+  online: number;
+  offline: number;
+  restricted: number;
+  disconnected: number;
+  total: number;
+  /**
+   * Accounts SYNC's RADIUS sync could not find a RADIUS user for. A subset of
+   * `offline`, not a fifth bucket — the four still sum to `total`. Reported
+   * because it is a provisioning fault rather than a subscriber who happens to
+   * be switched off, and folding it in silently hides a real backlog.
+   */
+  not_found?: number;
+  /** Accounts never written to online_status at all. Also a subset of offline. */
+  no_session_row?: number;
+}
 
 export interface OverdueRow extends SourceTagged {
   id: string;
@@ -289,6 +352,12 @@ export interface SubscriberAnalyticsData extends SectionBase, BranchScoped {
   billing_summary?: BillingSummary;
   status: StatusCounts;
   plans: LabelledCount[];
+  /** Every plan with its share, uncapped — drives the pie and its table. */
+  plan_distribution?: PlanShare[];
+  /** GOWISER only: the four network counts taken over one row set. */
+  network?: NetworkStatus;
+  /** Subscribers the SYNC platform fee is charged for (excludes VIP, Pullout). */
+  sync_billable_accounts?: number | null;
   /** Every barangay. Replaced the capped `top_barangays`. */
   barangays: BarangayRow[];
   growth: { new_in_range: number; expected_mrc: number | null };
@@ -320,6 +389,34 @@ export interface FinancialKpi {
   projected_monthly?: number;
   days_elapsed?: number;
   days_in_month?: number;
+}
+
+/**
+ * Collections anchored on the calendar, not on the widget's range.
+ *
+ * Both figures here deliberately ignore the selected window. "Projected monthly"
+ * is defined against the current month, and computing it from an arbitrary range
+ * projects a month that is not the one being projected — on a Daily view it was
+ * one day's takings times thirty-one. The weekly average is the last seven
+ * calendar days divided by seven, always, so a Sunday with no counter takings
+ * stays in the denominator where it belongs.
+ *
+ * `kpi.daily_average` still follows the range: the Financial module's own panel
+ * is about the window someone selected, and that is a different question.
+ */
+export interface RollingIncome {
+  month_start: string | null;
+  as_of: string | null;
+  month_income: number;
+  days_elapsed: number;
+  days_in_month: number;
+  daily_average: number;
+  projected_monthly: number;
+  week_from: string | null;
+  week_income: number;
+  /** Always 7. Named so the divisor can be stated rather than assumed. */
+  week_days: number;
+  weekly_average: number;
 }
 
 export interface BranchCollectionRow extends SourceTagged {
@@ -449,6 +546,8 @@ export interface FinancialData extends SectionBase, BranchScoped {
   expense_period: Granularity;
   supports_expenses: boolean;
   kpi: FinancialKpi;
+  /** Month-to-date and seven-day figures, anchored on today rather than the range. */
+  rolling?: RollingIncome;
   series: TrendPoint[];
   trend: { period: Granularity; points: TrendPoint[] };
   by_plan: LabelledTotal[];
@@ -534,8 +633,20 @@ export interface TurnaroundByType {
   longest_hours?: number | null;
 }
 
+/** One day on the three-stream timeline. */
+export interface WorkTimelinePoint {
+  period: string;
+  label: string;
+  applications: number;
+  job_orders: number;
+  service_orders: number;
+}
+
 export interface OperationsData extends SectionBase, BranchScoped {
   queues: WorkQueue[];
+  /** GOWISER only: the three streams bucketed into the reporting vocabulary. */
+  work_streams?: Record<string, { key: string; label: string; count: number; total?: number; buckets: Record<string, number>; statuses: LabelledCount[] }>;
+  work_timeline?: WorkTimelinePoint[];
   series: WorkPoint[];
   /** One figure on NETMANAGER; split by queue on GOWISER. */
   turnaround?: Turnaround | { job_orders: Turnaround; service_orders: Turnaround };
@@ -654,7 +765,7 @@ export interface SubscriberHealth {
   range_label?: string;
 }
 
-/** Detailed subscriber breakdown for the simplified executive dashboard. */
+/** Detailed subscriber breakdown for the Executive Dashboard. */
 export interface SubscriberOverview {
   available: boolean;
   billing?: {
@@ -662,59 +773,228 @@ export interface SubscriberOverview {
     inactive: number;
     vip: number;
     pullout: number;
+    total: number;
   };
-  online_status?: {
-    online: number;
-    offline: number;
-    restricted: number;
-    disconnected: number;
+  /**
+   * Null when no monitored schema can produce it. Not four zeros — "we could
+   * not ask" and "nobody is online" are different claims.
+   */
+  network?: NetworkStatus | null;
+  /** Prepaid accounts lapsing inside the window; null on a schema with no expiry. */
+  expiring?: {
+    in_3_days: number | null;
+    in_7_days: number | null;
   };
-  jo_so_status?: {
-    done: number;
-    reschedule: number;
-    failed: number;
-    in_progress: number;
-  };
-  total_applications?: number;
+  plan_distribution?: PlanShare[];
   barangays?: BarangayRow[];
+  /** Raw RADIUS session states, kept as network telemetry rather than a status. */
+  sessions?: LabelledCount[];
+  /** VIP-status and free-plan accounts, for the Group Overview. */
+  free_connections?: FreeConnections;
+}
+
+/** One work-order stream — job orders or service orders. */
+export interface WorkOrderStream {
+  label: string;
+  count: number;
+  done: number;
+  reschedule: number;
+  failed: number;
+  in_progress: number;
+  other: number;
+  statuses: LabelledCount[];
+}
+
+/** The applications stream, which carries the brief's formula as well as a count. */
+export interface ApplicationStream {
+  /** (rescheduled + in progress + new apply) − failed, floored at zero. */
+  total: number;
+  /** Rows in the range, which is a different question from `total`. */
+  count: number;
+  rescheduled: number;
+  in_progress: number;
+  new_apply: number;
+  failed: number;
+  other: number;
+  statuses: LabelledCount[];
+  formula: string;
+}
+
+/**
+ * Applications, job orders and service orders, reported separately.
+ *
+ * `available` is false rather than three zeros where no monitored schema models
+ * these tables — reporting zero applications for a system that has no concept of
+ * them is a claim, not a measurement.
+ */
+export interface WorkStreams {
+  available: boolean;
+  range?: DateRange;
+  range_label?: string;
+  applications?: ApplicationStream;
+  job_orders?: WorkOrderStream;
+  service_orders?: WorkOrderStream;
+  timeline?: WorkTimelinePoint[];
+  /** Today / this week / this month, independent of the range above. */
+  cadence?: WorkCadence;
+  resolution?: ResolutionSummary;
+}
+
+/** The three fixed windows every cadence figure is reported over. */
+export type CadenceWindow = 'today' | 'week' | 'month';
+
+export interface CadenceWindowMeta {
+  key: CadenceWindow;
+  label: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * One queue's bucket counts, per window.
+ *
+ * Indexed rather than enumerated because the bucket names come from server
+ * config (reporting.application_cadence_buckets, reporting.work_order_buckets)
+ * and a status added there must not need a frontend deploy to be counted.
+ * `total` and `other` are always present.
+ */
+export type CadenceTally = Record<string, number>;
+
+export interface QueueCadence {
+  today: CadenceTally;
+  week: CadenceTally;
+  month: CadenceTally;
+}
+
+/**
+ * All three queues on today / this week / this month.
+ *
+ * Empty when no monitored schema models any of these tables — which the cards
+ * report as "not tracked here" rather than as zeros.
+ */
+export interface WorkCadence {
+  windows?: Record<CadenceWindow, CadenceWindowMeta>;
+  applications?: QueueCadence;
+  job_orders?: QueueCadence;
+  service_orders?: QueueCadence;
+}
+
+/** One ticket that has been open longest across the whole fleet. */
+export interface OutstandingTicket {
+  queue: string;
+  /** "Installation" or "Repair". */
+  label: string;
+  reference: string;
+  account_no: string;
+  customer: string;
+  status: string;
+  opened_at: string;
+  hours: number;
+  days: number;
+  source?: string;
+  source_label?: string;
+}
+
+export interface ResolutionSummary {
+  available: boolean;
+  completed: Record<CadenceWindow, { installations: number; repairs: number; total: number }>;
+  longest_outstanding: OutstandingTicket | null;
+}
+
+/** Subscribers who are not billed — VIP status, or a plan named for it. */
+export interface FreeConnections {
+  vip_status_accounts: number;
+  free_plan_accounts: number;
+  plans: LabelledCount[];
+  /**
+   * The larger of the two counts, not their sum: they overlap and the overlap
+   * cannot be measured from these aggregates, so summing would double-count.
+   */
+  total: number;
+  overlaps: boolean;
+}
+
+/** The `/executive/work-streams` response — one window, all three streams. */
+export interface WorkStreamsResponse {
+  range: DateRange;
+  range_label: string;
+  streams: WorkStreams;
+  unavailable: Record<string, string>;
+}
+
+/**
+ * The SYNC platform fee.
+ *
+ * `configured: false` means no rate has been set, and `total` is null rather
+ * than 0 — under a Net Income figure, zero would be a claim that SYNC is free.
+ */
+export interface SyncPriceLine {
+  configured: boolean;
+  rate: number;
+  billable_accounts: number | null;
+  excluded_statuses: string[];
+  total: number | null;
+}
+
+/**
+ * The hosting fee, a flat monthly infrastructure charge.
+ *
+ * `configured: false` means no rate has been set. `total` equals the rate
+ * (no multiplier) and is null when not configured.
+ */
+export interface HostingFeeLine {
+  configured: boolean;
+  rate: number;
+  total: number | null;
 }
 
 export interface ExecutiveFinancialSummary {
   available: boolean;
   /** True when the role may open this view but not read the money on it. */
   masked?: boolean;
+  /** Cash + PNB + Payment Portal, matching the Financial headline. */
   total_income?: number;
+  /** Every channel including the unmatched residue, for reconciliation. */
+  income_all_channels?: number;
+  /** Collections whose payment method matched no configured channel. */
+  unmatched_income?: number;
   channels?: Record<string, { label: string; total: number; count: number; share_pct: number }>;
   opex?: number;
   capex?: number;
+  sync_price?: SyncPriceLine;
+  hosting_fee?: HostingFeeLine;
+  /**
+   * OpEx + CapEx. Deliberately excludes the SYNC and hosting fees, which are
+   * reported beside it rather than inside it — see
+   * ExecutiveOverviewService::financialSummary.
+   */
   total_expenses?: number;
+  /** SYNC fee + hosting fee; null when neither is configured. */
+  platform_costs?: number | null;
   gross?: number;
+  /** Total income − total expenses. Unchanged formula. */
   net?: number;
+  /** Net with both configurable costs taken off; null when neither is set. */
+  net_after_platform_costs?: number | null;
   margin_pct?: number | null;
+  /** Anchored on the current month, never on the widget's range. */
+  month_income?: number | null;
+  days_elapsed?: number | null;
+  days_in_month?: number | null;
+  daily_average?: number | null;
+  projected_monthly?: number | null;
+  /** Strict seven-day rolling average: last 7 days ÷ 7, always. */
+  weekly_average?: number | null;
+  /** The same figure multiplied back out: the last 7 days' takings in full. */
+  week_income?: number | null;
+  /** Always 7. Named so the screen can state the divisor rather than imply it. */
+  week_days?: number | null;
+  week_from?: string | null;
   outstanding_payables?: number;
   payables_unpaid_count?: number;
   metrics?: ExecutiveMetrics | null;
   range_label?: string;
-  by_method?: LabelledTotal[];
   by_plan?: LabelledTotal[];
-  daily_average?: number;
-  projected_monthly?: number;
-  days_elapsed?: number;
-  days_in_month?: number;
-}
-
-/**
- * Something an executive would want to be told about.
- *
- * Not a monitoring feed — neither source system runs one — so each alarm is
- * derived from a condition in the operational data and carries its own `detail`
- * saying what triggered it, rather than presenting as an SNMP trap.
- */
-export interface SystemAlarm {
-  key: string;
-  severity: 'critical' | 'warning' | 'info';
-  label: string;
-  detail: string;
 }
 
 export interface OperationsTechSummary {
@@ -726,8 +1006,6 @@ export interface OperationsTechSummary {
   turnaround_by_type: TurnaroundByType[];
   technicians_live: number | null;
   technicians_reporting: number | null;
-  alarms: SystemAlarm[];
-  alarm_count: number;
   /** The date before which operational timestamps are not trusted, or null. */
   reliable_from: string | null;
   /** True when an age was clamped to that floor rather than measured. */
@@ -748,6 +1026,7 @@ export interface ExecutiveOverviewData {
   subscriber_health: SubscriberHealth;
   subscriber_overview: SubscriberOverview;
   financial_summary: ExecutiveFinancialSummary;
+  work_streams: WorkStreams;
   operations_tech: OperationsTechSummary;
   databases: {
     answered: string[];

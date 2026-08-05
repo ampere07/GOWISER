@@ -30,6 +30,21 @@ class JobOrder extends Model
      */
     public const USERNAME_STATUS_RESTRICTED = 'Restricted';
 
+    /**
+     * The state an account reaches once RADIUS has confirmed it is on its plan group.
+     *
+     * The counterpart to the constant above, and written only after the network says so —
+     * a VIP approval that reconnects successfully, where nothing else would ever move the
+     * account off Restricted. Left unwritten by a failed or queued reconnect, so the column
+     * keeps reading Restricted for exactly as long as the customer really is.
+     *
+     * Deliberately 'Active' rather than the plan name. The column is displayed as a status
+     * on the job order, customer and billing screens and is offered as a filter option
+     * (RelatedDataController builds that list from its distinct values); writing plan names
+     * into it would turn a two-value status into one option per plan.
+     */
+    public const USERNAME_STATUS_ACTIVE = 'Active';
+
     protected $fillable = [
         'application_id',
         'account_id',

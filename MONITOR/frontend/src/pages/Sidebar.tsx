@@ -5,6 +5,7 @@ import {
   Database,
   HardHat,
   LogOut,
+  Radio,
   ScrollText,
   ShieldCheck,
   SlidersHorizontal,
@@ -102,6 +103,12 @@ export const MENU_ITEMS: MenuItem[] = [
   { id: 'audit', label: 'Audit Trail', icon: ScrollText },
   { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
   { id: 'databases', label: 'Databases', icon: Database },
+
+  // The one item here that reaches outside MONITOR. Everything above reads a
+  // monitored database or edits a local setting; this talks to a live router and
+  // can disconnect subscribers, which is why it carries two further permissions
+  // of its own beyond the module id (see Permissions::ACTION_MIKROTIK_*).
+  { id: 'mikrotik-radius', label: 'Mikrotik Radius Shortcut', icon: Radio },
 ];
 
 interface SidebarProps {

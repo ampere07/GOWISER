@@ -9,7 +9,7 @@ import { FlashList } from '@shopify/flash-list';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { WebView } from 'react-native-webview';
-import * as Location from 'expo-location';
+import { getCurrentPosition, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
 import { getActiveImageSize } from '../services/imageSettingsService';
@@ -175,17 +175,21 @@ const MapSection = React.memo<MapSectionProps>(
         borderTopColor: isDarkMode ? '#374151' : '#e5e7eb',
       }]}>
         <Text style={[styles.mapTip, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>Tap map to drop pin</Text>
-        <Pressable
-          onPress={onGetMyLocation}
-          disabled={loading}
-          style={[styles.locationBtn, {
-            backgroundColor: loading ? (isDarkMode ? '#374151' : '#d1d5db') : (colorPalette?.primary || '#7c3aed'),
-          }]}
-        >
-          <Text style={styles.locationBtnText}>
-            {loading ? 'Locating...' : 'Get My Location'}
-          </Text>
-        </Pressable>
+        {/* Hidden if location services are ever switched off again (config/featureFlags). Dropping
+            the pin by tapping the map remains the primary path and is unaffected either way. */}
+        {isLocationAvailable() && (
+          <Pressable
+            onPress={onGetMyLocation}
+            disabled={loading}
+            style={[styles.locationBtn, {
+              backgroundColor: loading ? (isDarkMode ? '#374151' : '#d1d5db') : (colorPalette?.primary || '#7c3aed'),
+            }]}
+          >
+            <Text style={styles.locationBtnText}>
+              {loading ? 'Locating...' : 'Get My Location'}
+            </Text>
+          </Pressable>
+        )}
       </View>
     </View>
   ),
@@ -395,11 +399,11 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
   const handleGetMyLocation = useCallback(async () => {
     setLoading(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const status = await requestForegroundPermission('AddLcpNapLocationModal');
       if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
-      const lat = loc.coords.latitude;
-      const lng = loc.coords.longitude;
+      const position = await getCurrentPosition('AddLcpNapLocationModal');
+      if (!position) return;
+      const { latitude: lat, longitude: lng } = position;
       setFormData(prev => ({ ...prev, coordinates: `${lat.toFixed(6)}, ${lng.toFixed(6)}` }));
       const msg = JSON.stringify({ type: 'updateLocation', lat, lng });
       webViewRef.current?.injectJavaScript(`if(window.postMessageCustom){window.postMessageCustom(${msg});}true;`);

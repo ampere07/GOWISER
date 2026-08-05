@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useNavBadgeCounts, NavBadgeCounts } from '../hooks/useNavBadgeCounts';
+import { useCustomerDataContextOptional } from '../contexts/CustomerDataContext';
 
 interface SidebarProps {
   activeSection: string;
@@ -95,6 +96,15 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
 
   const badgeCounts = useNavBadgeCounts(isTechnician);
 
+  /**
+   * A prepaid account has no bills — invoice generation is disabled for it — so the tab that would
+   * open the SOA/Invoices screen is named for what it actually shows: the top-up history. Read
+   * from the already-loaded customer detail, so this costs no request. Undefined for every
+   * non-customer role, which keeps the label at its postpaid default.
+   */
+  const customerData = useCustomerDataContextOptional();
+  const billingNavLabel = customerData?.isPrepaid ? 'History' : 'Bills';
+
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [isMenuExpanded, setIsMenuExpanded] = useState(false);
   const [measuredHeight, setMeasuredHeight] = useState(300);
@@ -132,7 +142,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
     {
       title: 'Billing',
       items: [
-        { id: 'customer-bills', label: 'Bills', icon: ReceiptText, allowedRoles: ['customer'] },
+        { id: 'customer-bills', label: billingNavLabel, icon: ReceiptText, allowedRoles: ['customer'] },
         { id: 'overdue', label: 'Overdue', icon: Clock, allowedRoles: ['administrator'], allowedRoleIds: [1, '1', 7, '7'] },
       ],
     },

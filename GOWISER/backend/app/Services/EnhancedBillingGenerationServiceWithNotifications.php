@@ -1639,6 +1639,171 @@ class EnhancedBillingGenerationServiceWithNotifications
         return $results;
     }
 
+    /**
+     * How many days AHEAD of prepaid_expires_at a prepaid customer is warned.
+     *
+     * Falls back to 3 when billing_config has no row or holds a non-numeric value, matching the
+     * column default. A configured 0 is honoured and means "never warn".
+     */
+    protected const DEFAULT_PREPAID_PRE_EXPIRY_DAYS = 3;
+
+    /**
+     * Warn prepaid customers whose service period is ABOUT to lapse. Raises NO bill.
+     *
+     * The early counterpart to {@see notifyExpiredPrepaidAccounts()}, which only fires once the
+     * period has already gone and the customer is usually restricted. Nothing is billed here for
+     * exactly the same reason it is not billed at expiry: a renewal is priced from the plan the
+     * customer picks at checkout, so a bill raised in advance could only ever quote the plan they
+     * are currently on. The quoted figure is a quote, not a charge.
+     *
+     * Window: accounts expiring from now through the end of the configured day
+     * (`billing_config.prepaid_pre_expiry_days`, default 3). Already-expired accounts are excluded
+     * by the lower bound — those belong to the lapse notice, and letting both fire would send two
+     * messages for one event.
+     *
+     * Deliberately NOT filtered on billing_status, mirroring the expiry scan: the point is to reach
+     * the customer whatever state their account is in. VIP is therefore excluded explicitly.
+     *
+     * Idempotent: `prepaid_pre_expiry_notified_for` records the expiry the warning went out for, so
+     * a customer sitting inside the window is warned once, not every morning. It is a separate
+     * column from `prepaid_expiry_notified_for` on purpose — both notices key off the same expiry
+     * timestamp, so a shared marker would let this warning suppress the lapse notice days later.
+     * It needs no cleanup: renewing moves prepaid_expires_at forward, the stored value stops
+     * matching, and the next period warns again.
+     *
+     * Each account is isolated so one failure never aborts the batch.
+     *
+     * @return array{success:int, failed:int, skipped:int, errors:array, notifications:array}
+     */
+    public function notifyPrepaidPreExpiryAccounts(Carbon $generationDate): array
+    {
+        $results = [
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'errors' => [],
+            'notifications' => [],
+        ];
+
+        $configured = BillingConfig::first()?->prepaid_pre_expiry_days;
+        $preExpiryDays = is_numeric($configured)
+            ? (int) $configured
+            : self::DEFAULT_PREPAID_PRE_EXPIRY_DAYS;
+
+        if ($preExpiryDays <= 0) {
+            $this->log('info', 'Prepaid pre-expiry scan skipped — warning disabled in billing config', [
+                'prepaid_pre_expiry_days' => $preExpiryDays,
+            ]);
+
+            return $results;
+        }
+
+        $now = $generationDate->copy();
+        // endOfDay so an account expiring late on the final day of the window is still caught —
+        // the scan runs at 01:00 and would otherwise miss everything after that hour.
+        $windowEnd = $now->copy()->addDays($preExpiryDays)->endOfDay();
+
+        // Eager-loaded up front: the notice reads the customer for name and contact number and the
+        // plan for its name and price, so lazy loading would cost two queries per account.
+        $accounts = BillingAccount::with(['customer', 'technicalDetails', 'plan'])
+            ->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
+            ->whereNotNull('prepaid_expires_at')
+            ->whereBetween('prepaid_expires_at', [$now, $windowEnd])
+            ->whereNotNull('account_no')
+            ->get();
+
+        $this->log('info', 'Prepaid pre-expiry scan: accounts approaching expiry found', [
+            'generation_date' => $now->format('Y-m-d'),
+            'pre_expiry_days' => $preExpiryDays,
+            'window_end' => $windowEnd->toDateTimeString(),
+            'expiring_count' => $accounts->count(),
+        ]);
+
+        foreach ($accounts as $account) {
+            try {
+                // VIP guard: a VIP is not asked to renew. This scan ignores billing_status, so VIP
+                // has to be excluded explicitly here.
+                if ($this->isVipBillingSuspended($account)) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                $expiry = Carbon::parse($account->prepaid_expires_at);
+
+                // Already warned about THIS period. Compared as a timestamp string so a Carbon
+                // instance and its stored representation are not mistaken for a difference, which
+                // would re-warn every single day.
+                $notifiedFor = $account->prepaid_pre_expiry_notified_for
+                    ? Carbon::parse($account->prepaid_pre_expiry_notified_for)->toDateTimeString()
+                    : null;
+
+                if ($notifiedFor === $expiry->toDateTimeString()) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                $renewalAmount = $this->quotePrepaidRenewalAmount($account);
+
+                if ($renewalAmount <= 0) {
+                    $results['skipped']++;
+                    $this->log('warning', 'Skipped prepaid pre-expiry notice — account has no priced plan to quote', [
+                        'account_no' => $account->account_no,
+                        'plan_id' => $account->plan_id,
+                    ]);
+                    continue;
+                }
+
+                // 8:00 AM Asia/Manila, matching queueNotification() and the expiry scan — this
+                // runs at 01:00 and customers should not be woken by it.
+                $timeToSend = Carbon::now('Asia/Manila')->setTime(8, 0, 0)->format('Y-m-d H:i:s');
+
+                $notification = $this->notificationService->notifyPrepaidPreExpiry(
+                    $account,
+                    $expiry,
+                    $renewalAmount,
+                    $timeToSend
+                );
+
+                $results['notifications'][] = $notification;
+
+                // Marked only after the notice actually went out, so a failure retries tomorrow —
+                // there is still time left in the window — rather than silently swallowing this
+                // period's only warning.
+                if (!$notification['sms_sent']) {
+                    $results['failed']++;
+                    $results['errors'][] = [
+                        'account_no' => $account->account_no,
+                        'error' => implode('; ', $notification['errors'] ?: ['SMS not sent']),
+                    ];
+                    continue;
+                }
+
+                DB::transaction(function () use ($account, $expiry) {
+                    $account->prepaid_pre_expiry_notified_for = $expiry;
+                    $account->save();
+                });
+
+                $results['success']++;
+
+                $this->log('info', 'Prepaid pre-expiry notice sent (no SOA, no invoice)', [
+                    'account_no' => $account->account_no,
+                    'prepaid_expires_at' => $expiry->toDateTimeString(),
+                    'days_remaining' => $now->diffInDays($expiry, false),
+                    'renewal_amount' => $renewalAmount,
+                ]);
+            } catch (\Exception $e) {
+                $results['failed']++;
+                $results['errors'][] = [
+                    'account_no' => $account->account_no,
+                    'error' => $e->getMessage(),
+                ];
+                $this->log('error', "Failed prepaid pre-expiry notice for account {$account->account_no}: " . $e->getMessage());
+            }
+        }
+
+        return $results;
+    }
+
     protected function calculateChargesAndDeductions(
         BillingAccount $account, 
         Carbon $date, 

@@ -59,7 +59,7 @@ const Header: React.FC<HeaderProps> = ({
             }}
           />
           <h1 className={`${isDarkMode ? 'text-white' : 'text-gray-900'} text-xs font-semibold`}>
-            Monitoring Portal
+            Executive Dashboard
           </h1>
         </div>
       </div>

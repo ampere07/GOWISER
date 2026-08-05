@@ -93,6 +93,18 @@ class GowiserReportsDriver implements ReportsDriver
             'status' => $status,
             'plans' => $this->planMix($db),
 
+            // Every plan with its share of the base, uncapped — the pie and the
+            // table beside it are about distribution, and a top ten silently
+            // drops the tail the percentages are supposed to add up over.
+            'plan_distribution' => $this->planDistribution($db),
+
+            // Online, offline, restricted and disconnected taken over one row
+            // set, so the four add up to the base. See networkStatus.
+            'network' => $this->networkStatus($db),
+
+            // Subscribers SYNC is licensed for, excluding VIP and Pullout.
+            'sync_billable_accounts' => $this->syncBillableAccounts($db),
+
             // Every barangay, not a top ten — see barangayBreakdown.
             'barangays' => $this->barangayBreakdown($db, $params),
 
@@ -279,6 +291,239 @@ class GowiserReportsDriver implements ReportsDriver
     }
 
     /**
+     * Every plan with its share of the subscriber base.
+     *
+     * Uncapped, unlike planMix beside it. That one feeds a top-ten league table
+     * and a cap is the right call there; this one feeds a pie chart and a
+     * distribution table whose percentages have to add to 100, and a top ten
+     * silently drops the tail they are computed over.
+     *
+     * The share is computed here rather than in React because the aggregate path
+     * merges several databases and has to recompute it against the fleet total —
+     * having one place that knows the formula is what stops the two disagreeing.
+     *
+     * LEFT JOIN so an account whose plan_id points at a deleted or renamed plan
+     * is still counted. Unmatched accounts are fuzzy-matched against the
+     * canonical plan list; anything that still does not match is grouped as
+     * "Unmapped / Legacy Plan" rather than dropped from the total.
+     */
+    private function planDistribution(ConnectionInterface $db): array
+    {
+        // Step 1 — the canonical records, before anything is counted. Every
+        // reported plan name comes from here, so a legacy string never becomes a
+        // slice of its own and splits one plan across two wedges.
+        $reconciler = PlanReconciler::fromCanonical(
+            $db->table('plan_list')->select('id', 'plan_name', 'price')->get()
+        );
+
+        // Accounts whose plan_id resolves. Grouped in SQL — this is the large
+        // population and it must never come back a row at a time.
+        $matched = $db->table('billing_accounts as ba')
+            ->join('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->whereRaw(StatusMap::excludeSql('bs.status_name'))
+            ->selectRaw('pl.id AS plan_id')
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('pl.id')
+            ->get();
+
+        $buckets = [];
+
+        foreach ($matched as $row) {
+            $plan = $reconciler->plan((int) $row->plan_id);
+
+            if ($plan === null) {
+                continue;
+            }
+
+            $buckets[$plan['id']] = [
+                'plan_id' => $plan['id'],
+                'label' => $plan['label'],
+                'price' => $plan['price'],
+                'count' => (int) $row->cnt,
+            ];
+        }
+
+        // Step 2 — the tail the migration left behind: no plan_id, or one
+        // pointing at a row that no longer exists. All that survives of what they
+        // are on is the customer's own free-text plan string, so it is grouped in
+        // SQL and reconciled in PHP. The group-by is what keeps this cheap: the
+        // result is one row per *distinct legacy string*, typically a handful,
+        // not one per account.
+        $legacy = $db->table('billing_accounts as ba')
+            ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->whereRaw(StatusMap::excludeSql('bs.status_name'))
+            ->whereNull('pl.id')
+            ->selectRaw("COALESCE(NULLIF(TRIM(c.desired_plan), ''), '') AS raw_plan")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('raw_plan')
+            ->get();
+
+        $unmapped = 0;
+        $unmappedSamples = [];
+
+        foreach ($legacy as $row) {
+            $count = (int) $row->cnt;
+            $raw = (string) $row->raw_plan;
+
+            $planId = $reconciler->match($raw);
+            $plan = $planId !== null ? $reconciler->plan($planId) : null;
+
+            if ($plan === null) {
+                // Step 3 — grouped, never dropped. An account with no
+                // identifiable plan is still a subscriber, and removing it from
+                // the denominator is how a pie chart comes to describe a base
+                // smaller than the headline count beside it.
+                $unmapped += $count;
+
+                if ($raw !== '' && count($unmappedSamples) < 8) {
+                    $unmappedSamples[] = $raw;
+                }
+
+                continue;
+            }
+
+            if (!isset($buckets[$plan['id']])) {
+                $buckets[$plan['id']] = [
+                    'plan_id' => $plan['id'],
+                    'label' => $plan['label'],
+                    'price' => $plan['price'],
+                    'count' => 0,
+                ];
+            }
+
+            $buckets[$plan['id']]['count'] += $count;
+        }
+
+        $items = array_values($buckets);
+
+        if ($unmapped > 0) {
+            $items[] = [
+                'plan_id' => null,
+                'label' => PlanReconciler::UNMAPPED_LABEL,
+                'price' => 0.0,
+                'count' => $unmapped,
+                // The strings that could not be placed, so the fix is a lookup
+                // away rather than a database trawl. Capped — this is a hint on
+                // a dashboard, not an export.
+                'samples' => $unmappedSamples,
+            ];
+        }
+
+        $total = array_sum(array_column($items, 'count'));
+
+        // Largest first: the pie reads clockwise from the biggest wedge.
+        usort($items, fn ($a, $b) => $b['count'] <=> $a['count']);
+
+        return array_map(fn ($item) => array_merge($item, [
+            'share_pct' => $total > 0 ? round($item['count'] / $total * 100, 1) : 0.0,
+        ]), $items);
+    }
+
+    /**
+     * Online, offline, restricted and disconnected over one row set.
+     *
+     * All four buckets are derived from `online_status.session_status`, not from
+     * the billing status. Billing status is used *only* to exclude rows that are
+     * not subscribers (pending, in progress, for activation) via
+     * StatusMap::excludeSql.
+     *
+     * The previous version took restricted and disconnected from the billing
+     * status, which meant a subscriber whose billing said "suspended" counted as
+     * restricted even when the network had already dropped them. The network
+     * session is the ground truth for whether an account is online, restricted or
+     * disconnected — billing is the ground truth for whether it is a subscriber.
+     *
+     * One left join, one pass. Every account SYNC counts as a subscriber lands in
+     * exactly one bucket:
+     *
+     *   1. Disconnected — session_status says disconnected, expired, offline_dc
+     *      or terminated.
+     *   2. Restricted — session_status says restricted or suspended.
+     *   3. Online — session_status says online, active or connected.
+     *   4. Offline — everything else: NULL, empty, unknown, or no matching
+     *      online_status row at all. Never having appeared on the network is the
+     *      strongest form of not being on it.
+     *
+     * Two diagnostics travel alongside, both *subsets of offline* rather than
+     * extra buckets, so the four still sum to the base:
+     *
+     *   not_found     SYNC's RADIUS sync writes this literal when the account's
+     *                 username is absent from RADIUS altogether (see
+     *                 RadiusStatusSyncService). That is a provisioning fault, not
+     *                 a subscriber who happens to be switched off, and rolling it
+     *                 into Offline without saying so hides a real backlog.
+     *   no_session_row  the account has never been written to online_status at
+     *                 all — usually a sync that has not run since the account was
+     *                 created.
+     */
+    private function networkStatus(ConnectionInterface $db): array
+    {
+        // Parenthesised rather than leaning on MySQL's NOT/AND precedence. The
+        // default precedence happens to be the one wanted here, but it inverts
+        // under HIGH_NOT_PRECEDENCE mode — and a server-mode flag silently
+        // swapping "online" and "disconnected" is not a failure anyone would
+        // trace back to this string.
+        $disconnected = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('disconnected', 'expired', 'offline_dc', 'terminated'))";
+        $restricted = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('restricted', 'suspended'))";
+        $live = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('online', 'active', 'connected'))";
+        $notFound = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('not found', 'not_found'))";
+        $noRow = '(os.account_id IS NULL)';
+
+        $row = $db->table('billing_accounts as ba')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->leftJoin('online_status as os', 'os.account_id', '=', 'ba.id')
+            ->whereRaw(StatusMap::excludeSql('bs.status_name'))
+            ->selectRaw("COALESCE(SUM({$disconnected}), 0) AS disconnected")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND {$restricted}), 0) AS restricted")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND (NOT {$restricted}) AND {$live}), 0) AS online")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND (NOT {$restricted}) AND (NOT {$live})), 0) AS offline")
+            ->selectRaw("COALESCE(SUM({$notFound}), 0) AS not_found")
+            ->selectRaw("COALESCE(SUM({$noRow}), 0) AS no_session_row")
+            ->selectRaw('COUNT(*) AS total')
+            ->first();
+
+        return [
+            'online' => (int) ($row->online ?? 0),
+            'offline' => (int) ($row->offline ?? 0),
+            'restricted' => (int) ($row->restricted ?? 0),
+            'disconnected' => (int) ($row->disconnected ?? 0),
+            'total' => (int) ($row->total ?? 0),
+            'not_found' => (int) ($row->not_found ?? 0),
+            'no_session_row' => (int) ($row->no_session_row ?? 0),
+        ];
+    }
+
+    /**
+     * Subscribers the SYNC platform fee is charged for.
+     *
+     * VIP and Pullout are excluded per the brief — the first is not billed and
+     * the second is not connected — along with the statuses StatusMap already
+     * rules out as not-a-subscriber. Excluded in SQL rather than by subtracting
+     * counts in PHP, so the headcount and the money computed from it can never
+     * be taken over different populations.
+     */
+    private function syncBillableAccounts(ConnectionInterface $db): int
+    {
+        $excluded = implode(', ', array_map(
+            fn (string $status) => "'" . str_replace("'", "''", $status) . "'",
+            SyncPricing::excludedStatuses()
+        ));
+
+        $query = $db->table('billing_accounts as ba')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->whereRaw(StatusMap::excludeSql('bs.status_name'));
+
+        if ($excluded !== '') {
+            $query->whereRaw("LOWER(TRIM(COALESCE(bs.status_name, ''))) NOT IN ({$excluded})");
+        }
+
+        return (int) $query->count();
+    }
+
+    /**
      * Monthly recurring charge the active base should bill.
      *
      * Left join so an active account whose plan row was deleted contributes
@@ -300,12 +545,25 @@ class GowiserReportsDriver implements ReportsDriver
      * coverage question, and a top ten drops exactly the thin coverage the
      * question is about. Sorting is left to the client so the same payload
      * serves a table sorted by any column.
+     *
+     * The four network columns (online, offline, restricted, disconnected) are
+     * derived from `online_status.session_status`, matching networkStatus(). The
+     * billing-status columns (active, vip, inactive, pullout) still come from
+     * billing_status.status_name via StatusMap::bucketSql.
      */
     private function barangayBreakdown(ConnectionInterface $db, array $params): array
     {
+        // Same logic as networkStatus: all four network columns come from the
+        // session_status column of online_status, not from billing_status.
+        // Parenthesised for the reason given there.
+        $disconnected = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('disconnected', 'expired', 'offline_dc', 'terminated'))";
+        $restricted = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('restricted', 'suspended'))";
+        $live = "(LOWER(TRIM(COALESCE(os.session_status, ''))) IN ('online', 'active', 'connected'))";
+
         $query = $db->table('customers as c')
             ->join('billing_accounts as ba', 'ba.customer_id', '=', 'c.id')
             ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->leftJoin('online_status as os', 'os.account_id', '=', 'ba.id')
             ->whereNotNull('c.barangay')
             ->where('c.barangay', '<>', '')
             ->whereRaw(StatusMap::excludeSql('bs.status_name'));
@@ -328,11 +586,10 @@ class GowiserReportsDriver implements ReportsDriver
             ->selectRaw(StatusMap::bucketSql('bs.status_name', 'vip') . ' AS vip')
             ->selectRaw(StatusMap::bucketSql('bs.status_name', 'inactive') . ' AS inactive')
             ->selectRaw(StatusMap::bucketSql('bs.status_name', 'pullout') . ' AS pullout')
-            ->selectRaw("COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'suspended'), 0) AS restricted")
-            ->selectRaw(
-                "COALESCE(SUM(LOWER(TRIM(COALESCE(bs.status_name, ''))) IN ('overdue', 'expired', 'disconnected')), 0)"
-                . ' AS disconnected'
-            )
+            ->selectRaw("COALESCE(SUM({$disconnected}), 0) AS disconnected")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND {$restricted}), 0) AS restricted")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND (NOT {$restricted}) AND {$live}), 0) AS online")
+            ->selectRaw("COALESCE(SUM((NOT {$disconnected}) AND (NOT {$restricted}) AND (NOT {$live})), 0) AS offline")
             ->groupBy('c.barangay', 'c.city', 'c.region')
             ->orderBy('c.barangay')
             ->get()
@@ -345,6 +602,8 @@ class GowiserReportsDriver implements ReportsDriver
                 'vip' => (int) $row->vip,
                 'inactive' => (int) $row->inactive,
                 'pullout' => (int) $row->pullout,
+                'online' => (int) $row->online,
+                'offline' => (int) $row->offline,
                 'restricted' => (int) $row->restricted,
                 'disconnected' => (int) $row->disconnected,
             ])
@@ -562,6 +821,10 @@ class GowiserReportsDriver implements ReportsDriver
                 'days_in_month' => $daysInMonth,
             ],
 
+            // Anchored on today rather than on the widget's range — see
+            // rollingIncome for why these two figures cannot follow it.
+            'rolling' => $this->rollingIncome($db, $anchor),
+
             'series' => $this->dailySeries($db, $from, $to, $expensePeriod),
             'trend' => [
                 'period' => $trendPeriod,
@@ -610,6 +873,86 @@ class GowiserReportsDriver implements ReportsDriver
 
             'periods' => $this->summaryPeriods($db, $anchor),
         ];
+    }
+
+    /**
+     * Month-to-date and last-seven-days collections, anchored on today.
+     *
+     * These deliberately ignore the widget's date range, which is the whole point
+     * of them. "Projected monthly income" is defined against the current month —
+     *
+     *     (income so far this month ÷ days elapsed this month) × days in month
+     *
+     * — and computing it from whatever window someone happened to select produces
+     * a projection of a month that is not the one being projected: on a Daily view
+     * it was one day's takings times thirty-one, which is not a forecast of
+     * anything. The old `kpi.daily_average` did exactly that, and still does,
+     * because the Financial module's own panel is about the selected range.
+     *
+     * The weekly average is a strict seven-day rolling figure — the last seven
+     * calendar days ending today, divided by seven, always. Not divided by "days
+     * with a collection", which would report the average of a busy day and call it
+     * a weekly rate; a Sunday with no counter takings is a real zero and belongs
+     * in the denominator.
+     *
+     * Both sides count counter transactions *and* portal payments, matching
+     * revenueStats — an income figure built from `transactions` alone understates
+     * collections by the whole online channel.
+     */
+    private function rollingIncome(ConnectionInterface $db, Carbon $anchor): array
+    {
+        $monthStart = $anchor->copy()->startOfMonth()->toDateString();
+        $today = $anchor->copy()->toDateString();
+
+        // Inclusive of both ends, so the first of the month is one day elapsed
+        // rather than zero — which would divide by zero on the 1st.
+        $daysElapsed = max(1, $anchor->copy()->startOfMonth()->diffInDays($anchor) + 1);
+        $daysInMonth = (int) $anchor->daysInMonth;
+
+        $monthIncome = $this->incomeBetween($db, $monthStart, $today);
+
+        // Seven calendar days ending today, today included: subDays(6), not (7),
+        // which would be an eight-day window divided by seven.
+        $weekIncome = $this->incomeBetween(
+            $db,
+            $anchor->copy()->subDays(6)->toDateString(),
+            $today
+        );
+
+        $dailyAverage = $monthIncome / $daysElapsed;
+
+        return [
+            'month_start' => $monthStart,
+            'as_of' => $today,
+            'month_income' => round($monthIncome, 2),
+            'days_elapsed' => $daysElapsed,
+            'days_in_month' => $daysInMonth,
+            'daily_average' => round($dailyAverage, 2),
+            'projected_monthly' => round($dailyAverage * $daysInMonth, 2),
+
+            'week_from' => $anchor->copy()->subDays(6)->toDateString(),
+            'week_income' => round($weekIncome, 2),
+            // Always seven. Named so the frontend can state the divisor rather
+            // than leaving a reader to assume it matched the days on screen.
+            'week_days' => 7,
+            'weekly_average' => round($weekIncome / 7, 2),
+        ];
+    }
+
+    /**
+     * Total collected in a date range, both income streams.
+     *
+     * Two queries rather than a union: the portal lives in its own table with its
+     * own column names resolved at runtime (see portalPayments), and forcing them
+     * into one statement would mean building the union SQL by string.
+     */
+    private function incomeBetween(ConnectionInterface $db, string $from, string $to): float
+    {
+        $counter = (float) $this->collectedTransactions($db)
+            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->sum('t.received_payment');
+
+        return $counter + $this->portalStats($db, $from, $to)['total'];
     }
 
     /**
@@ -1355,6 +1698,14 @@ class GowiserReportsDriver implements ReportsDriver
         $anchor = ReportPeriod::anchor($params['as_of'] ?? null);
         [$from, $to] = $this->range($params);
 
+        // Computed once and read twice: `queues` presents them as the operational
+        // pipeline and `work_streams` buckets the same rows into the executive
+        // vocabulary. Querying twice would be two round trips whose answers can
+        // differ if a row is written between them.
+        $applicationStatuses = $this->queueStatuses($db, 'applications', 'status', 'timestamp', $from, $to);
+        $jobStatuses = $this->queueStatuses($db, 'job_orders', 'onsite_status', 'timestamp', $from, $to);
+        $serviceStatuses = $this->queueStatuses($db, 'service_orders', 'support_status', 'timestamp', $from, $to);
+
         return [
             'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
@@ -1367,22 +1718,41 @@ class GowiserReportsDriver implements ReportsDriver
                 [
                     'key' => 'applications',
                     'label' => 'Applications',
-                    'statuses' => $this->queueStatuses($db, 'applications', 'status', 'timestamp', $from, $to),
+                    'statuses' => $applicationStatuses,
                     'backlog' => $this->queueBacklog($db, 'applications', 'status', 'timestamp'),
                 ],
                 [
                     'key' => 'job_orders',
                     'label' => 'Job Orders',
-                    'statuses' => $this->queueStatuses($db, 'job_orders', 'onsite_status', 'timestamp', $from, $to),
+                    'statuses' => $jobStatuses,
                     'backlog' => $this->queueBacklog($db, 'job_orders', 'onsite_status', 'timestamp'),
                 ],
                 [
                     'key' => 'service_orders',
                     'label' => 'Service Orders',
-                    'statuses' => $this->queueStatuses($db, 'service_orders', 'support_status', 'timestamp', $from, $to),
+                    'statuses' => $serviceStatuses,
                     'backlog' => $this->queueBacklog($db, 'service_orders', 'support_status', 'timestamp'),
                 ],
             ],
+
+            // The three streams the Executive Dashboard reports separately, each
+            // bucketed into the reporting vocabulary. See workStreams.
+            'work_streams' => $this->workStreams(
+                $applicationStatuses,
+                $jobStatuses,
+                $serviceStatuses
+            ),
+
+            // Day-by-day counts of all three, on one date axis.
+            'work_timeline' => $this->workTimeline($db, $from, $to),
+
+            // The same three queues counted on today / this week / this month,
+            // independent of the selected range. See workCadence.
+            'work_cadence' => $this->workCadence($db, $anchor),
+
+            // Resolution speed: what closed, and what has been waiting longest.
+            'resolution' => $this->resolutionSla($db, $anchor),
+
             'series' => $this->operationsSeries($db, $from, $to),
             'turnaround' => $this->operationsTurnaround($db, $from, $to),
 
@@ -1397,6 +1767,420 @@ class GowiserReportsDriver implements ReportsDriver
             'recent' => $this->recentJobOrders($db),
             'has_service_orders' => true,
         ];
+    }
+
+    /**
+     * Applications, job orders and service orders as three separate streams.
+     *
+     * Separate is the requirement, and it is not cosmetic. A blended "JO/SO"
+     * counter answers no question anyone asks: a new connection and a repair are
+     * different work, done by different queues, and a month where installations
+     * doubled while repairs halved looks identical to a flat one once they are
+     * summed. Each stream keeps its own status tally and its own raw breakdown.
+     *
+     * Applications additionally carry `total`, which is the brief's formula
+     * rather than a row count — see StatusBuckets::applicationTotal. Both are
+     * reported: `count` is how many applications exist in the range, `total` is
+     * the figure management asked for, and labelling either as the other is how
+     * two people end up quoting different numbers from the same screen.
+     */
+    private function workStreams(
+        array $applicationStatuses,
+        array $jobStatuses,
+        array $serviceStatuses
+    ): array {
+        $applications = StatusBuckets::tallyRows($applicationStatuses, StatusBuckets::applications());
+        $jobs = StatusBuckets::tallyRows($jobStatuses, StatusBuckets::workOrders());
+        $services = StatusBuckets::tallyRows($serviceStatuses, StatusBuckets::workOrders());
+
+        return [
+            'applications' => [
+                'key' => 'applications',
+                'label' => 'Applications',
+                'count' => $applications['total'],
+                'total' => StatusBuckets::applicationTotal($applications),
+                'buckets' => $applications,
+                'statuses' => $applicationStatuses,
+            ],
+            'job_orders' => [
+                'key' => 'job_orders',
+                'label' => 'Job Orders',
+                'count' => $jobs['total'],
+                'buckets' => $jobs,
+                'statuses' => $jobStatuses,
+            ],
+            'service_orders' => [
+                'key' => 'service_orders',
+                'label' => 'Service Orders',
+                'count' => $services['total'],
+                'buckets' => $services,
+                'statuses' => $serviceStatuses,
+            ],
+        ];
+    }
+
+    /**
+     * Applications, job orders and service orders per day, on one date axis.
+     *
+     * Three grouped counts rather than three-way join: the tables share no key
+     * that means "the same day" and joining on a date expression would drop days
+     * where one stream had no rows. Merged in PHP onto the union of the dates any
+     * stream saw, with the gaps filled as zeros so the chart draws a flat segment
+     * rather than skipping a day and implying the days beside it were adjacent.
+     *
+     * Bounded at one year. The chart is day-by-day and a longer window produces
+     * more points than pixels — and a query returning every application ever
+     * filed is not what a date filter set to "yearly" is asking for.
+     */
+    private function workTimeline(ConnectionInterface $db, string $from, string $to): array
+    {
+        $start = ReportPeriod::parse($from);
+        $end = ReportPeriod::parse($to);
+
+        if ($start === null || $end === null) {
+            return [];
+        }
+
+        if ($start->diffInDays($end) > 366) {
+            $start = $end->copy()->subDays(366);
+            $from = $start->toDateString();
+        }
+
+        $daily = function (string $table) use ($db, $from, $to) {
+            return $db->table($table)
+                ->whereBetween(DB::raw('DATE(timestamp)'), [$from, $to])
+                ->selectRaw("DATE_FORMAT(timestamp, '%Y-%m-%d') AS day")
+                ->selectRaw('COUNT(*) AS cnt')
+                ->groupBy('day')
+                ->pluck('cnt', 'day')
+                ->map(fn ($count) => (int) $count)
+                ->all();
+        };
+
+        $applications = $daily('applications');
+        $jobs = $daily('job_orders');
+        $services = $daily('service_orders');
+
+        $points = [];
+
+        // Every day in the window, not only the days with rows: a chart that
+        // skips empty days silently compresses a quiet week into a busy-looking
+        // one by putting its two points side by side.
+        for ($day = $start->copy(); $day->lte($end); $day->addDay()) {
+            $key = $day->toDateString();
+
+            $points[] = [
+                'period' => $key,
+                'label' => $day->format('M d'),
+                'applications' => $applications[$key] ?? 0,
+                'job_orders' => $jobs[$key] ?? 0,
+                'service_orders' => $services[$key] ?? 0,
+            ];
+        }
+
+        return $points;
+    }
+
+    /**
+     * All three queues counted on today, this week and this month at once.
+     *
+     * Deliberately ignores the page's date range. These figures answer "what
+     * happened today / this week / this month" and an executive reads all three
+     * side by side; making them follow a picker would mean the label "Installed
+     * Today" was only true when the picker happened to be set to today.
+     *
+     * One query per queue, not three. The union of the three windows is a single
+     * contiguous span, so each table is grouped by day *and* status over that
+     * span once and WorkCadence folds the result into the three tallies — see
+     * that class for why the arithmetic is done in PHP.
+     *
+     * Rows are dated on `updated_at`, falling back to `timestamp` then
+     * `created_at`, because these labels are about work that reached a state,
+     * not work that was filed.
+     */
+    private function workCadence(ConnectionInterface $db, Carbon $anchor): array
+    {
+        $floor = WorkCadence::floor($anchor);
+
+        // Half-open upper bound: the day after the anchor at midnight. Comparing
+        // against '<' next-midnight catches every time on the anchor day without
+        // wrapping the column in DATE(), which would make the predicate
+        // unindexable.
+        $ceil = $anchor->copy()->startOfDay()->addDay();
+
+        return [
+            'windows' => WorkCadence::windows($anchor),
+
+            // The executive partition, not the operational one: "no facility" is
+            // a pending action here rather than a failure. See
+            // StatusBuckets::applicationCadence.
+            'applications' => WorkCadence::tally(
+                $this->cadenceRows($db, 'applications', 'status', $floor, $ceil),
+                StatusBuckets::applicationCadence(),
+                $anchor
+            ),
+
+            'job_orders' => WorkCadence::tally(
+                $this->cadenceRows($db, 'job_orders', 'onsite_status', $floor, $ceil),
+                StatusBuckets::workOrders(),
+                $anchor
+            ),
+
+            'service_orders' => WorkCadence::tally(
+                $this->cadenceRows($db, 'service_orders', 'support_status', $floor, $ceil),
+                StatusBuckets::workOrders(),
+                $anchor
+            ),
+        ];
+    }
+
+    /**
+     * One queue as {day, status, count} rows over the cadence span.
+     *
+     * @return array<int,array{day:string,label:string,count:int}>
+     */
+    private function cadenceRows(
+        ConnectionInterface $db,
+        string $table,
+        string $statusColumn,
+        Carbon $floor,
+        Carbon $ceil
+    ): array {
+        $columns = $this->effectiveDateColumns($db, $table);
+
+        if ($columns === []) {
+            return [];
+        }
+
+        $dateSql = $this->effectiveDateSql($columns);
+
+        $query = $db->table($table)
+            ->selectRaw("DATE({$dateSql}) AS day")
+            ->selectRaw("COALESCE(NULLIF(TRIM({$statusColumn}), ''), 'Unspecified') AS label")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('day', 'label');
+
+        $this->whereEffectiveDate($query, $columns, $floor, $ceil);
+
+        return $query->get()
+            ->map(fn ($row) => [
+                'day' => (string) $row->day,
+                'label' => (string) $row->label,
+                'count' => (int) $row->cnt,
+            ])
+            ->all();
+    }
+
+    /**
+     * The date columns this table actually has, in the brief's order of
+     * preference.
+     *
+     * Resolved against the live schema rather than assumed, because the two
+     * monitored systems are at different migration levels and a hard-coded
+     * `updated_at` turns one missing column into a failed section.
+     *
+     * @return string[]
+     */
+    private function effectiveDateColumns(ConnectionInterface $db, string $table): array
+    {
+        try {
+            $schema = $db->getSchemaBuilder();
+
+            if (!$schema->hasTable($table)) {
+                return [];
+            }
+
+            return array_values(array_filter(
+                WorkCadence::DATE_COLUMNS,
+                fn ($column) => $schema->hasColumn($table, $column)
+            ));
+        } catch (\Throwable $e) {
+            report($e);
+
+            return [];
+        }
+    }
+
+    /** COALESCE over the resolved columns, for SELECT and GROUP BY. */
+    private function effectiveDateSql(array $columns): string
+    {
+        return count($columns) === 1
+            ? $columns[0]
+            : 'COALESCE(' . implode(', ', $columns) . ')';
+    }
+
+    /**
+     * "The row's effective date falls in [floor, ceil)", written so an index can
+     * still be used.
+     *
+     * COALESCE(...) BETWEEN ... would be the short way to say this and would
+     * force a full scan of every queue table on every dashboard open. Instead
+     * each candidate column gets its own branch — "updated_at is in range", or
+     * "updated_at is null and timestamp is in range", and so on — which MySQL can
+     * satisfy from the per-column indexes and combine. The branches are mutually
+     * exclusive by construction, so no row is counted twice.
+     *
+     * @param string[] $columns
+     */
+    private function whereEffectiveDate(Builder $query, array $columns, Carbon $floor, Carbon $ceil): void
+    {
+        $from = $floor->toDateTimeString();
+        $to = $ceil->toDateTimeString();
+
+        $query->where(function ($outer) use ($columns, $from, $to) {
+            foreach ($columns as $index => $column) {
+                // Everything ahead of this column in the preference order must be
+                // null, or the row belongs to that earlier branch instead.
+                $earlier = array_slice($columns, 0, $index);
+
+                $outer->orWhere(function ($branch) use ($column, $earlier, $from, $to) {
+                    foreach ($earlier as $nullColumn) {
+                        $branch->whereNull($nullColumn);
+                    }
+
+                    $branch->whereNotNull($column)
+                        ->where($column, '>=', $from)
+                        ->where($column, '<', $to);
+                });
+            }
+        });
+    }
+
+    /**
+     * Resolution speed: the ticket that has been waiting longest.
+     *
+     * "Completed & Closed" is not queried here — it is the `done` bucket the
+     * cadence above already counted, and asking the database a second time for a
+     * figure it just returned is how two numbers on one screen come to disagree.
+     * ExecutiveOverviewService composes it.
+     *
+     * Age is measured from when the ticket was *raised* (`timestamp`, then
+     * `created_at`), not from `updated_at`. "Outstanding for 34 days" is a claim
+     * about how long a customer has been waiting; measuring from the last touch
+     * would reset that clock every time somebody opened the record.
+     */
+    private function resolutionSla(ConnectionInterface $db, Carbon $anchor): array
+    {
+        $candidates = array_filter([
+            $this->longestOutstanding($db, 'job_orders', 'onsite_status', $anchor),
+            $this->longestOutstanding($db, 'service_orders', 'support_status', $anchor),
+        ]);
+
+        if ($candidates === []) {
+            return ['longest_outstanding' => null];
+        }
+
+        // The single oldest across both queues. An executive asks "what is the
+        // worst one", not "what is the worst one of each kind".
+        usort($candidates, fn ($a, $b) => $b['hours'] <=> $a['hours']);
+
+        return ['longest_outstanding' => $candidates[0]];
+    }
+
+    /**
+     * The oldest still-open row in one queue, with who it belongs to.
+     *
+     * Open means "in no bucket that ends the ticket" — not done, not failed. It
+     * is defined by subtraction so that a status nobody has classified yet still
+     * counts as outstanding: a ticket in an unrecognised state is exactly the
+     * one worth surfacing, and treating unknown as closed would hide it.
+     *
+     * @return array{queue:string,label:string,reference:string,account_no:string,customer:string,status:string,opened_at:string,hours:int,days:int}|null
+     */
+    private function longestOutstanding(
+        ConnectionInterface $db,
+        string $table,
+        string $statusColumn,
+        Carbon $anchor
+    ): ?array {
+        try {
+            $schema = $db->getSchemaBuilder();
+
+            if (!$schema->hasTable($table)) {
+                return null;
+            }
+
+            // Raised-at, not touched-at. See resolutionSla.
+            $openedColumns = array_values(array_filter(
+                ['timestamp', 'created_at'],
+                fn ($column) => $schema->hasColumn($table, $column)
+            ));
+
+            if ($openedColumns === []) {
+                return null;
+            }
+
+            $openedSql = $this->effectiveDateSql($openedColumns);
+
+            $buckets = StatusBuckets::workOrders();
+
+            // The raw statuses that mean the ticket is finished, lower-cased for
+            // a case-insensitive NOT IN.
+            $closed = [];
+
+            foreach (['done', 'failed'] as $bucket) {
+                foreach ((array) ($buckets[$bucket] ?? []) as $member) {
+                    $closed[] = strtolower(trim((string) $member));
+                }
+            }
+
+            $query = $db->table("{$table} as q")
+                ->selectRaw("{$openedSql} AS opened_at")
+                ->selectRaw("COALESCE(NULLIF(TRIM(q.{$statusColumn}), ''), 'Unspecified') AS status")
+                ->whereNotNull(DB::raw($openedSql))
+                ->orderBy('opened_at');
+
+            if ($closed !== []) {
+                $query->whereRaw(
+                    'LOWER(TRIM(COALESCE(q.' . $statusColumn . ", ''))) NOT IN (" .
+                        implode(', ', array_fill(0, count($closed), '?')) . ')',
+                    $closed
+                );
+            }
+
+            // The two queues reach the customer by different keys: job orders
+            // carry the account id, service orders carry the account number as
+            // text. Neither is guaranteed to resolve, so both joins are left
+            // joins and a ticket with no matching account still reports.
+            if ($table === 'job_orders') {
+                $query->leftJoin('billing_accounts as ba', 'ba.id', '=', 'q.account_id');
+            } else {
+                $query->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 'q.account_no');
+            }
+
+            $row = $query
+                ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+                ->addSelect('ba.account_no', 'c.first_name', 'c.last_name')
+                ->addSelect(DB::raw('q.id AS reference'))
+                ->first();
+
+            if ($row === null || empty($row->opened_at)) {
+                return null;
+            }
+
+            $opened = Carbon::parse($row->opened_at);
+
+            // Clamped at zero: a row dated in the future — a mistyped year, which
+            // happens — would otherwise report a negative age and sort to the top
+            // of the "longest outstanding" list.
+            $hours = max(0, $opened->diffInHours($anchor->copy()->endOfDay(), false));
+
+            return [
+                'queue' => $table,
+                'label' => $table === 'job_orders' ? 'Installation' : 'Repair',
+                'reference' => (string) ($row->reference ?? ''),
+                'account_no' => (string) ($row->account_no ?? ''),
+                'customer' => $this->fullName($row->first_name ?? '', $row->last_name ?? ''),
+                'status' => (string) $row->status,
+                'opened_at' => $opened->toDateTimeString(),
+                'hours' => $hours,
+                'days' => intdiv($hours, 24),
+            ];
+        } catch (\Throwable $e) {
+            report($e);
+
+            return null;
+        }
     }
 
     /** Rows opened in the range, grouped by their current status. */

@@ -316,7 +316,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 className="portal-title"
                 style={{ fontSize: '34px', fontWeight: 700, marginBottom: '15px', color: palette.primary }}
               >
-                Monitoring Portal
+                Executive Dashboard
               </h2>
               <p style={{ fontSize: '16px', color: '#6b7280', maxWidth: '340px', lineHeight: 1.6 }}>
                 Consolidated performance across every operating database. Read-only by design — nothing

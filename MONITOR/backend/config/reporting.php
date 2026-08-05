@@ -163,6 +163,170 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Sync price per customer
+    |--------------------------------------------------------------------------
+    |
+    | SYNC is licensed per subscriber, so the platform fee is a headcount times a
+    | rate rather than a line in anyone's expenses ledger. It is therefore not in
+    | `expenses_logs` and cannot be — MONITOR reads the operating databases and
+    | never writes to them — which is why the rate lives here and the count is
+    | derived.
+    |
+    | 'default' is the fallback rate. The live rate is an operator-editable
+    | setting (App\Models\AppSetting, key `sync_price_per_customer`), because it
+    | is renegotiated more often than this file is deployed; this value is only
+    | what a fresh installation starts on.
+    |
+    | 'excluded_statuses' are billing statuses that are not billed for SYNC.
+    | Matched case-insensitively against the *raw* status names the source system
+    | holds, so both spellings of Pullout are listed. VIP and Pullout come from
+    | the brief: a VIP account is not charged for and a pulled-out one is not
+    | connected, and counting either inflates a figure that lands under Expenses.
+    |
+    | Left at 0, the whole block is reported as unconfigured rather than as a
+    | ₱0.00 expense — those read very differently under a Net Income figure.
+    |
+    */
+
+    'sync_price' => [
+        'default' => env('REPORTING_SYNC_PRICE', 0),
+        'excluded_statuses' => ['vip', 'pullout', 'pulled out'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Hosting fee
+    |--------------------------------------------------------------------------
+    |
+    | A flat monthly infrastructure charge, and the second cost that exists in no
+    | monitored ledger. Unlike the SYNC fee it carries no multiplier — it is one
+    | negotiated amount, not a rate times a headcount.
+    |
+    | Same split as sync_price: this is only the fallback a fresh installation
+    | starts on. The live figure is an operator-editable setting
+    | (App\Models\AppSetting, key `hosting_fee_monthly`), because it is
+    | renegotiated more often than this file is deployed.
+    |
+    | Left at 0 the Expenses panel reports it as unconfigured rather than as a
+    | ₱0.00 line — under a Net Income figure those read very differently.
+    |
+    */
+
+    'hosting_fee' => [
+        'default' => env('REPORTING_HOSTING_FEE', 0),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application status buckets
+    |--------------------------------------------------------------------------
+    |
+    | The Applications counter is
+    |
+    |     (rescheduled + in progress + new apply) − failed
+    |
+    | which is a reporting vocabulary, not SYNC's. SYNC's `applications.status` is
+    | free text an operator picks from a dropdown — 'pending', 'schedule', 'no
+    | facility', 'no slot', 'duplicate', 'in progress', 'completed' — and the four
+    | reporting buckets are rolled up from it here rather than in SQL, so a status
+    | added to that dropdown is a config line instead of a deploy.
+    |
+    | Matched case-insensitively against the whole trimmed status, not as a
+    | substring: 'no slot' and 'slot' would otherwise both match the same rows.
+    |
+    | A status in none of these buckets still appears in the status breakdown but
+    | contributes to neither side of the formula. That is deliberate — silently
+    | folding an unrecognised status into 'new apply' is how a workflow state
+    | nobody has modelled ends up inflating the headline.
+    |
+    */
+
+    'application_buckets' => [
+        'rescheduled' => ['reschedule', 'rescheduled', 'jo reschedule', 'jo rescheduled'],
+        'in_progress' => ['in progress', 'in_progress', 'ongoing', 'schedule', 'scheduled'],
+        'new_apply' => ['new apply', 'new', 'pending', 'for approval', 'submitted'],
+        'failed' => ['failed', 'cancelled', 'canceled', 'rejected', 'no facility', 'no slot', 'duplicate'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application buckets, as the Executive Dashboard words them
+    |--------------------------------------------------------------------------
+    |
+    | A second partition of the same `applications.status` values, for the "New
+    | Customer Applications" card. It exists separately from the set above rather
+    | than replacing it because the two genuinely divide the statuses along
+    | different lines, and both divisions are wanted:
+    |
+    |   - `application_buckets` is the operational view. "No facility" is a
+    |     failure there, because the queue could not deliver.
+    |
+    |   - this set is the executive view. "No facility" is not a failure but a
+    |     *pending action* — the customer still wants service and the answer is a
+    |     build, not a cancellation. Filing it under failures is how demand in
+    |     unbuilt areas becomes invisible to the people who authorise builds.
+    |
+    | Rescheduled applications are counted as Scheduled for Setup. A rescheduled
+    | application is still scheduled, only re-dated, and the card has no tile of
+    | its own for them — leaving them unbucketed would drop them into `other`
+    | where nobody reads them.
+    |
+    | Anything matching nothing here still lands in `other` and is still counted
+    | in the total, so a status added to the app shows up as an unexplained gap
+    | rather than being silently absorbed. See StatusBuckets.
+    |
+    */
+
+    'application_cadence_buckets' => [
+        'newly_applied' => ['new apply', 'new', 'submitted', 'applied'],
+        'scheduled_for_setup' => [
+            'in progress', 'in_progress', 'ongoing', 'schedule', 'scheduled', 'processed',
+            'approved', 'for installation', 'reschedule', 'rescheduled', 'jo reschedule',
+            'jo rescheduled',
+        ],
+        'to_be_processed' => ['pending', 'for approval', 'for processing', 'to be processed', 'for verification'],
+        'no_facility' => ['no facility', 'no facility available', 'no slot', 'out of coverage', 'no coverage'],
+        'cancelled' => ['cancelled', 'canceled', 'rejected', 'failed', 'duplicate', 'void', 'declined'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Plans that are not charged for
+    |--------------------------------------------------------------------------
+    |
+    | Substrings that mark a plan as a free connection, matched case-insensitively
+    | against the reconciled plan name. The Group Overview reports these beside
+    | the VIP billing status, because an account can be exempted either way and
+    | management asks for the count of everyone who is not paying.
+    |
+    | Substring rather than exact match: the same plan is spelled "VIP",
+    | "VIP FREE" and "VIP - FREE" across the migrated data, and listing every
+    | spelling is a losing game.
+    |
+    */
+
+    'free_connection_plans' => ['vip', 'free'],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Work-order status buckets
+    |--------------------------------------------------------------------------
+    |
+    | The same idea for job orders (`onsite_status`) and service orders
+    | (`support_status`), which the Executive Dashboard reports as two separate
+    | streams rather than one blended JO/SO figure.
+    |
+    */
+
+    'work_order_buckets' => [
+        'done' => ['done', 'completed', 'resolved', 'approved', 'closed'],
+        'reschedule' => ['reschedule', 'rescheduled', 'follow up', 'follow-up'],
+        'failed' => ['failed', 'cancelled', 'canceled', 'unresolved', 'no facility', 'no slot'],
+        'in_progress' => ['in progress', 'in_progress', 'ongoing', 'pending', 'new', 'open', 'assigned', 'scheduled', 'schedule'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Capital expenditure
     |--------------------------------------------------------------------------
     |

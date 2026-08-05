@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\DatabaseConnectionController;
 use App\Http\Controllers\Api\ExecutiveOverviewController;
 use App\Http\Controllers\Api\FinancialsController;
+use App\Http\Controllers\Api\MikrotikController;
 use App\Http\Controllers\Api\MonitorController;
 use App\Http\Controllers\Api\PayableController;
 use App\Http\Controllers\Api\ReportingController;
@@ -118,15 +119,22 @@ Route::middleware(['auth', 'executive'])->prefix('reporting')->group(function ()
 });
 
 /*
- * Module 5 — the consolidated C-suite summary.
+ * Module 5 — the Executive Dashboard.
  *
  * Composed from the sections above rather than from its own SQL, so it can never
  * disagree with the modules it summarises. The controller enforces a role check
  * on top of the module permission: this view puts every company's figures on one
  * page, which is not access a custom role should acquire sideways.
+ *
+ * `work-streams` is the same view's Applications / Job Orders / Service Orders
+ * widgets, which each carry an independent date range. It is a separate endpoint
+ * so moving one of those ranges does not re-run the financial fan-out behind the
+ * rest of the page, which is by far the most expensive part of it and does not
+ * change when someone puts Service Orders on the month.
  */
 Route::middleware(['auth', 'executive'])->group(function () {
     Route::get('/executive/overview', [ExecutiveOverviewController::class, 'show']);
+    Route::get('/executive/work-streams', [ExecutiveOverviewController::class, 'workStreams']);
 });
 
 /*
@@ -159,6 +167,14 @@ Route::middleware('auth')->group(function () {
         Route::post('/settings/logo', [SettingsController::class, 'uploadLogo']);
         Route::delete('/settings/logo', [SettingsController::class, 'deleteLogo']);
 
+        // The SYNC platform fee, which lands under Expenses on the Executive
+        // Dashboard and therefore inside Net Income. Behind the same grant as
+        // the branding writes because it changes a figure for everyone.
+        Route::put('/settings/sync-price', [SettingsController::class, 'updateSyncPrice']);
+
+        // The hosting fee, a flat monthly infrastructure charge. Same grant.
+        Route::put('/settings/hosting-fee', [SettingsController::class, 'updateHostingFee']);
+
         Route::post('/settings/palettes', [SettingsController::class, 'storePalette']);
         Route::put('/settings/palettes/{palette}', [SettingsController::class, 'updatePalette']);
         Route::post('/settings/palettes/{palette}/activate', [SettingsController::class, 'activatePalette']);
@@ -179,6 +195,42 @@ Route::middleware('auth')->group(function () {
                 ->middleware('permission:' . Permissions::ACTION_ROLES_MANAGE);
         });
 });
+
+/*
+ * Mikrotik Radius Shortcut.
+ *
+ * The only routes in MONITOR that change something outside MONITOR. Everything
+ * else here reads a monitored database or writes to a local settings table; these
+ * reach a live router and can disconnect subscribers.
+ *
+ * Three grants, not one, and the split is the safety property:
+ *
+ *   MODULE_MIKROTIK          read the User Manager
+ *   ACTION_MIKROTIK_WRITE    change a group's rate limit or framed pool
+ *   ACTION_MIKROTIK_KICK     terminate live sessions
+ *
+ * Granting somebody the tab therefore does not grant them the ability to cut a
+ * region off, which a single permission covering the whole feature would.
+ *
+ * Deliberately outside the 'executive' group: that middleware enforces the
+ * read-only guarantee the reporting pages rely on, and these endpoints are the
+ * documented exception to it rather than a hole in it.
+ */
+Route::middleware(['auth', 'permission:' . Permissions::MODULE_MIKROTIK])
+    ->prefix('mikrotik')
+    ->group(function () {
+        Route::get('/', [MikrotikController::class, 'index']);
+        Route::get('/users', [MikrotikController::class, 'users']);
+
+        Route::put('/groups/{group}', [MikrotikController::class, 'updateGroup'])
+            ->middleware('permission:' . Permissions::ACTION_MIKROTIK_WRITE);
+
+        Route::middleware('permission:' . Permissions::ACTION_MIKROTIK_KICK)->group(function () {
+            Route::post('/kick/now', [MikrotikController::class, 'kickNow']);
+            Route::post('/kick/later', [MikrotikController::class, 'kickLater']);
+            Route::delete('/kick/{kick}', [MikrotikController::class, 'cancelKick']);
+        });
+    });
 
 /*
  * Databases configuration.
