@@ -18,6 +18,41 @@ use App\Models\ActivityLog;
 class CustomerDetailUpdateController extends Controller
 {
     /**
+     * Fallback VIP billing status id.
+     *
+     * Matches the hard-coded value in the vip:check-expiration command and in
+     * {@see \App\Services\EnhancedBillingGenerationServiceWithNotifications}. Only used when the
+     * billing_status table cannot be read or has no row named 'VIP'.
+     */
+    private const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id, looked up once per request. */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Resolved by name so a reordered status table cannot silently break VIP detection, with the
+     * historical id as the fallback.
+     */
+    private function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
+        }
+
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
      * Unified update method dispatches based on editType
      */
     public function update(Request $request, $accountNo): JsonResponse
@@ -288,6 +323,11 @@ class CustomerDetailUpdateController extends Controller
 
             $billingAccount = BillingAccount::where('account_no', $accountNo)->firstOrFail();
 
+            // Held apart from the audit diff below because the VIP reconnect decision after the
+            // commit needs the pre-update status, and $oldBillingDetails only survives as far as
+            // the changed-fields comparison.
+            $oldBillingStatusId = (int) $billingAccount->billing_status_id;
+
             // Capture old billing details before update
             $oldBillingDetails = [
                 'billing_status_id' => $billingAccount->billing_status_id,
@@ -322,7 +362,12 @@ class CustomerDetailUpdateController extends Controller
                             'Disconnected' => 2,
                             'Pending' => 3,
                             'Terminated' => 4,
-                            'Suspended' => 5
+                            'Suspended' => 5,
+                            // Without this, a client posting the NAME 'VIP' while the
+                            // billing_status lookup above came back empty would fall through and
+                            // silently keep the account on its old status — comping a customer
+                            // would appear to succeed and change nothing.
+                            'VIP' => self::BILLING_STATUS_VIP_FALLBACK,
                         ];
                         $billingStatusId = $statusMap[$validated['billing_status_id']] ?? $billingStatusId;
                     }
@@ -492,10 +537,60 @@ class CustomerDetailUpdateController extends Controller
 
             $this->broadcastCustomerUpdated($accountNo, 'billing_details');
 
+            /*
+             * Comping a customer has to actually restore their service.
+             *
+             * Setting the billing status to VIP is how an account is comped, but on its own it
+             * only stops future billing — it does nothing to RADIUS. An account that reached VIP
+             * from Inactive/Disconnected (the usual reason to comp someone) is still sitting in
+             * the Restricted RADIUS group with no session, so the customer stays offline while
+             * the record claims they are a VIP. This closes that gap by moving them back onto
+             * their plan group as soon as the status change commits.
+             *
+             * Strictly a non-VIP -> VIP transition: re-saving the billing form on an account that
+             * is already VIP must not fire a fresh RADIUS round-trip (and a fresh
+             * reconnection_logs row) every time an unrelated field is edited.
+             *
+             * Deliberately after DB::commit(): the billing update is the customer's record of
+             * being comped and must survive a RADIUS server that is down, so nothing below can
+             * roll it back.
+             */
+            $newBillingStatusId = (int) $billingAccount->billing_status_id;
+            $vipStatusId = $this->getVipBillingStatusId();
+            $becameVip = ($newBillingStatusId === $vipStatusId && $oldBillingStatusId !== $vipStatusId);
+
+            $radiusMessage = null;
+            $radiusQueued = false;
+
+            if ($becameVip) {
+                Log::info('Billing status changed to VIP — restoring RADIUS service', [
+                    'account_no' => $accountNo,
+                    'billing_account_id' => $billingAccount->id,
+                    'old_status' => $oldBillingStatusId,
+                    'new_status' => $newBillingStatusId,
+                    'vip_expiration' => $billingAccount->vip_expiration,
+                    'updated_by' => $request->input('updatedBy'),
+                ]);
+
+                $reconnectOutcome = $this->reconnectAccountForVip(
+                    $billingAccount,
+                    $oldBillingStatusId,
+                    $newBillingStatusId,
+                    $request->input('updatedBy') ?: 'System'
+                );
+
+                $radiusMessage = $reconnectOutcome['message'];
+                $radiusQueued = $reconnectOutcome['queued'];
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Billing status updated successfully',
-                'data' => $billingAccount->fresh()
+                'data' => $billingAccount->fresh(),
+                // Null on every non-VIP edit, so existing clients see the response they always
+                // did. Mirrors the shape updateTechnicalDetails() already returns.
+                'radius_message' => $radiusMessage,
+                'radius_queued' => $radiusQueued
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -804,6 +899,156 @@ class CustomerDetailUpdateController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Restore RADIUS service for an account that was just moved onto the VIP billing status.
+     *
+     * Moves the RADIUS user back into its plan group and kills any stale session so the new
+     * profile takes effect immediately — the same mechanism the payment pipelines use to
+     * reactivate a customer who has paid, minus the billing status write.
+     *
+     * Best-effort by contract. The caller has already committed the billing change, so every
+     * failure path here reports back rather than throwing: a RADIUS server that is down must
+     * never undo a record of the customer being comped. Failures are queued for the
+     * ProcessRadiusQueue cron to retry, matching how the rest of this controller handles RADIUS.
+     *
+     * @return array{message: string, queued: bool} Human-readable outcome for the API response.
+     */
+    private function reconnectAccountForVip(
+        BillingAccount $billingAccount,
+        int $oldStatusId,
+        int $newStatusId,
+        string $updatedBy
+    ): array {
+        $accountNo = $billingAccount->account_no;
+
+        $logContext = [
+            'account_no' => $accountNo,
+            'billing_account_id' => $billingAccount->id,
+            'old_status' => $oldStatusId,
+            'new_status' => $newStatusId,
+            'updated_by' => $updatedBy,
+        ];
+
+        // Resolve the PPPoE username and the plan to reconnect onto. plan_list is the plan the
+        // account is actually on; customers.desired_plan is the fallback, and is what the
+        // payment-driven reconnect paths (PaymentWorkerService, ServiceOrderController) read.
+        try {
+            $details = DB::table('billing_accounts')
+                ->leftJoin('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->leftJoin('technical_details', 'billing_accounts.id', '=', 'technical_details.account_id')
+                ->leftJoin('plan_list', 'billing_accounts.plan_id', '=', 'plan_list.id')
+                ->where('billing_accounts.id', $billingAccount->id)
+                ->select(
+                    'technical_details.username as username',
+                    'plan_list.plan_name as plan_title',
+                    'customers.desired_plan as desired_plan'
+                )
+                ->first();
+        } catch (\Throwable $e) {
+            Log::error('VIP reconnect aborted — failed to load technical/plan details', array_merge($logContext, [
+                'error' => $e->getMessage(),
+            ]));
+
+            return [
+                'message' => 'Account set to VIP, but its technical details could not be read so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        $username = $details->username ?? null;
+        $planTitle = ($details->plan_title ?? null) ?: ($details->desired_plan ?? null);
+
+        // Not error cases: the billing status is committed and correct either way. An account
+        // with no RADIUS user (or no plan to put it in) simply has nothing to reconnect, and
+        // gets provisioned onto its plan group by the normal install flow.
+        if (empty($username)) {
+            Log::warning('VIP reconnect skipped — no PPPoE username on technical_details', $logContext);
+
+            return [
+                'message' => 'Account set to VIP. No PPPoE username on file, so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        if (empty($planTitle)) {
+            Log::warning('VIP reconnect skipped — no plan on the account or customer', array_merge($logContext, [
+                'username' => $username,
+            ]));
+
+            return [
+                'message' => 'Account set to VIP. No plan on file, so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        $params = [
+            'accountNumber' => $accountNo,
+            'username' => $username,
+            'plan' => $planTitle,
+            'updatedBy' => $updatedBy,
+            'remarks' => 'VIP Status Applied - Auto Reconnect',
+            // This controller committed the VIP status a moment ago; without this the reconnect
+            // would write Active straight over it, un-comping the customer it was called to comp.
+            // See ManualRadiusOperationsService::reconnectUser().
+            'preserveBillingStatus' => true,
+        ];
+
+        $error = null;
+
+        try {
+            $result = app(\App\Services\ManualRadiusOperationsService::class)->reconnectUser($params);
+
+            if (($result['status'] ?? '') === 'success') {
+                Log::info('VIP reconnect succeeded', array_merge($logContext, [
+                    'username' => $username,
+                    'plan' => $planTitle,
+                ]));
+
+                return [
+                    'message' => 'Account set to VIP and RADIUS service restored.',
+                    'queued' => false,
+                ];
+            }
+
+            $error = $result['message'] ?? 'RADIUS reconnect returned failure';
+        } catch (\Throwable $e) {
+            // reconnectUser() normally returns a status rather than throwing, but stay defensive
+            // so a RADIUS glitch can never surface as a 500 on an already-committed update.
+            $error = $e->getMessage();
+        }
+
+        Log::error('VIP reconnect failed — queueing for retry', array_merge($logContext, [
+            'username' => $username,
+            'plan' => $planTitle,
+            'error' => $error,
+        ]));
+
+        \Log::channel('radiusrelated')->error('[VIP RECONNECT FAILED - QUEUED] Account: ' . $accountNo . ' - User: ' . $username . ' - Error: ' . $error);
+
+        $queuedId = \App\Services\RadiusQueueService::queue([
+            'organization_id' => $billingAccount->organization_id ?? null,
+            'source_type'     => 'vip_billing_update',
+            'source_id'       => $billingAccount->id,
+            'account_no'      => $accountNo,
+            'operation'       => 'reconnect_user',
+            'params'          => $params,
+            'last_error'      => $error,
+            'created_by'      => $updatedBy,
+        ]);
+
+        if ($queuedId) {
+            return [
+                'message' => 'Account set to VIP. RADIUS reconnect has been queued and will be processed automatically.',
+                'queued' => true,
+            ];
+        }
+
+        return [
+            'message' => 'Account set to VIP, but the RADIUS reconnect failed and could not be queued. Please notify an administrator to reconnect this account manually.',
+            'queued' => false,
+        ];
     }
 
     /**

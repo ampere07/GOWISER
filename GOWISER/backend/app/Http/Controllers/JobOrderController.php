@@ -1263,7 +1263,9 @@ class JobOrderController extends Controller
             // prepaid onboarding — the Inactive starting status here, and the initial billing plus
             // RADIUS restriction after the commit below — so a VIP customer who signed up under a
             // prepaid billing type is left in service instead of being restricted at approval.
-            $isVipApproval = (bool) $jobOrder->vip_enabled;
+            // Coalesced so a job order predating the vip_enabled column reads as an ordinary
+            // approval instead of tripping on a missing attribute.
+            $isVipApproval = (bool) ($jobOrder->vip_enabled ?? false);
 
             // Prepaid accounts start Inactive (pay-first): the customer must pay their initial
             // bill before service is granted. Setting the status inside the committed transaction
@@ -1519,6 +1521,95 @@ class JobOrderController extends Controller
                         'job_order_id' => $id,
                         'account_no' => $accountNumber,
                         'error' => $restrictEx->getMessage(),
+                    ]);
+                }
+            }
+
+            /*
+             * VIP new install: put the customer into service.
+             *
+             * Skipping restrictedUser() above is NOT enough on its own. Every PPPoE account is
+             * provisioned into the Restricted RADIUS group when the job order is marked Done
+             * ({@see createRadiusAccountInternal()}, restricted-by-default), and the only thing
+             * that has ever moved a user out of it is a payment landing. A VIP never pays, so
+             * without this the account is created Active with no bill and no restriction call —
+             * and the customer still has no service, because their RADIUS user is sitting in the
+             * Restricted group that nothing will ever move them out of.
+             *
+             * This is the one path that moves a VIP onto their plan group at approval, which is
+             * what "VIP new installs are never restricted" actually requires.
+             *
+             * Best-effort, mirroring the prepaid block above: the approval is already committed,
+             * so a RADIUS failure is queued for the ProcessRadiusQueue cron rather than being
+             * allowed to undo the approval.
+             */
+            if ($isVipApproval) {
+                $vipReconnectParams = [
+                    'accountNumber' => $accountNumber,
+                    'username' => $generatedUsername,
+                    'plan' => $application->desired_plan,
+                    'updatedBy' => $actionUserEmail,
+                    'remarks' => 'VIP New Install - Auto Reconnect',
+                    // The approval transaction already committed this account's billing status
+                    // deliberately; RADIUS must not be the thing that decides it. Without this,
+                    // reconnectUser() writes Active — harmless while approval creates VIPs as
+                    // Active, silently un-comping them the day that changes.
+                    'preserveBillingStatus' => true,
+                ];
+
+                $vipReconnectError = null;
+
+                if (empty($application->desired_plan)) {
+                    // reconnectUser() names the target RADIUS group after the plan, so without one
+                    // there is nothing to reconnect onto and no retry could ever succeed — logged
+                    // rather than queued. The account is Active in billing and needs a manual
+                    // reconnect once a plan is on file.
+                    \Log::error('VIP new install could not be reconnected — no desired_plan on the application', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'username' => $generatedUsername,
+                    ]);
+                } else {
+                    try {
+                        $vipReconnect = app(\App\Services\ManualRadiusOperationsService::class)
+                            ->reconnectUser($vipReconnectParams);
+
+                        if (($vipReconnect['status'] ?? '') === 'success') {
+                            \Log::info('VIP new install reconnected onto plan group at approval', [
+                                'job_order_id' => $id,
+                                'account_no' => $accountNumber,
+                                'username' => $generatedUsername,
+                                'plan' => $application->desired_plan,
+                                'billing_status_id' => $newAccountStatusId,
+                            ]);
+                        } else {
+                            $vipReconnectError = $vipReconnect['message'] ?? 'RADIUS reconnect returned failure';
+                        }
+                    } catch (\Throwable $vipEx) {
+                        $vipReconnectError = $vipEx->getMessage();
+                    }
+                }
+
+                // Only a genuine RADIUS failure is worth retrying.
+                if ($vipReconnectError !== null) {
+                    \Log::error('VIP new install RADIUS reconnect failed (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'username' => $generatedUsername,
+                        'error' => $vipReconnectError,
+                    ]);
+
+                    \Log::channel('radiusrelated')->error('[VIP APPROVAL RECONNECT FAILED - QUEUED] Account: ' . $accountNumber . ' - User: ' . $generatedUsername . ' - Error: ' . $vipReconnectError);
+
+                    \App\Services\RadiusQueueService::queue([
+                        'organization_id' => $organizationId,
+                        'source_type'     => 'job_order_vip_approval',
+                        'source_id'       => $jobOrder->id,
+                        'account_no'      => $accountNumber,
+                        'operation'       => 'reconnect_user',
+                        'params'          => $vipReconnectParams,
+                        'last_error'      => $vipReconnectError,
+                        'created_by'      => $actionUserEmail,
                     ]);
                 }
             }

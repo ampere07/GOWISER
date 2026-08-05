@@ -240,6 +240,18 @@ class ManualRadiusOperationsService
 
     /**
      * Reconnect user to RADIUS and update database
+     *
+     * Optional param `preserveBillingStatus` (bool, default false): leave billing_status_id
+     * exactly as the caller committed it instead of forcing it to Active.
+     *
+     * A plain reconnect means "this customer paid, put them back in service", so writing Active
+     * is right for every payment-driven caller and stays the default. It is wrong for VIP: a VIP
+     * carries its own billing status (id 7), which is what makes billing generation skip the
+     * account and what vip:check-expiration sweeps on. Forcing Active here would silently strip
+     * both the moment the account was comped — the account would keep getting invoiced and its
+     * vip_expiration would never be enforced. Callers that own the status pass true.
+     *
+     * The RADIUS side is identical either way: the user is moved into their plan group.
      */
     public function reconnectUser(array $params): array
     {
@@ -248,9 +260,13 @@ class ManualRadiusOperationsService
             $username = $params['username'] ?? '';
             $rawPlan = $params['plan'] ?? '';
             $updatedBy = $params['updatedBy'] ?? 'System';
+            $preserveBillingStatus = (bool) ($params['preserveBillingStatus'] ?? false);
 
             $this->writeLog("=== RECONNECT USER START ===");
             $this->writeLog("Account: $accountNo | Username: $username | Raw Plan: $rawPlan");
+            if ($preserveBillingStatus) {
+                $this->writeLog("[MODE] preserveBillingStatus — RADIUS group only, billing status left as committed by caller");
+            }
 
             if (empty($username)) {
                 throw new Exception("Username is required for reconnect operation");
@@ -352,7 +368,8 @@ class ManualRadiusOperationsService
                     $radiusEndpoints,
                     $username,
                     $cleanPlan,
-                    'Active',
+                    // null = do not touch billing_status_id; see preserveBillingStatus above.
+                    $preserveBillingStatus ? null : 'Active',
                     true, // isDisconnectAction
                     $accountNo,
                     $updatedBy
@@ -828,12 +845,16 @@ class ManualRadiusOperationsService
 
     /**
      * Core RADIUS operations (disconnect/reconnect)
+     *
+     * $dbStatus is the billing_status name to write once the RADIUS side is done, or NULL to
+     * leave billing_status_id alone because the caller already owns it. See
+     * {@see reconnectUser()}'s preserveBillingStatus param for the case that needs NULL.
      */
     private function radiusOps(
         array $radiusEndpoints,
         string $username,
         string $targetGroup,
-        string $dbStatus,
+        ?string $dbStatus,
         bool $isDisconnectAction,
         string $accountNo = '',
         string $updatedBy = 'System'
@@ -902,7 +923,14 @@ class ManualRadiusOperationsService
         }
 
         // Update database (local status) regardless — the queue handles RADIUS retry.
-        $this->updateDatabaseStatus($accountNo, $username, $dbStatus, $updatedBy);
+        // Unless the caller owns the billing status (NULL), in which case writing one here would
+        // overwrite a status that was just committed deliberately — e.g. stripping VIP (id 7)
+        // back to Active on a VIP reconnect.
+        if ($dbStatus !== null) {
+            $this->updateDatabaseStatus($accountNo, $username, $dbStatus, $updatedBy);
+        } else {
+            $this->writeLog("[DB] Billing status left untouched — owned by caller");
+        }
 
         return $radiusApplied;
     }
