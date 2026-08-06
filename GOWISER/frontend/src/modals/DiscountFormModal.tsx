@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, ChevronDown, Minus, Plus, Loader2 } from 'lucide-react';
 import * as discountService from '../services/discountService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { useBillingStore } from '../store/billingStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
@@ -611,7 +612,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   <option value="" className={isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}>Select Processor</option>
                   {users.map((user) => (
                     <option key={user.id} value={user.id} className={isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}>
-                      {user.email_address || user.username}
+                      {getUserDisplayName(user, user?.email_address)}
                     </option>
                   ))}
                 </select>
@@ -640,7 +641,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   <option value="" className={isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}>Select Approver</option>
                   {users.filter(user => user.role_id === 1 || user.role_id === 7).map((user) => (
                     <option key={user.id} value={user.id} className={isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}>
-                      {user.email_address || user.username}
+                      {getUserDisplayName(user, user?.email_address)}
                     </option>
                   ))}
                 </select>

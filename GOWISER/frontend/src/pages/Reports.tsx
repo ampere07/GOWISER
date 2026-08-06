@@ -7,6 +7,8 @@ import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import AddReportModal from '../modals/AddReportModal';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +46,28 @@ const ALL_COLUMNS = [
     { key: 'last_dispatched_at', label: 'Last Sent' },
     { key: 'created_by', label: 'Created By' },
     { key: 'created_at', label: 'Created At' },
+];
+
+/**
+ * One filter entry per column in ALL_COLUMNS, so every column the table can show is filterable.
+ * Keys match exactly - the table renders each cell from row[key] and the filter reads the same
+ * key. The schedule/type columns offer the values present in the loaded reports rather than
+ * requiring a lookup endpoint.
+ */
+const FUNNEL_COLUMNS: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'report_name', label: 'Report Name', dataType: 'varchar' },
+    { key: 'report_type', label: 'Report Type', dataType: 'checklist' },
+    { key: 'report_schedule', label: 'Schedule', dataType: 'checklist' },
+    { key: 'report_time', label: 'Time', dataType: 'varchar' },
+    { key: 'day', label: 'Day', dataType: 'varchar' },
+    { key: 'report_weekday', label: 'Weekday', dataType: 'checklist' },
+    { key: 'report_month', label: 'Month', dataType: 'checklist' },
+    { key: 'send_to', label: 'Send To', dataType: 'varchar' },
+    { key: 'date_range', label: 'Date Range', dataType: 'varchar' },
+    { key: 'last_dispatched_at', label: 'Last Sent', dataType: 'datetime' },
+    { key: 'created_by', label: 'Created By', dataType: 'varchar' },
+    { key: 'created_at', label: 'Created At', dataType: 'datetime' },
 ];
 
 // Weekday and Month are hidden by default: they only apply to some schedules,
@@ -273,7 +297,7 @@ const Reports: React.FC = () => {
 
     // ── Derived Data ──────────────────────────────────────────────────────────
 
-    const filtered = useMemo(() => {
+    const searched = useMemo(() => {
         let f = rows;
 
         // Search
@@ -310,6 +334,16 @@ const Reports: React.FC = () => {
         }
         return f;
     }, [rows, searchQuery, sortColumn, sortDir]);
+
+    // Applied on the searched set so the counts and the table describe the same rows - the point
+    // Customer.tsx applies its own funnel.
+    const funnel = useFunnelFilter({
+        storageKey: 'reportsFunnelFilters',
+        columns: FUNNEL_COLUMNS,
+        rows: searched,
+    });
+
+    const filtered = funnel.filteredRows;
 
     const paginated = useMemo(() => {
         const start = (currentPage - 1) * itemsPerPage;
@@ -417,6 +451,21 @@ const Reports: React.FC = () => {
                                 placeholder="Search reports…"
                             />
                         </div>
+
+                        <button
+                            onClick={funnel.open}
+                            title={funnel.activeCount > 0
+                                ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                                : 'Column Filters'}
+                            className={`flex items-center gap-1.5 px-3 py-2 text-sm border rounded-md transition-colors flex-shrink-0 ${funnel.activeCount > 0
+                                ? 'text-white'
+                                : isDarkMode ? 'text-gray-300 border-gray-600 hover:bg-gray-700' : 'text-gray-600 border-gray-300 hover:bg-gray-100'
+                                }`}
+                            style={funnel.activeCount > 0 ? { backgroundColor: primary, borderColor: primary } : {}}
+                        >
+                            <Filter size={14} />
+                            Filters{funnel.activeCount > 0 ? ` (${funnel.activeCount})` : ''}
+                        </button>
 
                         {/* Column picker */}
                         <div className="relative flex-shrink-0" ref={columnPickerRef}>
@@ -678,6 +727,12 @@ const Reports: React.FC = () => {
                 isOpen={isAddModalOpen}
                 onClose={() => setIsAddModalOpen(false)}
                 onSaved={() => fetchReports(true)}
+            />
+
+            <TableFunnelFilter
+                {...funnel.panelProps}
+                title="Report Filters"
+                subtitle="Refine your scheduled report results"
             />
         </>
     );

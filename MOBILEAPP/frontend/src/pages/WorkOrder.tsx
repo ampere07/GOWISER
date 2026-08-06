@@ -23,6 +23,8 @@ import { useWorkOrderStore } from '../store/workOrderStore';
 import { WorkOrder } from '../types/workOrder';
 import WorkOrderDetails from '../components/WorkOrderDetails';
 import AssignWorkOrderModal from '../modals/AssignWorkOrderModal';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { UserDirectory, resolveUserDisplayName } from '../utils/userDisplay';
 
 // --- Static Helpers & Components ---
 const ITEMS_PER_PAGE = 50;
@@ -62,12 +64,14 @@ const WorkOrderCard = React.memo(({
   wo,
   onPress,
   isSelected,
-  formatDate
+  formatDate,
+  userDirectory
 }: {
   wo: WorkOrder;
   onPress: (wo: WorkOrder) => void;
   isSelected: boolean;
   formatDate: (d?: string) => string;
+  userDirectory: UserDirectory;
 }) => (
   <TouchableOpacity
     onPress={() => onPress(wo)}
@@ -94,7 +98,7 @@ const WorkOrderCard = React.memo(({
           {formatDate(wo.requested_date)}
         </Text>
         <Text style={[st.cardSub, { color: '#6b7280', marginTop: 4, fontStyle: 'italic' }]}>
-          {wo.assign_to ? `Assigned to: ${wo.assign_to}` : 'Unassigned'}
+          {wo.assign_to ? `Assigned to: ${resolveUserDisplayName(wo.assign_to, userDirectory, wo.assign_to)}` : 'Unassigned'}
         </Text>
       </View>
       <View style={st.cardRight}>
@@ -105,6 +109,7 @@ const WorkOrderCard = React.memo(({
 ));
 
 const WorkOrderPage: React.FC = () => {
+  const userDirectory = useUserDirectory();
   const isDarkMode = false; // Forced light mode as per user request
   const [searchQuery, setSearchQuery] = useState('');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
@@ -425,6 +430,7 @@ const WorkOrderPage: React.FC = () => {
                   onPress={handleCardPress}
                   isSelected={selectedWorkOrder?.id === wo.id}
                   formatDate={formatDate}
+                  userDirectory={userDirectory}
                 />
               ))}
             </View>

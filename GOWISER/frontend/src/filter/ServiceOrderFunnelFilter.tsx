@@ -80,6 +80,12 @@ export const allColumns: Column[] = [
   { key: 'duration', label: 'Duration', dataType: 'varchar' },
   { key: 'modifiedBy', label: 'Modified By', dataType: 'varchar' },
   { key: 'modifiedDate', label: 'Modified Date', dataType: 'datetime' },
+  // The remaining columns the Service Order table can show. ServiceOrder.tsx already resolves
+  // all three in getVal() — 'assignedEmail' and 'requestedBy' through the user directory, so a
+  // filter matches the NAME the cell displays rather than the raw email behind it.
+  { key: 'concernRemarks', label: 'Concern Remarks', dataType: 'varchar' },
+  { key: 'requestedBy', label: 'Requested By', dataType: 'varchar' },
+  { key: 'assignedEmail', label: 'Assigned Tech', dataType: 'varchar' },
 ];
 
 const ServiceOrderFunnelFilter: React.FC<ServiceOrderFunnelFilterProps> = ({

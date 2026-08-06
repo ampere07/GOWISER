@@ -2321,7 +2321,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                       <Picker.Item label={formData.assignedEmail} value={formData.assignedEmail} />
                     )}
                     {technicians.map((technician, index) => (
-                      <Picker.Item key={index} label={technician.email} value={technician.email} />
+                      <Picker.Item key={index} label={technician?.name || technician.email} value={technician.email} />
                     ))}
                   </Picker>
                 </View>

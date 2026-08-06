@@ -5,6 +5,7 @@ import { TransactionRevert } from '../services/transactionRevertService';
 import TransactionsRevertDetails from '../components/TransactionsRevertDetails';
 import { useTransactionRevertStore } from '../store/transactionRevertStore';
 import GlobalSearch from './globalfunctions/GlobalSearch';
+import { getUserDisplayName } from '../utils/userDisplay';
 import pusher from '../services/pusherService';
 import apiClient from '../config/api';
 import SessionExpiredModal from '../components/SessionExpiredModal';
@@ -541,7 +542,7 @@ const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertI
                                                 {revert.requester?.email_address && (
                                                     <>
                                                         <span className="mx-1.5 opacity-50">|</span>
-                                                        <span className="truncate">{revert.requester.email_address}</span>
+                                                        <span className="truncate">{getUserDisplayName(revert.requester, revert.requester.email_address)}</span>
                                                     </>
                                                 )}
                                             </div>

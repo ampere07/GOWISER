@@ -4,6 +4,8 @@ import {
 } from 'lucide-react';
 import { WorkOrder, WorkOrderDetailsProps } from '../types/workOrder';
 import { ColorPalette } from '../services/settingsColorPaletteService';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import AssignWorkOrderModal from '../modals/AssignWorkOrderModal';
 
 interface WorkOrderDetailsComponentProps extends WorkOrderDetailsProps {
@@ -29,6 +31,10 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
   const activeIsMobile = isMobile || localIsMobile;
+
+  // work_orders stores the actor as an email string, so names come from the shared
+  // (cached) user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
 
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
@@ -292,7 +298,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Report To:</div>
-            <div className={valueClass}>{workOrder.report_to}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.report_to, userDirectory, workOrder.report_to)}</div>
           </div>
         );
 
@@ -301,7 +307,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Assign To:</div>
-            <div className={valueClass}>{workOrder.assign_to}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.assign_to, userDirectory, workOrder.assign_to)}</div>
           </div>
         );
 
@@ -319,7 +325,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Requested By:</div>
-            <div className={valueClass}>{workOrder.requested_by}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.requested_by, userDirectory, workOrder.requested_by)}</div>
           </div>
         );
 
@@ -339,7 +345,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Updated By:</div>
-            <div className={valueClass}>{workOrder.updated_by}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.updated_by, userDirectory, workOrder.updated_by)}</div>
           </div>
         );
 

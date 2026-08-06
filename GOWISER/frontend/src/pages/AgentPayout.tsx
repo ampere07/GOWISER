@@ -10,6 +10,8 @@ import { useAgentStore } from '../store/agentStore';
 import ModalUITemplate from '../modals/ui-modal/ModalUITemplate';
 import { Agent, User } from '../types/api';
 import { userService } from '../services/userService';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 interface ColumnDefinition {
     key: string;
@@ -34,6 +36,21 @@ const payoutColumns: ColumnDefinition[] = [
     { key: 'total_amount', label: 'Total Amount', minWidth: 150 },
     { key: 'commission_id_list', label: 'Job Orders', minWidth: 200 },
     { key: 'created_by', label: 'Processed By', minWidth: 150 },
+];
+
+/**
+ * One filter entry per column in payoutColumns, so every column the table can show is filterable.
+ * Keys match exactly - the table renders each cell from row[key] and the filter reads the same
+ * key. 'type' and 'created_by' offer the values present in the loaded payouts rather than
+ * requiring a lookup endpoint.
+ */
+const payoutFunnelColumns: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'type', label: 'Type', dataType: 'checklist' },
+    { key: 'ref_number', label: 'Ref Number', dataType: 'varchar' },
+    { key: 'total_amount', label: 'Total Amount', dataType: 'decimal' },
+    { key: 'commission_id_list', label: 'Job Orders', dataType: 'varchar' },
+    { key: 'created_by', label: 'Processed By', dataType: 'checklist' },
 ];
 
 interface PaginationControlsProps {
@@ -455,7 +472,15 @@ const AgentPayout: React.FC = () => {
         });
     }, [sortedData, searchTerm, dateFrom, dateTo]);
 
-    const currentData = filteredData;
+    // Applied on the searched set so the counts and the table describe the same rows - the point
+    // Customer.tsx applies its own funnel.
+    const funnel = useFunnelFilter({
+        storageKey: 'agentPayoutFunnelFilters',
+        columns: payoutFunnelColumns,
+        rows: filteredData,
+    });
+
+    const currentData = funnel.filteredRows;
     const totalPages = Math.ceil(currentData.length / itemsPerPage);
     const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -677,6 +702,23 @@ const AgentPayout: React.FC = () => {
                                 <Filter size={18} />
                             </button>
                         )}
+
+                        <button
+                            onClick={funnel.open}
+                            title={funnel.activeCount > 0
+                                ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                                : 'Column Filters'}
+                            className={`p-2 rounded border transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                                ? 'text-white border-transparent'
+                                : isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                                }`}
+                            style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                        >
+                            <Filter size={18} />
+                            {funnel.activeCount > 0 && (
+                                <span className="ml-1.5 text-xs font-bold">{funnel.activeCount}</span>
+                            )}
+                        </button>
 
                         <div className="relative flex-shrink-0" ref={filterDropdownRef}>
                             <button
@@ -942,6 +984,12 @@ const AgentPayout: React.FC = () => {
                 }}
                 agentId={payoutAgent?.id}
                 agentName={payoutAgent?.team_name}
+            />
+
+            <TableFunnelFilter
+                {...funnel.panelProps}
+                title="Payout Filters"
+                subtitle="Refine your payout results"
             />
         </div>
     );

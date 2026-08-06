@@ -18,6 +18,7 @@ use App\Models\Overdue;
 use App\Models\DCNotice;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 
 class EnhancedBillingGenerationServiceWithNotifications
@@ -1607,17 +1608,43 @@ class EnhancedBillingGenerationServiceWithNotifications
                 // customers should not be woken by it.
                 $timeToSend = Carbon::now('Asia/Manila')->setTime(8, 0, 0)->format('Y-m-d H:i:s');
 
-                $results['notifications'][] = $this->notificationService->notifyPrepaidExpiry(
+                $notification = $this->notificationService->notifyPrepaidExpiry(
                     $account,
                     $expiry,
                     $renewalAmount,
                     $timeToSend
                 );
 
-                // Marked only after the notice went out, so a failure retries tomorrow rather
-                // than silently swallowing this period's only notification.
-                $account->prepaid_expiry_notified_for = $expiry;
-                $account->save();
+                $results['notifications'][] = $notification;
+
+                // notifyPrepaidExpiry() never throws — a provider outage, a missing template or a
+                // customer with no contact details all come back in `errors` with the delivery
+                // flags false. Marking unconditionally therefore recorded "notified" for a notice
+                // that was never queued, and because the marker matches the expiry timestamp for
+                // as long as the account stays lapsed, the customer was never told at all.
+                // Marked only once something actually went out, so a transient failure retries
+                // tomorrow. A duplicate is not a risk: SmsQueueService::queueSms() deduplicates on
+                // (account, contact, message, time_sent), and the email queue is keyed the same way.
+                if (!$notification['sms_sent'] && !$notification['email_queued']) {
+                    $results['failed']++;
+                    $results['errors'][] = [
+                        'account_no' => $account->account_no,
+                        'error' => implode('; ', $notification['errors'] ?: ['Prepaid expiry notice not delivered']),
+                    ];
+
+                    $this->log('warning', 'Prepaid expiry notice not delivered — will retry on the next run', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => $expiry->toDateTimeString(),
+                        'errors' => $notification['errors'],
+                    ]);
+
+                    continue;
+                }
+
+                DB::transaction(function () use ($account, $expiry) {
+                    $account->prepaid_expiry_notified_for = $expiry;
+                    $account->save();
+                });
 
                 $results['success']++;
 
@@ -1685,14 +1712,28 @@ class EnhancedBillingGenerationServiceWithNotifications
             'notifications' => [],
         ];
 
+        // The marker column is what makes this scan idempotent. Without it every account inside the
+        // window is re-warned on every run, so the condition is reported up front and at warning
+        // level rather than surfacing later as an opaque per-account save() failure — it means the
+        // pre-expiry migration has not been run on this database.
+        $markerColumnPresent = Schema::hasColumn('billing_accounts', 'prepaid_pre_expiry_notified_for');
+
+        if (!$markerColumnPresent) {
+            $this->log('warning', 'Prepaid pre-expiry scan: billing_accounts.prepaid_pre_expiry_notified_for is missing — run the pending migrations. Warnings will send but cannot be marked as sent.');
+        }
+
         $configured = BillingConfig::first()?->prepaid_pre_expiry_days;
         $preExpiryDays = is_numeric($configured)
             ? (int) $configured
             : self::DEFAULT_PREPAID_PRE_EXPIRY_DAYS;
 
         if ($preExpiryDays <= 0) {
-            $this->log('info', 'Prepaid pre-expiry scan skipped — warning disabled in billing config', [
+            // Reported at warning, not info: "no pre-expiry SMS is going out" is indistinguishable
+            // from a broken scan when it is only ever logged as routine, and 0 is reachable simply
+            // by clearing the field on the Billing Configuration page.
+            $this->log('warning', 'Prepaid pre-expiry scan skipped — warning disabled in billing config (prepaid_pre_expiry_days is 0)', [
                 'prepaid_pre_expiry_days' => $preExpiryDays,
+                'configured_value' => $configured,
             ]);
 
             return $results;
@@ -1775,13 +1816,26 @@ class EnhancedBillingGenerationServiceWithNotifications
                         'account_no' => $account->account_no,
                         'error' => implode('; ', $notification['errors'] ?: ['SMS not sent']),
                     ];
+
+                    $this->log('warning', 'Prepaid pre-expiry notice not delivered — will retry while the account is still inside the window', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => $expiry->toDateTimeString(),
+                        'errors' => $notification['errors'],
+                    ]);
+
                     continue;
                 }
 
-                DB::transaction(function () use ($account, $expiry) {
-                    $account->prepaid_pre_expiry_notified_for = $expiry;
-                    $account->save();
-                });
+                // Skipped when the migration adding the column has not been run: the save() would
+                // throw and this account would be counted as failed even though the warning is
+                // already queued. The re-warn that follows is absorbed by the SMS queue's dedupe
+                // key, which suppresses an identical (account, message, time_sent) insert.
+                if ($markerColumnPresent) {
+                    DB::transaction(function () use ($account, $expiry) {
+                        $account->prepaid_pre_expiry_notified_for = $expiry;
+                        $account->save();
+                    });
+                }
 
                 $results['success']++;
 

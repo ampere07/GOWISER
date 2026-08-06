@@ -154,11 +154,18 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
         >
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="min-w-0">
+              {/* No fallback legend. Below the width at which the pie can label
+                  its own slices — every phone — the grid has already collapsed
+                  to one column, so that legend renders directly above a table
+                  listing the same plan names, counts and shares. The reader
+                  scrolled past the whole dataset before reaching it. The table
+                  below is the legend; the pie keeps its colours and tooltip. */}
               <PieChart
                 labels={slices.map((slice) => slice.label)}
                 values={slices.map((slice) => slice.count)}
                 unit="count"
                 height={300}
+                legendFallback={false}
               />
             </div>
 
@@ -167,7 +174,21 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
                 <Thead>
                   <Th width="14px" />
                   <SortableTh column="label" label="Plan Name" align="left" />
-                  <SortableTh column="share_pct" label="Distribution" />
+                  {/* Hidden on a phone, where the three columns together
+                      overflow and the share was the one cut off. The figure is
+                      not dropped — it moves under the subscriber count in the
+                      last column, which is where the eye already is. */}
+                  <Th align="right" className="hidden sm:table-cell">
+                    <button
+                      type="button"
+                      onClick={() => applySort('share_pct')}
+                      className="inline-flex items-center gap-1 hover:opacity-70 transition-opacity"
+                      title="Sort by Distribution"
+                    >
+                      Distribution
+                      {sort === 'share_pct' && (descending ? <ArrowDown size={12} /> : <ArrowUp size={12} />)}
+                    </button>
+                  </Th>
                   <SortableTh column="count" label="Subscribers" />
                 </Thead>
                 <tbody>
@@ -210,7 +231,7 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
                             </span>
                           )}
                         </Td>
-                        <Td align="right" className="tabular-nums">
+                        <Td align="right" className="tabular-nums hidden sm:table-cell">
                           {formatPercent(row.share_pct)}
                         </Td>
                         <Td
@@ -220,6 +241,16 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
                           }`}
                         >
                           {formatNumber(row.count)}
+                          {/* The share, on the phone layout where its own column
+                              is hidden. Under the count rather than beside it, so
+                              the counts still line up as a readable column. */}
+                          <span
+                            className={`block sm:hidden text-[11px] font-normal ${
+                              isDarkMode ? 'text-gray-500' : 'text-gray-400'
+                            }`}
+                          >
+                            {formatPercent(row.share_pct)}
+                          </span>
                         </Td>
                       </Tr>
                     );
@@ -228,7 +259,7 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
                   <TotalRow>
                     <Td />
                     <Td>Total</Td>
-                    <Td align="right" className="tabular-nums">
+                    <Td align="right" className="tabular-nums hidden sm:table-cell">
                       {/* Stated rather than assumed: rounding each share to one
                           decimal can leave the column reading 99.9 or 100.1, and
                           a reader is entitled to see which. */}
@@ -236,6 +267,13 @@ const PlanDistributionPanel: React.FC<PlanDistributionPanelProps> = ({
                     </Td>
                     <Td align="right" className="tabular-nums">
                       {formatNumber(total)}
+                      <span
+                        className={`block sm:hidden text-[11px] font-normal ${
+                          isDarkMode ? 'text-gray-500' : 'text-gray-400'
+                        }`}
+                      >
+                        {formatPercent(sorted.reduce((sum, row) => sum + row.share_pct, 0))}
+                      </span>
                     </Td>
                   </TotalRow>
                 </tbody>

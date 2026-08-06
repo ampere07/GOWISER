@@ -9,6 +9,8 @@ import StartTimerModal from '../modals/StartTimerModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useServiceOrderContext } from '../contexts/ServiceOrderContext';
 import { useJobOrderContext } from '../contexts/JobOrderContext';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import { useWorkOrderStore } from '../store/workOrderStore';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
 import { updateServiceOrder } from '../services/serviceOrderService';
@@ -321,6 +323,10 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
 }) => {
   const { width } = useWindowDimensions();
   const isMobile = propIsMobile || width < 768;
+  // Actors are persisted as email strings, so names come from the shared (cached)
+  // user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const { silentRefresh, serviceOrders } = useServiceOrderContext();
   const { jobOrders } = useJobOrderContext();
   const { workOrders } = useWorkOrderStore();
@@ -789,7 +795,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     visitRemarks: () => <Text style={valStyle} selectable={true}>{serviceOrder.visitRemarks || 'No remarks'}</Text>,
     modifiedBy: () => <Text style={valStyle} selectable={true}>{serviceOrder.modifiedBy || 'System'}</Text>,
     modifiedDate: () => <Text style={valStyle} selectable={true}>{formatDate(serviceOrder.modifiedDate)}</Text>,
-    requestedBy: () => <Text style={valStyle} selectable={true}>{serviceOrder.requestedBy}</Text>,
+    requestedBy: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, serviceOrder.requestedBy)}</Text>,
     assignedEmail: () => <Text style={valStyle} selectable={true}>{serviceOrder.assignedEmail || 'Not assigned'}</Text>,
     supportRemarks: () => <Text style={valStyle} selectable={true}>{serviceOrder.supportRemarks || 'No remarks'}</Text>,
     supportStatus: () => (

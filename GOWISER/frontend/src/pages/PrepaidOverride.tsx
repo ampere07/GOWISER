@@ -5,6 +5,7 @@ import { PrepaidOverrideRequest } from '../services/prepaidOverrideService';
 import PrepaidOverrideDetails from '../components/PrepaidOverrideDetails';
 import { usePrepaidOverrideStore } from '../store/prepaidOverrideStore';
 import GlobalSearch from './globalfunctions/GlobalSearch';
+import { getUserDisplayName } from '../utils/userDisplay';
 import pusher from '../services/pusherService';
 import SessionExpiredModal from '../components/SessionExpiredModal';
 
@@ -459,7 +460,7 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
                                                     {row.requester?.email_address && (
                                                         <>
                                                             <span className="mx-1.5 opacity-50">|</span>
-                                                            <span className="truncate">{row.requester.email_address}</span>
+                                                            <span className="truncate">{getUserDisplayName(row.requester, row.requester.email_address)}</span>
                                                         </>
                                                     )}
                                                 </div>

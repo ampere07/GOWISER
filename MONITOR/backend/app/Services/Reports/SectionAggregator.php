@@ -103,6 +103,7 @@ class SectionAggregator
                 'not_found', 'no_session_row',
             ]),
             'sync_billable_accounts' => $this->sumPath($payloads, ['sync_billable_accounts']),
+            'vip_accounts' => $this->mergeVipAccounts($payloads, $labels),
             'barangays' => $this->mergeBarangays($payloads),
             'growth' => [
                 'new_in_range' => $this->sumPath($payloads, ['growth', 'new_in_range']),
@@ -311,6 +312,75 @@ class SectionAggregator
      * Rows carry `source_label` so an account stays attributable to the branch
      * that has to chase it.
      */
+    /**
+     * Every database's VIP accounts, in one list.
+     *
+     * Null when no payload carried the key at all — a fleet of sources that have
+     * no VIP concept reports "not tracked" rather than an empty list, which would
+     * claim there are no VIP accounts anywhere.
+     *
+     * Rows are tagged with the database they came from, exactly as the overdue
+     * ledger is: an account number is only unique inside its own system, and
+     * without the tag two systems' account 0001 would read as one row twice.
+     *
+     * `truncated` is true if ANY source truncated, and `total` is the true fleet
+     * count regardless — so a partial list is always visible as partial.
+     *
+     * @return array{rows: array, total: int, truncated: bool}|null
+     */
+    private function mergeVipAccounts(array $payloads, array $labels): ?array
+    {
+        $rows = [];
+        $total = 0;
+        $truncated = false;
+        $tracked = false;
+
+        foreach ($payloads as $key => $payload) {
+            $vip = $payload['vip_accounts'] ?? null;
+
+            if (!is_array($vip)) {
+                continue;
+            }
+
+            $tracked = true;
+            $total += (int) ($vip['total'] ?? 0);
+            $truncated = $truncated || (bool) ($vip['truncated'] ?? false);
+
+            foreach ($vip['rows'] ?? [] as $row) {
+                $row['source'] = $key;
+                $row['source_label'] = $labels[$key] ?? $key;
+                $rows[] = $row;
+            }
+        }
+
+        if (!$tracked) {
+            return null;
+        }
+
+        // Soonest expiry first, open-ended last — the same order each driver
+        // applies within its own rows, reapplied across the merged pool.
+        usort($rows, function ($a, $b) {
+            $left = $a['vip_expiration'] ?? null;
+            $right = $b['vip_expiration'] ?? null;
+
+            if ($left === null && $right === null) {
+                return strcmp((string) ($a['account_number'] ?? ''), (string) ($b['account_number'] ?? ''));
+            }
+
+            if ($left === null) {
+                return 1;
+            }
+
+            if ($right === null) {
+                return -1;
+            }
+
+            return strcmp((string) $left, (string) $right);
+        });
+
+        return ['rows' => $rows, 'total' => $total, 'truncated' => $truncated];
+    }
+
     private function mergeOverdue(array $payloads, array $labels): array
     {
         $rows = [];

@@ -193,9 +193,24 @@ class CustomerDetailController extends Controller
                 'createdAt' => $customer->created_at?->format('Y-m-d H:i:s'),
                 'updatedAt' => $customer->updated_at?->format('Y-m-d H:i:s'),
                 
+                // Connectivity. Every key below is additive to what callers already read, so the
+                // response contract is unchanged.
+                //
+                // session_status alone was not enough to tell the truth. The Customer list gets
+                // active_sessions from BillingController and treats a live RADIUS session as
+                // connectivity; this endpoint did not return it, so the Customer Details panel had
+                // only the 2-minute-old session_status to go on and rendered OFFLINE for a customer
+                // the list beside it showed as online. active_sessions is returned here so the two
+                // resolve identically.
                 'onlineSessionStatus' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->session_status : null,
                 'session_group' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->session_group : null,
                 'session_ip' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->ip_address : null,
+                'active_sessions' => $billingAccount->onlineStatus ? (int) $billingAccount->onlineStatus->active_sessions : 0,
+                // When RADIUS last wrote this row. Lets the panel tell "offline" apart from
+                // "nobody has synced this account in hours".
+                'session_updated_at' => $billingAccount->onlineStatus && $billingAccount->onlineStatus->updated_at
+                    ? $billingAccount->onlineStatus->updated_at->format('Y-m-d H:i:s')
+                    : null,
                 'onlineStatusData' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->toArray() : null,
             ];
             

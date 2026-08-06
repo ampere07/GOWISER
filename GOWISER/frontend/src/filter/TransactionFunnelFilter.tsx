@@ -50,6 +50,15 @@ export const allColumns: Column[] = [
     { key: 'barangay', label: 'Barangay', dataType: 'checklist' },
     { key: 'city', label: 'City', dataType: 'checklist' },
     { key: 'region', label: 'Region', dataType: 'checklist' },
+    // The remaining columns the Transactions table can show. TransactionList.tsx resolves each
+    // through the same accessor its sort uses, so a filter matches what the cell displays —
+    // 'account_balance' already had an accessor case but no entry here to reach it.
+    { key: 'created_at', label: 'Created At', dataType: 'datetime' },
+    { key: 'payment_date', label: 'Payment Date', dataType: 'date' },
+    { key: 'updated_at', label: 'Modified Date', dataType: 'datetime' },
+    { key: 'approved_by', label: 'Modified By', dataType: 'varchar' },
+    { key: 'received_payment', label: 'Received Payment', dataType: 'decimal' },
+    { key: 'account_balance', label: 'Account Balance', dataType: 'decimal' },
 ];
 
 const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({

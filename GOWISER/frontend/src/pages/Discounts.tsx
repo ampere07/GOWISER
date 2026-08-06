@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Receipt, ChevronRight, Tag, ChevronDown, Menu, X, ChevronsLeft, ChevronsRight, Globe, Calendar, RefreshCw, Plus, Download, Columns3, ArrowUp, ArrowDown, ChevronLeft } from 'lucide-react';
+import { Receipt, ChevronRight, Tag, ChevronDown, Menu, X, ChevronsLeft, ChevronsRight, Globe, Calendar, RefreshCw, Plus, Download, Columns3, ArrowUp, ArrowDown, ChevronLeft, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import DiscountDetails from '../components/DiscountDetails';
 import DiscountFormModal from '../modals/DiscountFormModal';
@@ -10,6 +10,8 @@ import { getCities, City } from '../services/cityService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -515,8 +517,42 @@ const Discounts: React.FC = () => {
     };
   }, [regions, cities, barangays, searchFilteredRecords]);
 
+  /**
+   * One filter entry per table column, so every column the table can show is filterable. Keys
+   * match discountColumns exactly - the table renders each cell from record[key] and the filter
+   * reads the same key. Status, plan and location columns offer the values present in the loaded
+   * records rather than requiring a lookup endpoint.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'fullName', label: 'Customer Name', dataType: 'varchar' },
+    { key: 'accountNo', label: 'Account No', dataType: 'varchar' },
+    { key: 'contactNumber', label: 'Contact Number', dataType: 'varchar' },
+    { key: 'emailAddress', label: 'Email Address', dataType: 'varchar' },
+    { key: 'address', label: 'Address', dataType: 'text' },
+    { key: 'plan', label: 'Plan', dataType: 'checklist' },
+    { key: 'discountAmount', label: 'Discount Amount', dataType: 'decimal' },
+    { key: 'discountStatus', label: 'Status', dataType: 'checklist' },
+    { key: 'dateCreated', label: 'Date Created', dataType: 'date' },
+    { key: 'processedBy', label: 'Processed By', dataType: 'varchar' },
+    { key: 'processedDate', label: 'Processed Date', dataType: 'date' },
+    { key: 'approvedBy', label: 'Approved By', dataType: 'varchar' },
+    { key: 'remarks', label: 'Remarks', dataType: 'text' },
+    { key: 'barangay', label: 'Barangay', dataType: 'checklist' },
+    { key: 'city', label: 'City', dataType: 'checklist' },
+    { key: 'region', label: 'Region', dataType: 'checklist' },
+  ];
+
+  // Applied on the search-narrowed set so the sidebar counts and the table describe the same
+  // rows - the point Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'discountsFunnelFilters',
+    columns: funnelColumns,
+    rows: searchFilteredRecords,
+  });
+
   const filteredDiscountRecords = useMemo(() => {
-    return searchFilteredRecords.filter(record => {
+    return funnel.filteredRows.filter(record => {
       if (selectedLocation === 'all') return true;
 
       if (selectedLocation.startsWith('reg:')) {
@@ -533,7 +569,7 @@ const Discounts: React.FC = () => {
 
       return record.cityId === Number(selectedLocation);
     });
-  }, [searchFilteredRecords, selectedLocation]);
+  }, [funnel.filteredRows, selectedLocation]);
 
   const currentDiscountIndex = useMemo(() => {
     if (!selectedDiscount || !filteredDiscountRecords) return -1;
@@ -1115,6 +1151,24 @@ const Discounts: React.FC = () => {
                   {displayMode === 'card' ? 'Table View' : 'Card View'}
                 </button>
 
+                <button
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                  className={`px-4 py-2 rounded text-sm transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                    ? 'text-white'
+                    : isDarkMode
+                      ? 'hover:bg-gray-800 text-white'
+                      : 'hover:bg-gray-100 text-gray-900'
+                    }`}
+                  style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                >
+                  <Filter className="h-5 w-5" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 {displayMode === 'table' && (
                   <div className="relative z-[100] flex-shrink-0" ref={columnDropdownRef}>
                     <button
@@ -1445,6 +1499,12 @@ const Discounts: React.FC = () => {
         isOpen={isDiscountFormModalOpen}
         onClose={handleCloseDiscountFormModal}
         onSave={handleSaveDiscount}
+      />
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Discount Filters"
+        subtitle="Refine your discount results"
       />
     </div>
   );

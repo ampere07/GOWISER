@@ -57,6 +57,8 @@ export interface User {
   first_name: string;
   middle_initial?: string;
   last_name: string;
+  // Appended by the backend User model (first + middle initial + last).
+  full_name?: string;
   username: string;
   email_address: string;
   contact_number?: string;

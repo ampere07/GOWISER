@@ -865,6 +865,40 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       // chronological, and only prepaid job orders contribute a value — matching what renders.
       case 'expirationDate':
         return isPrepaidGeneration(jo.generation_type) ? ((jo as any).prepaid_expires_at || '') : '';
+      // ── Columns the table renders from a differently-cased field ─────────────────────
+      // The API returns these as snake_case or Pascal_Snake, so the `default` branch below —
+      // which looks the key up verbatim — finds nothing and a filter on them would match no
+      // rows at all while appearing to work. Each mirrors the same fallback chain
+      // renderCellValue() uses, so filtering and the displayed cell agree.
+      case 'contractLink': return jo.Contract_Link || (jo as any).contract_link || '';
+      case 'createdByUserEmail': return (jo as any).created_by_user_email || (jo as any).Created_By_User_Email || '';
+      case 'updatedByUserEmail': return (jo as any).updated_by_user_email || (jo as any).Updated_By_User_Email || '';
+      case 'pppoeUsername': return (jo as any).PPPoE_Username || (jo as any).pppoe_username || '';
+      case 'pppoePassword': return (jo as any).PPPoE_Password || (jo as any).pppoe_password || '';
+      case 'location': return (jo as any).Location || (jo as any).location || '';
+      case 'secondContactNumber':
+        return (jo as any).Second_Contact_Number || (jo as any).Secondary_Mobile_Number
+          || (jo as any).second_contact_number || (jo as any).secondary_mobile_number || '';
+      case 'clientSignatureUrl':
+        return (jo as any).client_signature_url || (jo as any).Client_Signature_URL
+          || (jo as any).client_signature_image_url || (jo as any).Client_Signature_Image_URL || '';
+      case 'setupImageUrl':
+        return (jo as any).setup_image_url || (jo as any).Setup_Image_URL || (jo as any).Setup_Image_Url || '';
+      case 'speedtestImageUrl':
+        return (jo as any).speedtest_image_url || (jo as any).Speedtest_Image_URL
+          || (jo as any).speedtest_image || (jo as any).Speedtest_Image || '';
+      case 'signedContractImageUrl':
+        return (jo as any).signed_contract_image_url || (jo as any).Signed_Contract_Image_URL
+          || (jo as any).signed_contract_url || (jo as any).Signed_Contract_URL || '';
+      case 'boxReadingImageUrl':
+        return (jo as any).box_reading_image_url || (jo as any).Box_Reading_Image_URL
+          || (jo as any).box_reading_url || (jo as any).Box_Reading_URL || '';
+      case 'routerReadingImageUrl':
+        return (jo as any).router_reading_image_url || (jo as any).Router_Reading_Image_URL
+          || (jo as any).router_reading_url || (jo as any).Router_Reading_URL || '';
+      case 'portLabelImageUrl':
+        return (jo as any).port_label_image_url || (jo as any).Port_Label_Image_URL
+          || (jo as any).port_label_url || (jo as any).Port_Label_URL || '';
       default: return (jo as any)[key] || '';
     }
   };

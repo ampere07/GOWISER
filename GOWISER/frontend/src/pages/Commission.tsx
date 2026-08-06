@@ -11,6 +11,8 @@ import BonusPayoutModal from '../modals/BonusPayoutModal';
 import { useAgentStore } from '../store/agentStore';
 import ModalUITemplate from '../modals/ui-modal/ModalUITemplate';
 import { Agent } from '../types/api';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 interface ColumnDefinition {
     key: string;
@@ -54,6 +56,49 @@ const incentiveHistoryColumns: ColumnDefinition[] = [
     { key: 'incentive_value', label: 'Incentive Value', minWidth: 150, align: 'right' },
     { key: 'processed_at', label: 'Processed At', minWidth: 180 },
 ];
+
+/**
+ * One filter entry per column of each tab's table, so every column this screen can show is
+ * filterable. Keys match the ColumnDefinition lists above exactly - each table renders its cells
+ * from row[key] and the filter reads the same key.
+ *
+ * Keyed by tab because the four tabs show four different record shapes; the funnel is handed
+ * whichever set matches the tab in view, so switching tabs switches the filterable columns
+ * rather than offering columns that do not exist on the rows on screen.
+ */
+const FUNNEL_COLUMNS_BY_TAB: Record<string, FunnelColumn[]> = {
+    earnings: [
+        { key: 'id', label: 'Transaction ID', dataType: 'varchar' },
+        { key: 'customer', label: 'Customer Name', dataType: 'varchar' },
+        { key: 'service', label: 'Service Type', dataType: 'checklist' },
+        { key: 'date', label: 'Date', dataType: 'date' },
+        { key: 'status', label: 'Status', dataType: 'checklist' },
+        { key: 'amount', label: 'Amount', dataType: 'decimal' },
+    ],
+    payouts: [
+        { key: 'id', label: 'ID', dataType: 'varchar' },
+        { key: 'ref_number', label: 'Ref Number', dataType: 'varchar' },
+        { key: 'total_amount', label: 'Total Amount', dataType: 'decimal' },
+        { key: 'commission_id_list', label: 'Job Orders', dataType: 'varchar' },
+        { key: 'created_by', label: 'Processed By', dataType: 'checklist' },
+    ],
+    incentives: [
+        { key: 'id', label: 'ID', dataType: 'varchar' },
+        { key: 'agent_name', label: 'Agent', dataType: 'checklist' },
+        { key: 'job_order_id', label: 'Job Order', dataType: 'varchar' },
+        { key: 'batch_number', label: 'Batch', dataType: 'int' },
+        { key: 'quota_reached', label: 'Quota Reached', dataType: 'int' },
+        { key: 'incentive_value', label: 'Incentive Value', dataType: 'decimal' },
+        { key: 'processed_at', label: 'Processed At', dataType: 'datetime' },
+    ],
+    bonus: [
+        { key: 'id', label: 'ID', dataType: 'varchar' },
+        { key: 'ref_number', label: 'Ref Number', dataType: 'varchar' },
+        { key: 'type', label: 'Type', dataType: 'checklist' },
+        { key: 'total_amount', label: 'Total Amount', dataType: 'decimal' },
+        { key: 'created_by', label: 'Processed By', dataType: 'checklist' },
+    ],
+};
 
 interface PaginationControlsProps {
     totalPages: number;
@@ -574,7 +619,16 @@ const Commission: React.FC = () => {
         });
     }, [sortedData, searchTerm, dateFrom, dateTo]);
 
-    const currentData = filteredData;
+    // Applied on the searched set so the counts and the table describe the same rows - the point
+    // Customer.tsx applies its own funnel. The column set follows the tab in view; selections are
+    // stored per tab so switching back restores what was set there.
+    const funnel = useFunnelFilter({
+        storageKey: `commissionFunnelFilters:${activeTab}`,
+        columns: FUNNEL_COLUMNS_BY_TAB[activeTab] || FUNNEL_COLUMNS_BY_TAB.earnings,
+        rows: filteredData,
+    });
+
+    const currentData = funnel.filteredRows;
     const totalPages = Math.ceil(currentData.length / itemsPerPage);
     const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -801,6 +855,23 @@ const Commission: React.FC = () => {
                                 <Filter size={18} />
                             </button>
                         )}
+
+                        <button
+                            onClick={funnel.open}
+                            title={funnel.activeCount > 0
+                                ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                                : 'Column Filters'}
+                            className={`p-2 rounded border transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                                ? 'text-white border-transparent'
+                                : isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                                }`}
+                            style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                        >
+                            <Filter size={18} />
+                            {funnel.activeCount > 0 && (
+                                <span className="ml-1.5 text-xs font-bold">{funnel.activeCount}</span>
+                            )}
+                        </button>
 
                         <div className="relative flex-shrink-0" ref={filterDropdownRef}>
                             <button
@@ -1090,6 +1161,12 @@ const Commission: React.FC = () => {
                 }}
                 agentId={payoutAgent?.id}
                 agentName={payoutAgent?.team_name}
+            />
+
+            <TableFunnelFilter
+                {...funnel.panelProps}
+                title="Commission Filters"
+                subtitle="Refine your commission results"
             />
         </div>
     );

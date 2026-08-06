@@ -96,6 +96,22 @@ export const allColumns: Column[] = [
   { key: 'techUpdatedBy', label: 'Technical Details Updated By', dataType: 'varchar' },
   { key: 'onlineStatus', label: 'Online Status', dataType: 'checklist' },
   { key: 'sessionGroup', label: 'Group', dataType: 'checklist' },
+
+  // The remaining columns the Customer table can show. Customer.tsx resolves a filter value
+  // through the same getVal() the table sorts by, so these match what the cell displays.
+  //
+  // Two table columns are deliberately NOT repeated here because an entry of their own would
+  // filter differently from what the cell shows:
+  //  - 'Status' renders the connectivity pill, which is derived from the billing status AND the
+  //    session status. Those are already the 'Billing Status' and 'Online Status' entries above,
+  //    and a third entry keyed on the raw billing status would quietly disagree with the pill.
+  //  - 'Expiration Date' is the prepaid expiry, already filterable as 'Prepaid Expiration' above
+  //    — which carries the prepaid-only guard and the local-midnight handling a plain date entry
+  //    would lose.
+  { key: 'customerName', label: 'Full Name', dataType: 'varchar' },
+  { key: 'provider', label: 'Provider', dataType: 'varchar' },
+  { key: 'lcpnapport', label: 'LCPNAPPORT', dataType: 'varchar' },
+  { key: 'mikrotikId', label: 'Mikrotik ID', dataType: 'varchar' },
 ];
 
 const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({

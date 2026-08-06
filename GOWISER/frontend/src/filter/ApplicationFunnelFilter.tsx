@@ -65,6 +65,14 @@ export const allColumns: Column[] = [
   { key: 'user_email', label: 'User Email', dataType: 'varchar' },
   { key: 'computed_time', label: '_ComputedTime', dataType: 'datetime' },
   { key: 'installation_address', label: 'Full Address', dataType: 'varchar' },
+  // The remaining columns the Application table can show. Keyed in snake_case to match the
+  // application payload, which is what ApplicationManagement.tsx looks a filter value up by —
+  // and what its cells render from, so filter and cell agree.
+  { key: 'customer_name', label: 'Customer Name', dataType: 'varchar' },
+  { key: 'secondary_mobile_number', label: 'Secondary Mobile Number', dataType: 'varchar' },
+  { key: 'promo', label: 'Promo', dataType: 'varchar' },
+  { key: 'create_date', label: 'Create Date', dataType: 'date' },
+  { key: 'create_time', label: 'Create Time', dataType: 'varchar' },
 ];
 
 const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({

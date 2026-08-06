@@ -791,6 +791,37 @@ export interface SubscriberOverview {
   sessions?: LabelledCount[];
   /** VIP-status and free-plan accounts, for the Group Overview. */
   free_connections?: FreeConnections;
+  /**
+   * Who the VIP counter is counting, by name.
+   *
+   * Null — not an empty list — on a source with no VIP concept. "No VIP
+   * accounts" and "this system does not model VIP" are different claims, and
+   * the panel says which.
+   */
+  vip_accounts?: VipAccountList | null;
+}
+
+/** One account exempted from billing by a VIP billing status. */
+export interface VipAccount {
+  id: string;
+  account_number: string;
+  subscriber: string;
+  contact_number: string;
+  barangay: string;
+  plan: string;
+  /** Null for an open-ended VIP, which is a real state rather than missing data. */
+  vip_expiration: string | null;
+  date_installed: string | null;
+  /** Set only on an aggregate response — an account number is unique per system. */
+  source?: string;
+  source_label?: string;
+}
+
+export interface VipAccountList {
+  rows: VipAccount[];
+  /** The true count, which exceeds rows.length when the list was capped. */
+  total: number;
+  truncated: boolean;
 }
 
 /** One work-order stream — job orders or service orders. */
@@ -961,6 +992,16 @@ export interface ExecutiveFinancialSummary {
   channels?: Record<string, { label: string; total: number; count: number; share_pct: number }>;
   opex?: number;
   capex?: number;
+  /**
+   * MONTHLY charges, whatever the page range is — and netted off nothing.
+   *
+   * Both are fixed-period costs on a page whose period moves. Subtracting a
+   * month's charge from a day's income is not a smaller number but a wrong one,
+   * and on a yearly range it understates the cost twelvefold the other way, so
+   * no "net after platform costs" figure is produced at all. They are reported
+   * as monthly amounts and left for the reader to compare against whichever
+   * period they actually mean.
+   */
   sync_price?: SyncPriceLine;
   hosting_fee?: HostingFeeLine;
   /**
@@ -969,13 +1010,9 @@ export interface ExecutiveFinancialSummary {
    * ExecutiveOverviewService::financialSummary.
    */
   total_expenses?: number;
-  /** SYNC fee + hosting fee; null when neither is configured. */
-  platform_costs?: number | null;
   gross?: number;
   /** Total income − total expenses. Unchanged formula. */
   net?: number;
-  /** Net with both configurable costs taken off; null when neither is set. */
-  net_after_platform_costs?: number | null;
   margin_pct?: number | null;
   /** Anchored on the current month, never on the widget's range. */
   month_income?: number | null;

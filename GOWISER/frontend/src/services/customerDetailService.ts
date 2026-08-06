@@ -84,6 +84,11 @@ export interface CustomerDetailData {
   onlineSessionStatus?: string;
   session_group?: string;
   session_ip?: string;
+  /** Live RADIUS sessions on this account. Fallback for `sessionStatusFrom()` when
+   *  session_status is absent — see utils/onlineStatus.ts. */
+  active_sessions?: number;
+  /** When the RADIUS sync last wrote this account's online_status row. */
+  session_updated_at?: string | null;
   onlineStatusData?: any;
 }
 

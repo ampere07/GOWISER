@@ -105,6 +105,9 @@ class GowiserReportsDriver implements ReportsDriver
             // Subscribers SYNC is licensed for, excluding VIP and Pullout.
             'sync_billable_accounts' => $this->syncBillableAccounts($db),
 
+            // Who the VIP counter above is actually counting. See vipAccounts.
+            'vip_accounts' => $this->vipAccounts($db),
+
             // Every barangay, not a top ten — see barangayBreakdown.
             'barangays' => $this->barangayBreakdown($db, $params),
 
@@ -521,6 +524,91 @@ class GowiserReportsDriver implements ReportsDriver
         }
 
         return (int) $query->count();
+    }
+
+    /**
+     * Hard ceiling on the VIP list.
+     *
+     * VIP is an exception granted account by account, so this list is tens of
+     * rows on a healthy fleet — but it is driven by a billing status anyone can
+     * set, and a misconfiguration that flips thousands of accounts to VIP must
+     * not turn an executive dashboard into a thousand-row table. The cap is
+     * generous enough that it is never reached in normal operation, and
+     * `vip_accounts_total` beside it always states the true count so a truncated
+     * list is visible rather than silent.
+     */
+    private const VIP_LIST_LIMIT = 500;
+
+    /**
+     * Every account on VIP billing status, by name.
+     *
+     * The Group Overview reports how many accounts are unbilled; this is who
+     * they are. A count answers "how much are we giving away" and a list answers
+     * "to whom" — the second is the one that gets acted on, and it was previously
+     * unanswerable without opening the operating system itself.
+     *
+     * VIP *status* only, deliberately. An account on a plan merely named "VIP
+     * FREE" is a different population recorded in a different place, and folding
+     * the two together would produce a list nobody could reconcile against the
+     * VIP counter above it.
+     *
+     * One query with two joins rather than a per-row lookup: the expiry and the
+     * plan name are both wanted for every row, and lazily resolving either would
+     * be one query per VIP account.
+     *
+     * @return array{rows: array<int, array<string, mixed>>, total: int, truncated: bool}
+     */
+    private function vipAccounts(ConnectionInterface $db): array
+    {
+        $matchesVip = "LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'vip'";
+
+        $base = fn (): Builder => $db->table('billing_accounts as ba')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->whereRaw($matchesVip);
+
+        $total = (int) $base()->count();
+
+        if ($total === 0) {
+            return ['rows' => [], 'total' => 0, 'truncated' => false];
+        }
+
+        $rows = $base()
+            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+            ->select(
+                'ba.id',
+                'ba.account_no',
+                'ba.vip_expiration',
+                'ba.date_installed',
+                'c.first_name',
+                'c.last_name',
+                'c.contact_number_primary',
+                'c.barangay',
+                'pl.plan_name'
+            )
+            // Soonest expiry first, and accounts with no expiry last: an
+            // open-ended VIP needs no diary entry, one lapsing on Friday does.
+            ->orderByRaw('ba.vip_expiration IS NULL, ba.vip_expiration ASC')
+            ->orderBy('ba.account_no')
+            ->limit(self::VIP_LIST_LIMIT)
+            ->get();
+
+        return [
+            'rows' => $rows->map(fn ($row) => [
+                'id' => (string) $row->id,
+                'account_number' => (string) ($row->account_no ?? ''),
+                'subscriber' => $this->fullName($row->first_name ?? '', $row->last_name ?? ''),
+                'contact_number' => (string) ($row->contact_number_primary ?? ''),
+                'barangay' => (string) ($row->barangay ?? ''),
+                'plan' => (string) ($row->plan_name ?? ''),
+                // Null rather than an empty string: "no end date" is a real
+                // state for a VIP and the table renders it as such.
+                'vip_expiration' => $row->vip_expiration ?: null,
+                'date_installed' => $row->date_installed ?: null,
+            ])->all(),
+            'total' => $total,
+            'truncated' => $total > self::VIP_LIST_LIMIT,
+        ];
     }
 
     /**

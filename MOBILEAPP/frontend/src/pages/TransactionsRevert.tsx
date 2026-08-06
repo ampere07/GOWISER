@@ -15,6 +15,7 @@ import { RefreshCw, ChevronsLeft, ChevronsRight } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { TransactionRevert } from '../services/transactionRevertService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import TransactionsRevertDetails from '../components/TransactionsRevertDetails';
 import { useTransactionRevertStore } from '../store/transactionRevertStore';
 import GlobalSearch from './globalfunctions/GlobalSearch';
@@ -211,7 +212,7 @@ const TransactionsRevert: React.FC = () => {
                             {!!item.requester?.email_address && (
                                 <>
                                     <Text style={{ fontSize: 12, color: '#9ca3af', marginHorizontal: 4 }}>|</Text>
-                                    <Text style={{ fontSize: 12, color: '#6b7280' }} numberOfLines={1}>{item.requester.email_address}</Text>
+                                    <Text style={{ fontSize: 12, color: '#6b7280' }} numberOfLines={1}>{getUserDisplayName(item.requester, item.requester.email_address)}</Text>
                                 </>
                             )}
                         </View>

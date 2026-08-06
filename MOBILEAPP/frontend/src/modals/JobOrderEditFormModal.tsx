@@ -2041,7 +2041,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                     <option value={formData.assignedEmail}>{formData.assignedEmail}</option>
                   )}
                   {technicians.map((technician, index) => (
-                    <option key={index} value={technician.email}>{technician.email}</option>
+                    <option key={index} value={technician.email}>{technician?.name || technician.email}</option>
                   ))}
                 </select>
                 <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'

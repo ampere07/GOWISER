@@ -34,6 +34,7 @@ import { relatedDataService } from '../services/relatedDataService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
 import ServiceOrderDetails from './ServiceOrderDetails';
 import LcpNapLocationDetails from './LcpNapLocationDetails';
+import { getOnlineStatusInfo, OnlineStatusInfo } from '../utils/onlineStatus';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -99,32 +100,23 @@ interface BillingDetailsProps {
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
 
-interface StatusInfo {
-  label: string;
-  color: string;
-  dotColor: string;
-}
+/**
+ * Delegated to the shared resolver so this panel cannot drift from the customer list
+ * again. The copy that lived here was missing three of its rules:
+ *
+ *  - no 'inactive' rule, so an account switched off in billing could read ONLINE off
+ *    a stale RADIUS session;
+ *  - no 'empty' guard, so "no session record" surfaced as a status called EMPTY
+ *    instead of OFFLINE;
+ *  - `record.status || 'disconnected'`, so an account whose billing status had not
+ *    loaded yet rendered DISCONNECTED rather than falling through to the session.
+ *
+ * The returned shape is unchanged — { label, color, dotColor } — so every caller here
+ * keeps working.
+ */
+type StatusInfo = OnlineStatusInfo;
 
-const getStatusInfo = (record: any): StatusInfo => {
-  const accessStatus = record.status || 'disconnected';
-  const lowerStatus = accessStatus.toLowerCase();
-  const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-  let bucket = 'offline';
-  if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-  else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-  else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-  else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-  else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline') bucket = lowerOnlineStatus;
-
-  const lower = bucket.toLowerCase();
-  if (lower === 'online') return { label: 'ONLINE', color: '#22c55e', dotColor: '#22c55e' };
-  if (lower === 'offline') return { label: 'OFFLINE', color: '#facc15', dotColor: '#facc15' };
-  if (lower === 'not found') return { label: 'NOT FOUND', color: '#dc2626', dotColor: '#dc2626' };
-  if (lower === 'disconnected') return { label: 'DISCONNECTED', color: '#9ca3af', dotColor: '#9ca3af' };
-  if (lower === 'restricted') return { label: 'RESTRICTED', color: '#be6b33', dotColor: '#f97316' };
-  return { label: bucket.toUpperCase(), color: '#3b82f6', dotColor: '#3b82f6' };
-};
+const getStatusInfo = (record: any): StatusInfo => getOnlineStatusInfo(record);
 
 // ─── Inline simple card for non-RN detail views ──────────────────────────────
 

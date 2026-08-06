@@ -32,9 +32,27 @@ export const accountStatusFrom = (customerData: any): string =>
   customerData?.billingAccount?.billingStatusName
   || (customerData?.billingAccount?.billingStatusId === 1 ? 'Active' : 'Inactive');
 
-/** RADIUS session status. 'Empty' means no session record, which reads as offline. */
-export const sessionStatusFrom = (customerData: any): string =>
-  customerData?.onlineSessionStatus || 'Empty';
+/**
+ * RADIUS session status, from `online_status.session_status`.
+ *
+ * `active_sessions` is the fallback, not the primary: session_status already
+ * accounts for a customer holding a live session while sitting in the Restricted or
+ * Disconnected RADIUS group, and that distinction must not be flattened to "online".
+ * It is consulted only when session_status is absent — a row written before the
+ * field existed, or a partial sync — where a live session count is better evidence
+ * than defaulting to offline. The Customer list has always had this signal from
+ * BillingController; the detail endpoint now returns it too, so the panel and the
+ * list resolve the same way.
+ *
+ * 'Empty' means no session record at all, which reads as offline.
+ */
+export const sessionStatusFrom = (customerData: any): string => {
+  const status = customerData?.onlineSessionStatus;
+
+  if (status) return status;
+
+  return Number(customerData?.active_sessions ?? 0) >= 1 ? 'Online' : 'Empty';
+};
 
 export interface OnlineStatusInfo {
   label: string;

@@ -11,6 +11,7 @@ import pusher from '../services/pusherService';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
+import { getUserDisplayName, resolveUserDisplayName } from '../utils/userDisplay';
 import { User } from '../types/api';
 
 const hexToRgba = (hex: string, opacity: number) => {
@@ -186,6 +187,18 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
   const [agentName, setAgentName] = useState<string>('');
   const [users, setUsers] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(true);
+  // service_orders persists the actor as an email string. Built once from the users
+  // already loaded for this page, so labelling rows by name costs no extra request.
+  const userDirectory = useMemo(() => {
+    return users.reduce<Record<string, string>>((directory, user) => {
+      const email = (user?.email_address || '').trim().toLowerCase();
+      const displayName = getUserDisplayName(user);
+      if (email && displayName && displayName.toLowerCase() !== email) {
+        directory[email] = displayName;
+      }
+      return directory;
+    }, {});
+  }, [users]);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
@@ -695,20 +708,9 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'dateInstalled': return item.dateInstalled;
       case 'modifiedBy': return item.modifiedBy ?? (item as any).updated_by_user ?? '';
       case 'modifiedDate': return item.modifiedDate ?? (item as any).updated_at ?? '';
-      case 'assignedEmail':
-        const email = item.assignedEmail || '';
-        if (!email) return '-';
-        const user = users.find(u => (u.email_address || '').toLowerCase() === email.toLowerCase());
-        if (user) {
-          const fullName = [
-            user.first_name || '',
-            user.middle_initial ? `${user.middle_initial}.` : '',
-            user.last_name || ''
-          ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-          return fullName || email;
-        }
-        return email;
-      case 'requestedBy': return item.requestedBy;
+      // Sorted by what the cell shows, so these mirror renderCellValue.
+      case 'assignedEmail': return resolveUserDisplayName(item.assignedEmail, userDirectory, '-');
+      case 'requestedBy': return resolveUserDisplayName(item.requestedBy, userDirectory);
       case 'serviceCharge': return item.serviceCharge;
       case 'routerModel': return item.routerModel;
       case 'routerModemSN': return item.routerModemSN ?? (item as any).router_modem_sn ?? '';
@@ -744,7 +746,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         return val !== undefined && val !== null ? val : '';
       }
     }
-  }, []);
+  }, [userDirectory]);
 
   // 1. Initial search and funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredServiceOrders = useMemo(() => {
@@ -1377,20 +1379,9 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'concernRemarks':
         return serviceOrder.concernRemarks || '-';
       case 'requestedBy':
-        return serviceOrder.requestedBy || '-';
+        return resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, '-');
       case 'assignedEmail':
-        const assignEmail = serviceOrder.assignedEmail || '';
-        if (!assignEmail) return '-';
-        const assignedUser = users.find(u => (u.email_address || '').toLowerCase() === assignEmail.toLowerCase());
-        if (assignedUser) {
-          const fullName = [
-            assignedUser.first_name || '',
-            assignedUser.middle_initial ? `${assignedUser.middle_initial}.` : '',
-            assignedUser.last_name || ''
-          ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-          return fullName || assignEmail;
-        }
-        return assignEmail;
+        return resolveUserDisplayName(serviceOrder.assignedEmail, userDirectory, '-');
       case 'repairCategory':
         return serviceOrder.repairCategory || '-';
       // Explicit cases are required: the default arm below returns '-', so a column
@@ -1439,20 +1430,8 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         case 'fullAddress': return so.fullAddress || '-';
         case 'concern': return so.concern || '-';
         case 'concernRemarks': return so.concernRemarks || '-';
-        case 'requestedBy': return so.requestedBy || '-';
-        case 'assignedEmail':
-          const exportEmail = so.assignedEmail || '';
-          if (!exportEmail) return '-';
-          const exportUser = users.find(u => (u.email_address || '').toLowerCase() === exportEmail.toLowerCase());
-          if (exportUser) {
-            const fullName = [
-              exportUser.first_name || '',
-              exportUser.middle_initial ? `${exportUser.middle_initial}.` : '',
-              exportUser.last_name || ''
-            ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-            return fullName || exportEmail;
-          }
-          return exportEmail;
+        case 'requestedBy': return resolveUserDisplayName(so.requestedBy, userDirectory, '-');
+        case 'assignedEmail': return resolveUserDisplayName(so.assignedEmail, userDirectory, '-');
         case 'repairCategory': return so.repairCategory || '-';
         // A separate switch from renderCellValue, with its own '-' default, so these
         // have to be listed here too or the CSV exports a column of dashes.

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\EmailQueue;
 use App\Models\EmailTemplate;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Log;
 
 class EmailQueueService
@@ -15,22 +16,78 @@ class EmailQueueService
         $this->resendService = $resendService;
     }
 
+    /**
+     * Queue one email, at most once.
+     *
+     * Scheduled notices come from scans that are expected to re-run — the daily billing cron, a
+     * manual re-run, a scan whose "already notified" marker failed to persist. Queueing is
+     * therefore idempotent for anything carrying a `time_sent`: the
+     * (account, recipient, subject, time_sent) tuple is hashed into `email_queue.dedupe_key`, which
+     * is UNIQUE, so a second insert loses at the database and the row already queued is returned
+     * instead. Two overlapping runs cannot email a customer twice.
+     *
+     * Emails queued WITHOUT a time_sent are deliberately NOT deduplicated — resending the same
+     * message by hand is a legitimate operator action. Mirrors
+     * {@see \App\Services\SmsQueueService::queueSms()}.
+     */
     public function queueEmail(array $data): EmailQueue
     {
-        $emailQueue = EmailQueue::create([
-            'account_no' => $data['account_no'] ?? null,
-            'recipient_email' => $data['recipient_email'],
-            'cc' => $data['cc'] ?? null,
-            'bcc' => $data['bcc'] ?? null,
-            'subject' => $data['subject'],
-            'body_html' => $data['body_html'],
-            'attachment_path' => $data['attachment_path'] ?? null,
-            'status' => 'pending',
-            'time_sent' => $data['time_sent'] ?? null,
-            'email_sender' => $data['email_sender'] ?? null,
-            'reply_to' => $data['reply_to'] ?? null,
-            'sender_name' => $data['sender_name'] ?? null
-        ]);
+        $dedupeKey = $this->dedupeKeyFor(
+            $data['account_no'] ?? null,
+            $data['recipient_email'],
+            $data['subject'],
+            $data['time_sent'] ?? null
+        );
+
+        if ($dedupeKey !== null) {
+            $existing = EmailQueue::where('dedupe_key', $dedupeKey)->first();
+
+            if ($existing) {
+                Log::info('Email already queued for this notification, not queueing again', [
+                    'id' => $existing->id,
+                    'recipient' => $data['recipient_email'],
+                    'subject' => $data['subject'],
+                    'status' => $existing->status,
+                ]);
+
+                return $existing;
+            }
+        }
+
+        try {
+            $emailQueue = EmailQueue::create([
+                'account_no' => $data['account_no'] ?? null,
+                'recipient_email' => $data['recipient_email'],
+                'cc' => $data['cc'] ?? null,
+                'bcc' => $data['bcc'] ?? null,
+                'subject' => $data['subject'],
+                'dedupe_key' => $dedupeKey,
+                'body_html' => $data['body_html'],
+                'attachment_path' => $data['attachment_path'] ?? null,
+                'status' => 'pending',
+                'time_sent' => $data['time_sent'] ?? null,
+                'email_sender' => $data['email_sender'] ?? null,
+                'reply_to' => $data['reply_to'] ?? null,
+                'sender_name' => $data['sender_name'] ?? null
+            ]);
+        } catch (QueryException $e) {
+            // Lost the race against a concurrent run holding the same key — that run has already
+            // queued the message, so this is success. Anything else is a real fault and re-thrown.
+            if ($dedupeKey !== null && $this->isDuplicateKeyViolation($e)) {
+                $existing = EmailQueue::where('dedupe_key', $dedupeKey)->first();
+
+                if ($existing) {
+                    Log::info('Email queued concurrently by another run, reusing that row', [
+                        'id' => $existing->id,
+                        'recipient' => $data['recipient_email'],
+                    ]);
+
+                    return $existing;
+                }
+            }
+
+            throw $e;
+        }
 
         Log::info('Email queued', [
             'id' => $emailQueue->id,
@@ -39,6 +96,35 @@ class EmailQueueService
         ]);
 
         return $emailQueue;
+    }
+
+    /**
+     * The idempotency key for a scheduled notification, or null when the message is not one.
+     *
+     * MUST stay in step with the UNIQUE index added in
+     * 2026_08_06_000003_add_dedupe_key_to_email_queue.
+     */
+    public function dedupeKeyFor(?string $accountNo, string $recipientEmail, string $subject, ?string $timeSent): ?string
+    {
+        if (empty($timeSent)) {
+            return null;
+        }
+
+        return hash('sha256', implode("\0", [
+            (string) $accountNo,
+            $recipientEmail,
+            $subject,
+            $timeSent,
+        ]));
+    }
+
+    /**
+     * A UNIQUE constraint violation, as opposed to any other query failure.
+     */
+    private function isDuplicateKeyViolation(QueryException $e): bool
+    {
+        return ($e->errorInfo[0] ?? null) === '23000'
+            && in_array((int) ($e->errorInfo[1] ?? 0), [1062, 1586], true);
     }
 
     public function queueFromTemplate(string $templateCode, array $data): ?EmailQueue

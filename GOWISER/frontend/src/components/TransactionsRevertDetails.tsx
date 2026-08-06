@@ -4,6 +4,7 @@ import { TransactionRevert, transactionRevertService } from '../services/transac
 import { ColorPalette } from '../services/settingsColorPaletteService';
 
 import { useBillingStore } from '../store/billingStore';
+import { getUserDisplayName } from '../utils/userDisplay';
 import LoadingModal from './common/LoadingModalGlobal';
 
 interface TransactionsRevertDetailsProps {
@@ -272,8 +273,8 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
                                 <div className={`w-40 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Status</div>
                                 <div className="flex-1">{getStatusBadge(currentRevert.status)}</div>
                             </div>
-                            {renderField('Requested By', currentRevert.requester?.email_address || `User ID: ${currentRevert.requested_by}` || '-')}
-                            {renderField('Updated By', currentRevert.updater?.email_address || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
+                            {renderField('Requested By', getUserDisplayName(currentRevert.requester, currentRevert.requester?.email_address) || `User ID: ${currentRevert.requested_by}` || '-')}
+                            {renderField('Updated By', getUserDisplayName(currentRevert.updater, currentRevert.updater?.email_address) || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
                             {renderField('Remarks', currentRevert.remarks || 'No remarks')}
                             <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'}`}>
                                 <div className={`w-40 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Reason</div>

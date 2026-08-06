@@ -231,6 +231,16 @@ class ExecutiveOverviewService
 
             // Subscribers who are not billed. See freeConnections.
             'free_connections' => $this->freeConnections($subscribers),
+
+            // Who the VIP counter above is counting, by name. Passed straight
+            // through from the section payload — this view composes section
+            // output rather than issuing SQL of its own, so that the list and the
+            // counter beside it can never be taken over different populations.
+            //
+            // Absent on a source with no VIP concept, which the panel reports as
+            // "not tracked" rather than as an empty list: no rows and no such
+            // thing are different claims.
+            'vip_accounts' => $subscribers['vip_accounts'] ?? null,
         ];
     }
 
@@ -482,17 +492,21 @@ class ExecutiveOverviewService
         // The SYNC platform fee is an expense that exists in no ledger: it is a
         // per-subscriber licence, so it is a headcount times a rate.
         //
-        // Reported as its own line under Expenses and deliberately *not* added
-        // into Total Expenses or netted off Net Income. The brief asks for the
-        // figure to be rendered under Expenses while keeping the existing
-        // expense and net logic untouched, and those two instructions can only
-        // both hold if this is a line beside them rather than inside them. It is
-        // also the safer reading: Total Expenses reconciles against the expenses
-        // module today, and quietly adding a figure that module has never heard
-        // of would break that reconciliation with no visible cause.
+        // Both it and the hosting fee are MONTHLY charges, and the page range is
+        // not: it can be a day, a week, a month or a year. That makes them the
+        // only figures on the page whose period is fixed while everything around
+        // them moves, so they are reported as monthly amounts, labelled as such,
+        // and deliberately kept out of every derived total:
         //
-        // `net_after_sync` carries the other reading for anyone who wants it,
-        // labelled rather than substituted.
+        //  - not added into Total Expenses, which must stay reconcilable against
+        //    the Financial module, and which no expenses ledger has heard of;
+        //  - not netted off Net Income, and no "net after platform costs" figure
+        //    is produced at all. Subtracting a month's cost from a day's income
+        //    is not a smaller number, it is a wrong one — and on a yearly range
+        //    it understates the cost twelvefold in the other direction. There is
+        //    no range-independent way to net a monthly charge against a
+        //    range-scoped income, so the honest thing is to report the charge and
+        //    let the reader do the comparison they actually mean.
         $syncPrice = SyncPricing::build(
             isset($subscribers['sync_billable_accounts'])
                 ? (int) $subscribers['sync_billable_accounts']
@@ -503,13 +517,6 @@ class ExecutiveOverviewService
 
         $totalExpenses = $opex + $capex;
         $net = $headlineIncome - $totalExpenses;
-
-        // Both configurable costs together, so the "what does this actually cost
-        // us" figure does not silently mean "…except hosting" the moment a
-        // second such setting exists.
-        $platformCosts = ($syncPrice['total'] ?? null) !== null || ($hostingFee['total'] ?? null) !== null
-            ? (float) ($syncPrice['total'] ?? 0) + (float) ($hostingFee['total'] ?? 0)
-            : null;
 
         $rolling = $financial['rolling'] ?? [];
 
@@ -526,22 +533,18 @@ class ExecutiveOverviewService
 
             'opex' => round($opex, 2),
             'capex' => round($capex, 2),
+            // Monthly charges, whatever the page range is. Reported beside Total
+            // Expenses rather than inside it, and netted off nothing — see the
+            // note above the SyncPricing::build() call.
             'sync_price' => $syncPrice,
             'hosting_fee' => $hostingFee,
             // OpEx + CapEx, as before. Neither the SYNC fee nor the hosting fee
             // is in here — they are reported beside Total Expenses rather than
             // inside it, keeping the figure reconcilable against the Financial module.
             'total_expenses' => round($totalExpenses, 2),
-            // The two configurable costs together, or null when neither is set.
-            'platform_costs' => $platformCosts !== null ? round($platformCosts, 2) : null,
 
             'gross' => round($headlineIncome, 2),
             'net' => round($net, 2),
-            // Null rather than equal to `net` when neither cost is configured, so
-            // the two are never silently the same number for two different reasons.
-            'net_after_platform_costs' => $platformCosts !== null
-                ? round($net - $platformCosts, 2)
-                : null,
             'margin_pct' => $headlineIncome > 0
                 ? round($net / $headlineIncome * 100, 1)
                 : null,

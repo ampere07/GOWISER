@@ -36,6 +36,7 @@ import { BillingDetailRecord } from '../types/billing';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import PaymentPortalFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/PaymentPortalFunnelFilter';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -68,9 +69,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
   middleInitial: customerData.middleInitial,
   address: customerData.address,
   status: customerData.billingAccount?.billingStatusName ||
-    (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    (accountStatusFrom(customerData)),
   balance: customerData.billingAccount?.accountBalance || 0,
-  onlineStatus: customerData.onlineSessionStatus || 'Empty',
+  onlineStatus: sessionStatusFrom(customerData),
   cityId: null,
   regionId: null,
   timestamp: customerData.updatedAt || '',

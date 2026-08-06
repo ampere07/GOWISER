@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Loader2, RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Download, Columns3, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Loader2, RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Download, Columns3, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useWorkOrderStore } from '../store/workOrderStore';
@@ -10,6 +10,14 @@ import pusher from '../services/pusherService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { exportToCSV } from '../utils/exportUtils';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
+
+// work_orders persists these actors as email strings; they render as names where the
+// email is known to the user directory, and fall through unchanged otherwise.
+const USER_COLUMN_KEYS = ['assign_to', 'report_to', 'requested_by', 'updated_by'];
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -17,6 +25,7 @@ const hexToRgba = (hex: string, opacity: number) => {
 };
 
 const WorkOrderPage: React.FC = () => {
+  const userDirectory = useUserDirectory();
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [searchQuery, setSearchQuery] = useState('');
@@ -399,11 +408,43 @@ const WorkOrderPage: React.FC = () => {
     });
   }, [workOrders, userRole, userEmail, userName, searchQuery, currentUserOrgId]);
 
+  /**
+   * One filter entry per table column, so every column the table can show is filterable. Keys
+   * match workOrderColumns exactly - the table renders each cell from wo[key] and the filter
+   * reads the same key. Category, status and assignee columns offer the values present in the
+   * loaded work orders rather than requiring a lookup endpoint.
+   *
+   * This table had no column filter at all before; WorkOrderFunnelFilter.tsx exists in the repo
+   * but is imported by nothing and is written against a different (job-order) schema, so it is
+   * left alone rather than half-adapted.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'instructions', label: 'Instructions', dataType: 'text' },
+    { key: 'work_category', label: 'Work Category', dataType: 'checklist' },
+    { key: 'work_status', label: 'Status', dataType: 'checklist' },
+    { key: 'assign_to', label: 'Assigned To', dataType: 'checklist' },
+    { key: 'report_to', label: 'Report To', dataType: 'checklist' },
+    { key: 'requested_by', label: 'Requested By', dataType: 'varchar' },
+    { key: 'requested_date', label: 'Requested Date', dataType: 'date' },
+    { key: 'remarks', label: 'Remarks', dataType: 'text' },
+    { key: 'updated_by', label: 'Updated By', dataType: 'varchar' },
+    { key: 'updated_date', label: 'Updated Date', dataType: 'datetime' },
+  ];
+
+  // Applied on the search-narrowed set so the counts and the table describe the same rows -
+  // the point Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'workOrderFunnelFilters',
+    columns: funnelColumns,
+    rows: filteredWorkOrders,
+  });
+
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, itemsPerPage]);
 
-  const totalPages = Math.ceil(filteredWorkOrders.length / itemsPerPage);
+  const totalPages = Math.ceil(funnel.filteredRows.length / itemsPerPage);
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -419,14 +460,14 @@ const WorkOrderPage: React.FC = () => {
   }, [currentPage]);
 
   const paginatedWorkOrders = useMemo(() => {
-    return filteredWorkOrders.slice(
+    return funnel.filteredRows.slice(
       (currentPage - 1) * itemsPerPage,
       currentPage * itemsPerPage
     );
-  }, [filteredWorkOrders, currentPage, itemsPerPage]);
+  }, [funnel.filteredRows, currentPage, itemsPerPage]);
 
   const PaginationControls = () => {
-    if (filteredWorkOrders.length === 0) return null;
+    if (funnel.filteredRows.length === 0) return null;
 
     return (
       <div className={`border-t p-4 flex flex-col md:flex-row items-center md:justify-between gap-3 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200 shadow-lg'}`}>
@@ -448,7 +489,7 @@ const WorkOrderPage: React.FC = () => {
             <span>entries</span>
           </div>
           <div>
-            Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, filteredWorkOrders.length)}</span> of <span className="font-medium">{filteredWorkOrders.length}</span> results
+            Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, funnel.filteredRows.length)}</span> of <span className="font-medium">{funnel.filteredRows.length}</span> results
           </div>
         </div>
         <div className="flex items-center flex-wrap justify-center gap-1">
@@ -679,8 +720,8 @@ const WorkOrderPage: React.FC = () => {
   }, []);
 
   const sortedWorkOrders = useMemo(() => {
-    if (!sortColumn) return filteredWorkOrders;
-    return [...filteredWorkOrders].sort((a, b) => {
+    if (!sortColumn) return funnel.filteredRows;
+    return [...funnel.filteredRows].sort((a, b) => {
       let aValue: any = (a as any)[sortColumn];
       let bValue: any = (b as any)[sortColumn];
       if (typeof aValue === 'string') aValue = aValue.toLowerCase();
@@ -689,10 +730,10 @@ const WorkOrderPage: React.FC = () => {
       if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [filteredWorkOrders, sortColumn, sortDirection]);
+  }, [funnel.filteredRows, sortColumn, sortDirection]);
 
   const handleExport = () => {
-    if (!filteredWorkOrders || filteredWorkOrders.length === 0) return;
+    if (!funnel.filteredRows || funnel.filteredRows.length === 0) return;
 
     const getExportValue = (record: WorkOrder, columnKey: string) => {
       switch (columnKey) {
@@ -700,18 +741,18 @@ const WorkOrderPage: React.FC = () => {
         case 'instructions': return record.instructions || '-';
         case 'work_category': return record.work_category || '-';
         case 'work_status': return record.work_status || '-';
-        case 'assign_to': return record.assign_to || '-';
-        case 'report_to': return record.report_to || '-';
-        case 'requested_by': return record.requested_by || '-';
+        case 'assign_to': return resolveUserDisplayName(record.assign_to, userDirectory, '-');
+        case 'report_to': return resolveUserDisplayName(record.report_to, userDirectory, '-');
+        case 'requested_by': return resolveUserDisplayName(record.requested_by, userDirectory, '-');
         case 'requested_date': return formatDate(record.requested_date);
         case 'remarks': return record.remarks || '-';
-        case 'updated_by': return record.updated_by || '-';
+        case 'updated_by': return resolveUserDisplayName(record.updated_by, userDirectory, '-');
         case 'updated_date': return formatDate(record.updated_date);
         default: return '-';
       }
     };
 
-    exportToCSV('work_orders_export', workOrderColumns, filteredWorkOrders, getExportValue);
+    exportToCSV('work_orders_export', workOrderColumns, funnel.filteredRows, getExportValue);
   };
 
   return (
@@ -732,6 +773,24 @@ const WorkOrderPage: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center space-x-2 flex-shrink-0">
+                <button
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                  className={`px-4 py-2 rounded text-sm transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                    ? 'text-white'
+                    : isDarkMode
+                      ? 'hover:bg-gray-800 text-white'
+                      : 'hover:bg-gray-100 text-gray-900'
+                    }`}
+                  style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                >
+                  <Filter className="h-5 w-5" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 {displayMode === 'table' && (
                   <div className="relative z-50 flex-shrink-0" ref={columnDropdownRef}>
                     <button
@@ -854,7 +913,7 @@ const WorkOrderPage: React.FC = () => {
                 </button>
                 <button
                   onClick={handleExport}
-                  disabled={isLoading || filteredWorkOrders.length === 0}
+                  disabled={isLoading || funnel.filteredRows.length === 0}
                   title="Export to CSV"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
                   style={{
@@ -863,12 +922,12 @@ const WorkOrderPage: React.FC = () => {
                     color: colorPalette?.primary || '#7c3aed'
                   }}
                   onMouseEnter={(e) => {
-                    if (!isLoading && filteredWorkOrders.length > 0 && colorPalette?.primary) {
+                    if (!isLoading && funnel.filteredRows.length > 0 && colorPalette?.primary) {
                       e.currentTarget.style.backgroundColor = hexToRgba(colorPalette.primary, 0.1);
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (!isLoading && filteredWorkOrders.length > 0) {
+                    if (!isLoading && funnel.filteredRows.length > 0) {
                       e.currentTarget.style.backgroundColor = '#ffffff';
                     }
                   }}
@@ -940,7 +999,7 @@ const WorkOrderPage: React.FC = () => {
                                 <span>Category: {wo.work_category}</span>
                               )}
                               <span>Requested Date: {formatDate(wo.requested_date)}</span>
-                              <span>Report To: {wo.report_to || 'Pending'}</span>
+                              <span>Report To: {resolveUserDisplayName(wo.report_to, userDirectory, 'Pending')}</span>
                             </div>
                           </div>
                           <span className={`text-xs font-bold uppercase tracking-wide whitespace-nowrap ${
@@ -1026,6 +1085,7 @@ const WorkOrderPage: React.FC = () => {
                                 {(() => {
                                   const val = (wo as any)[column.key];
                                   if (column.key === 'requested_date' || column.key === 'updated_date') return formatDate(val);
+                                  if (USER_COLUMN_KEYS.includes(column.key)) return resolveUserDisplayName(val, userDirectory, '-');
                                   if (column.key === 'work_status') {
                                     return (
                                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
@@ -1051,7 +1111,7 @@ const WorkOrderPage: React.FC = () => {
               </div>
             )}
           </div>
-          {!isLoading && filteredWorkOrders.length > 0 && <PaginationControls />}
+          {!isLoading && funnel.filteredRows.length > 0 && <PaginationControls />}
         </div>
       </div>
 
@@ -1092,6 +1152,12 @@ const WorkOrderPage: React.FC = () => {
         onCancel={closeGlobalModal}
         colorPalette={colorPalette}
         isDarkMode={isDarkMode}
+      />
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Work Order Filters"
+        subtitle="Refine your work order results"
       />
     </div>
   );

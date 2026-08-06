@@ -22,6 +22,8 @@ dayjs.extend(timezone);
 import { WorkOrderDetailsProps } from '../types/workOrder';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { updateWorkOrder } from '../services/workOrderService';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import ConfirmationModal from '../modals/MoveToJoModal';
 import StartTimerModal from '../modals/StartTimerModal';
 import { useServiceOrderContext } from '../contexts/ServiceOrderContext';
@@ -141,6 +143,10 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean;
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
   const { serviceOrders } = useServiceOrderContext();
+  // Actors are persisted as email strings, so names come from the shared (cached)
+  // user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const { jobOrders } = useJobOrderContext();
   const { workOrders } = useWorkOrderStore();
 
@@ -390,17 +396,17 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean;
   const fieldRenderers: Record<string, () => React.ReactNode> = useMemo(() => ({
     workOrderId: () => <Text style={valStyle} selectable={true}>{workOrder.id || 'N/A'}</Text>,
     instructions: () => <Text style={valStyle} selectable={true}>{workOrder.instructions || 'No instructions'}</Text>,
-    reportTo: () => <Text style={valStyle} selectable={true}>{workOrder.report_to || 'Not specified'}</Text>,
-    assignTo: () => <Text style={valStyle} selectable={true}>{workOrder.assign_to || 'Not assigned'}</Text>,
+    reportTo: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(workOrder.report_to, userDirectory, 'Not specified')}</Text>,
+    assignTo: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(workOrder.assign_to, userDirectory, 'Not assigned')}</Text>,
     workStatus: () => (
       <Text style={[st.statusText, { color: getStatusColor(workOrder.work_status) }]}>
         {workOrder.work_status || 'Not set'}
       </Text>
     ),
     remarks: () => <Text style={valStyle} selectable={true}>{workOrder.remarks || 'No remarks'}</Text>,
-    requestedBy: () => <Text style={valStyle} selectable={true}>{workOrder.requested_by || 'System'}</Text>,
+    requestedBy: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(workOrder.requested_by, userDirectory, 'System')}</Text>,
     requestedDate: () => <Text style={valStyle} selectable={true}>{formatDate(workOrder.requested_date)}</Text>,
-    updatedBy: () => <Text style={valStyle} selectable={true}>{workOrder.updated_by || 'Not updated'}</Text>,
+    updatedBy: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(workOrder.updated_by, userDirectory, 'Not updated')}</Text>,
     updatedDate: () => <Text style={valStyle} selectable={true}>{formatDate(workOrder.updated_date)}</Text>,
     startTime: () => <Text style={valStyle} selectable={true}>{formatDate(workOrder.start_time)}</Text>,
     endTime: () => <Text style={valStyle} selectable={true}>{formatDate(workOrder.end_time)}</Text>,

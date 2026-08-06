@@ -375,6 +375,21 @@ interface SliceChartProps {
    * narrow to give outside labels room.
    */
   showValues?: boolean;
+  /**
+   * Suppresses the fallback legend, for a chart that sits beside a table
+   * carrying the same rows.
+   *
+   * The legend is a fallback for a chart too narrow to label its own slices —
+   * which is every phone. On a panel whose table stacks underneath the chart at
+   * that same width, the fallback lands directly above a table listing the same
+   * names, counts and shares, so the reader scrolls past the figures twice
+   * before reaching anything new. The chart keeps its colours and its tooltip;
+   * the table beside it is the legend.
+   *
+   * Off by default: a chart with no table beside it still needs the fallback,
+   * and losing it silently would leave a phone reader with an unlabelled pie.
+   */
+  legendFallback?: boolean;
 }
 
 /**
@@ -670,6 +685,7 @@ export const DonutChart: React.FC<SliceChartProps> = ({
   height = 260,
   colors = SLICE_COLORS,
   showValues = true,
+  legendFallback = true,
 }) => {
   const theme = useChartTheme();
   const [ref, roomy] = useHasLabelRoom();
@@ -693,7 +709,7 @@ export const DonutChart: React.FC<SliceChartProps> = ({
         />
       </div>
 
-      {!labelled && (
+      {!labelled && legendFallback && (
         <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
       )}
     </div>
@@ -708,6 +724,7 @@ export const PieChart: React.FC<SliceChartProps> = ({
   height = 260,
   colors = SLICE_COLORS,
   showValues = true,
+  legendFallback = true,
 }) => {
   const theme = useChartTheme();
   const [ref, roomy] = useHasLabelRoom();
@@ -734,7 +751,7 @@ export const PieChart: React.FC<SliceChartProps> = ({
         />
       </div>
 
-      {!labelled && (
+      {!labelled && legendFallback && (
         <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
       )}
     </div>

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Banknote,
@@ -16,6 +16,7 @@ import {
   Wifi,
   Wrench,
   Trophy,
+  Crown,
 } from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
@@ -24,21 +25,21 @@ import BarangayNetworkTable from '../components/reporting/BarangayNetworkTable';
 import FloatingRangeBar from '../components/reporting/FloatingRangeBar';
 import PlanDistributionPanel from '../components/reporting/PlanDistributionPanel';
 import { useWorkStream } from '../components/reporting/WorkStreamCard';
-import WorkQueueCard from '../components/reporting/WorkQueueCard';
 import WorkPipelinePanel from '../components/reporting/WorkPipelinePanel';
-import {
-  FreeConnectionsCard,
-  ResolutionSlaCard,
-} from '../components/reporting/ResolutionPanel';
-import { ErrorBanner, Pill, RankBadge, Table, Td, Th, Thead, Tr } from '../components/reporting/primitives';
+// The same two panels the Operations page renders, from one definition — see
+// OperationsPanels.
+import { QueuePanel, TurnaroundPanel } from '../components/reporting/OperationsPanels';
+import { defaultFilters } from '../components/reporting/sectionShell';
+import { ErrorBanner, PanelState, Pill, RankBadge, Table, Td, Th, Thead, Tr } from '../components/reporting/primitives';
 import { RestrictedPanel } from '../components/rbac/Restricted';
 import { usePermissions } from '../hooks/usePermissions';
+import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useLinkedRange } from '../hooks/useLinkedRange';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
-import { ExecutiveOverviewData } from '../types/reporting';
-import { formatMoney, formatNumber, formatPercent } from '../utils/format';
+import { ExecutiveOverviewData, OperationsData, VipAccountList } from '../types/reporting';
+import { formatDate, formatMoney, formatNumber, formatPercent } from '../utils/format';
 
 interface ExecutiveOverviewProps {
   refreshToken: number;
@@ -94,7 +95,34 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   // figure to arrive at different moments and flicker.
   const work = useWorkStream(pipelineRange, refreshToken);
 
-  const cadence = work.data?.cadence;
+  // Turnaround carries its own range, as it does on the Operations page: it is a
+  // measure of work that *closed* inside a window, so it is the one panel here
+  // that is meaningless without a period of its own. Monthly by default —
+  // a day's closures are too few an average to read anything into.
+  const slaRange = useWidgetRange('monthly');
+
+  // Every database, which is what an executive view means by "the business".
+  // Memoised because useReportingSection depends on this object by identity, and
+  // a fresh one per render would refetch in a loop.
+  const opsFilters = useMemo(() => defaultFilters(), []);
+
+  // The queue panels below carry NO range: a backlog is what is open now, and
+  // one filtered to a date window is not a backlog. Requested without a widget
+  // range so this and the Operations page share a single cached response.
+  const queuesSection = useReportingSection<OperationsData>(
+    reportingService.getOperations,
+    opsFilters,
+    refreshToken
+  );
+
+  const slaSection = useReportingSection<OperationsData>(
+    reportingService.getOperations,
+    opsFilters,
+    refreshToken,
+    { dateFrom: slaRange.range.from, dateTo: slaRange.range.to }
+  );
+
+  const queues = queuesSection.data?.queues ?? [];
   const detachedCount = pipelineRange.linked ? 0 : 1;
 
   const relinkAll = useCallback(() => pipelineRange.relink(), [pipelineRange]);
@@ -358,7 +386,13 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               {/* Three states, not two. An unset rate and a headcount no
                   database could produce are different problems with different
                   fixes, and both must be distinguishable from a genuine ₱0.00 —
-                  which under a Net Income figure would read as "SYNC is free". */}
+                  which under a Net Income figure would read as "SYNC is free".
+
+                  Labelled "/mo" in the value itself rather than only in the
+                  caption: this is the one pair of figures on the page whose
+                  period is fixed while the range control moves everything around
+                  them, and a peso amount with no period beside range-scoped
+                  peso amounts reads as though it followed the range too. */}
               <MiniKpi
                 label="SYNC Price"
                 value={
@@ -368,7 +402,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                     ? 'Not set'
                     : syncPrice.total === null
                     ? '—'
-                    : formatMoney(syncPrice.total)
+                    : `${formatMoney(syncPrice.total)}/mo`
                 }
                 tone={syncPrice?.configured && syncPrice.total !== null ? 'warning' : 'neutral'}
                 caption={
@@ -376,7 +410,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                     ? 'set a rate in Settings'
                     : syncPrice.total === null
                     ? 'subscriber count unavailable'
-                    : `${formatMoney(syncPrice.rate)} × ${formatNumber(syncPrice.billable_accounts)}`
+                    : `${formatMoney(syncPrice.rate)} × ${formatNumber(syncPrice.billable_accounts)} per month`
                 }
               />
               <MiniKpi
@@ -388,7 +422,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                     ? 'Not set'
                     : hostingFee.total === null
                     ? '—'
-                    : formatMoney(hostingFee.total)
+                    : `${formatMoney(hostingFee.total)}/mo`
                 }
                 tone={hostingFee?.configured && hostingFee.total !== null ? 'warning' : 'neutral'}
                 caption={
@@ -409,7 +443,10 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               SYNC is licensed per subscriber, so its cost is a headcount times a rate rather than a
               ledger entry — it appears in no expenses module, and is therefore reported beside Total
               Expenses rather than inside it, which keeps that figure reconcilable against the
-              Financial module.{' '}
+              Financial module. Both it and the hosting fee are monthly charges and are shown as
+              monthly amounts whatever range is selected above; neither is netted off Net Income,
+              because a month&rsquo;s cost cannot be taken off a day&rsquo;s — or a year&rsquo;s —
+              income and still mean anything.{' '}
               {syncPrice?.excluded_statuses?.length
                 ? `Accounts on ${syncPrice.excluded_statuses
                     .map((status) => status.replace(/\b\w/g, (letter) => letter.toUpperCase()))
@@ -419,28 +456,21 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
 
             {/* Result */}
             <SectionLabel label="Result" icon={<Wallet size={14} />} />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* Three figures, not four. "Net after Platform Costs" used to sit
+                here, taking a month of SYNC and hosting off a net that follows
+                the range control — so on a daily range it subtracted a month's
+                cost from a day's income, and on a yearly range it subtracted one
+                month from twelve. There is no range-independent way to net a
+                fixed monthly charge against a range-scoped income, so the figure
+                is not produced at all; the two charges are reported under
+                Expenses as monthly amounts instead. */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <MiniKpi label="Gross Revenue" value={first ? '—' : formatMoney(finance.gross)} tone="success" />
               <MiniKpi
                 label="Net Income"
                 value={first ? '—' : formatMoney(finance.net)}
                 tone={(finance.net ?? 0) >= 0 ? 'success' : 'danger'}
                 caption="income − OPEX − CAPEX"
-              />
-              {/* The other reading of the two configurable costs, labelled
-                  rather than substituted: Net Income above keeps its existing
-                  formula. */}
-              <MiniKpi
-                label="Net after Platform Costs"
-                value={
-                  first ||
-                  finance.net_after_platform_costs === null ||
-                  finance.net_after_platform_costs === undefined
-                    ? '—'
-                    : formatMoney(finance.net_after_platform_costs)
-                }
-                tone={(finance.net_after_platform_costs ?? 0) >= 0 ? 'success' : 'danger'}
-                caption="net − SYNC price − hosting fee"
               />
               <MiniKpi
                 label="Margin"
@@ -552,6 +582,17 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 caption="includes the 3-day count"
               />
             </div>
+
+            {/* Who the VIP counter above is counting. The count alone says how
+                much is being given away; only the list says to whom, and that is
+                the version anyone can act on. */}
+            <div className="mt-5">
+              <VipAccountsTable
+                list={subs.vip_accounts}
+                vipCount={subs.billing?.vip}
+                loading={first}
+              />
+            </div>
           </CardBody>
         </Card>
       )}
@@ -566,96 +607,57 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
       )}
 
       {/* ── 3. WORK: APPLY · INSTALL · REPAIR ────────────────────────── */}
-      {/* Titled in the words the business uses rather than the words the
-          database uses. "Job Order" and "Service Order" are table names; the
-          things they describe are an installation and a repair, and an executive
-          should not have to learn the schema to read their own dashboard. */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <WorkQueueCard
-          title="New Customer Applications"
-          subtitle="People asking to be connected"
-          icon={<ClipboardList size={16} />}
-          loading={work.loading}
-          error={work.error}
-          available={(work.data?.available ?? true) && cadence?.applications !== undefined}
-          cadence={cadence?.applications}
-          headline={{ label: 'Applications received', key: 'total' }}
-          sections={[
-            {
-              rows: [
-                { key: 'newly_applied', label: 'Newly Applied', tone: 'info' },
-                { key: 'scheduled_for_setup', label: 'Scheduled for Setup', tone: 'warning' },
-              ],
-            },
-            {
-              heading: 'Pending Action',
-              rows: [
-                { key: 'to_be_processed', label: 'To be processed', tone: 'warning', indent: true },
-                { key: 'no_facility', label: 'No facility available', tone: 'danger', indent: true },
-              ],
-            },
-            {
-              rows: [{ key: 'cancelled', label: 'Cancelled Applications', tone: 'danger' }],
-            },
-          ]}
-        />
+      {/* The Operations queues, exactly as the Operations page renders them —
+          the status pipeline, the open backlog and how long the oldest item has
+          been waiting.
 
-        <WorkQueueCard
-          title="New Installations"
-          subtitle="Connecting new subscribers"
-          icon={<Wrench size={16} />}
-          loading={work.loading}
-          error={work.error}
-          available={(work.data?.available ?? true) && cadence?.job_orders !== undefined}
-          cadence={cadence?.job_orders}
-          headline={{ label: 'Installation jobs', key: 'total' }}
-          sections={[
-            {
-              rows: [
-                { key: 'done', label: 'Installed', tone: 'success' },
-                { key: 'in_progress', label: 'To be installed', tone: 'info' },
-                { key: 'reschedule', label: 'Rescheduled installation', tone: 'warning' },
-                { key: 'failed', label: 'Failed to install', tone: 'danger' },
-              ],
-            },
-          ]}
-        />
+          These replaced three today/week/month cards that reported the same work
+          without either of the two facts anyone acts on: how much is open, and
+          how old the oldest is. A count of what happened this week does not say
+          whether anything is stuck.
 
-        <WorkQueueCard
-          title="Repair &amp; Maintenance"
-          subtitle="Fixing existing subscribers"
-          icon={<ShieldAlert size={16} />}
-          loading={work.loading}
-          error={work.error}
-          available={(work.data?.available ?? true) && cadence?.service_orders !== undefined}
-          cadence={cadence?.service_orders}
-          headline={{ label: 'Repair jobs', key: 'total' }}
-          sections={[
-            {
-              rows: [
-                { key: 'done', label: 'Repaired', tone: 'success' },
-                { key: 'in_progress', label: 'To be repaired', tone: 'info' },
-                { key: 'reschedule', label: 'Rescheduled repair', tone: 'warning' },
-                { key: 'failed', label: 'Failed to repair', tone: 'danger' },
-              ],
-            },
-          ]}
-        />
-      </div>
+          `plainLabels` keeps what those cards were good at. They titled the
+          queues in the words the business uses rather than the table names, and
+          named each status for the work rather than for its database value —
+          "Installed" and "To be installed", not "Done" and "In Progress". That
+          translation is preserved here and belongs to this page only; the
+          Operations page keeps its source's own vocabulary, which is what a
+          field manager administers the system in. */}
+      {queuesSection.error ? (
+        <ErrorBanner message={queuesSection.error} />
+      ) : queues.length === 0 ? (
+        <Card>
+          <PanelState
+            loading={queuesSection.loading && !queuesSection.data}
+            empty={!(queuesSection.loading && !queuesSection.data)}
+            emptyMessage="No monitored system records field-work queues."
+            height={180}
+          >
+            <span />
+          </PanelState>
+        </Card>
+      ) : (
+        <div className={`grid grid-cols-1 gap-4 ${queues.length > 1 ? 'lg:grid-cols-3' : ''}`}>
+          {queues.map((queue) => (
+            <QueuePanel key={queue.key} queue={queue} plainLabels />
+          ))}
+        </div>
+      )}
 
-      {/* Resolution speed beside the group that is not billed. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ResolutionSlaCard
-          resolution={work.data?.resolution}
-          loading={work.loading}
-          error={work.error}
-        />
-        <FreeConnectionsCard
-          free={subs?.free_connections}
-          loading={first}
-          error={null}
-        />
-      </div>
+      {/* ── Turnaround (SLA) ─────────────────────────────────────────── */}
+      {/* Replaced the Resolution Speed and Free Connection pair. Resolution
+          Speed counted what was finished; this reports how long it took and
+          which work type is the slow one, which is the question a completion
+          count only raises. Free Connections moved into the Subscribers section
+          above as a named list — a count of accounts being given away is worth
+          much less than knowing which ones. */}
+      <TurnaroundPanel
+        turnaround={slaSection.data?.turnaround}
+        byType={slaSection.data?.turnaround_by_type ?? []}
+        loading={slaSection.loading && !slaSection.data}
+        rangeLabel={slaSection.data?.range_label}
+        actions={<WidgetRange state={slaRange} />}
+      />
 
       {/* Apply → Install → Repair: chart left, the same numbers right. */}
       <WorkPipelinePanel
@@ -893,6 +895,130 @@ const EmptyState: React.FC<{ label: string }> = ({ label }) => {
     <p className={`text-sm py-4 text-center ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
       {label}
     </p>
+  );
+};
+
+/**
+ * Every account exempted from billing by a VIP billing status, by name.
+ *
+ * The VIP counter three rows above says how many; this says which. A count is
+ * something to worry about, a list is something to review — and reviewing them
+ * previously meant leaving this dashboard and opening the operating system.
+ *
+ * Ordered by expiry, soonest first, with open-ended VIPs last. That is the order
+ * the list gets used in: an exemption lapsing this week needs a decision, one
+ * with no end date needs a conversation, and one granted years ago needs
+ * neither today.
+ *
+ * Three states, not two:
+ *
+ *  - `null` list — no monitored system models VIP at all. Reported as "not
+ *    tracked", because an empty table would claim there are none.
+ *  - empty list on a source that does model it — genuinely nobody, said plainly.
+ *  - a list, possibly capped. `total` always states the true count, so a capped
+ *    list is visibly capped rather than quietly short.
+ *
+ * The count beside the heading is the list's own total and is cross-checked
+ * against the VIP counter above: a source that reports VIP accounts but no rows
+ * for them is a gap in this panel, not an absence of VIP accounts, and saying so
+ * is better than showing an empty table under a non-zero counter.
+ */
+const VipAccountsTable: React.FC<{
+  list?: VipAccountList | null;
+  vipCount?: number;
+  loading: boolean;
+}> = ({ list, vipCount, loading }) => {
+  const isDarkMode = useTheme();
+
+  const rows = list?.rows ?? [];
+  const total = list?.total ?? 0;
+  const showSource = rows.some((row) => Boolean(row.source_label));
+
+  // A VIP counter above with no rows here means the list could not be built,
+  // which is a different thing from there being no VIP accounts.
+  const countedButUnlisted = !loading && list !== null && list !== undefined
+    && total === 0 && (vipCount ?? 0) > 0;
+
+  return (
+    <>
+      <SectionLabel label="VIP Accounts" icon={<Crown size={14} />} />
+
+      {loading ? (
+        <EmptyState label="Loading VIP accounts…" />
+      ) : list === null || list === undefined ? (
+        <EmptyState label="No monitored system records a VIP billing status." />
+      ) : countedButUnlisted ? (
+        <EmptyState
+          label={`${formatNumber(vipCount)} accounts carry VIP status, but the list could not be built from this source.`}
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState label="No accounts are on VIP billing status." />
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <Table>
+              <Thead>
+                <Th>Account No.</Th>
+                <Th>Subscriber</Th>
+                <Th>Plan</Th>
+                <Th>Barangay</Th>
+                <Th>Contact</Th>
+                <Th align="right">VIP Expires</Th>
+                {showSource && <Th>Database</Th>}
+              </Thead>
+              <tbody>
+                {rows.map((row) => (
+                  <Tr key={`${row.source ?? ''}-${row.id}`}>
+                    <Td className="font-medium tabular-nums">{row.account_number || '—'}</Td>
+                    <Td className={isDarkMode ? 'text-gray-100' : 'text-gray-900'}>
+                      {row.subscriber || '—'}
+                    </Td>
+                    <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                      {row.plan || '—'}
+                    </Td>
+                    <Td className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
+                      {row.barangay || '—'}
+                    </Td>
+                    <Td className={`tabular-nums ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {row.contact_number || '—'}
+                    </Td>
+                    <Td align="right">
+                      {/* An open-ended VIP is a real state, not missing data —
+                          named as such rather than shown as a dash. */}
+                      {row.vip_expiration ? (
+                        <span className="tabular-nums">{formatDate(row.vip_expiration)}</span>
+                      ) : (
+                        <Pill tone="info">No end date</Pill>
+                      )}
+                    </Td>
+                    {showSource && (
+                      <Td className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>
+                        {row.source_label}
+                      </Td>
+                    )}
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+
+          <p className={`text-[11px] mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+            {list.truncated ? (
+              <>
+                Showing {formatNumber(rows.length)} of {formatNumber(total)} accounts on VIP billing
+                status. The list is capped — open Subscriber Analytics for the full set.
+              </>
+            ) : (
+              <>
+                {formatNumber(total)} accounts on VIP billing status, connected and not billed.
+                Accounts on a plan merely <em>named</em> for VIP are a separate population and are
+                not listed here.
+              </>
+            )}
+          </p>
+        </>
+      )}
+    </>
   );
 };
 

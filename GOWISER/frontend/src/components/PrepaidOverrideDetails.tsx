@@ -7,6 +7,7 @@ import {
 } from '../services/prepaidOverrideService';
 import { ColorPalette } from '../services/settingsColorPaletteService';
 import { useBillingStore } from '../store/billingStore';
+import { getUserDisplayName } from '../utils/userDisplay';
 import LoadingModal from './common/LoadingModalGlobal';
 
 interface PrepaidOverrideDetailsProps {
@@ -311,8 +312,8 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
                                 <div className={`w-44 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Adjustment</div>
                                 <div className={`flex-1 text-lg font-bold ${days > 0 ? 'text-green-500' : 'text-red-500'}`}>{daysLabel}</div>
                             </div>
-                            {renderField('Requested By', current.requester?.email_address || (current.requested_by ? `User ID: ${current.requested_by}` : '-'))}
-                            {renderField('Decided By', current.updater?.email_address || (current.updated_by ? `User ID: ${current.updated_by}` : '-'))}
+                            {renderField('Requested By', getUserDisplayName(current.requester, current.requester?.email_address) || (current.requested_by ? `User ID: ${current.requested_by}` : '-'))}
+                            {renderField('Decided By', getUserDisplayName(current.updater, current.updater?.email_address) || (current.updated_by ? `User ID: ${current.updated_by}` : '-'))}
                             <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'}`}>
                                 <div className={`w-44 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Reason</div>
                                 <div className={`flex-1 text-sm whitespace-pre-wrap ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{current.reason || '-'}</div>

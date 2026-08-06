@@ -36,6 +36,37 @@ class Kernel extends ConsoleKernel
                  });
 
         // ===================================================================
+        // PREPAID PRE-EXPIRY WARNINGS (PREPAID ONLY — NOT PART OF BILLING)
+        // ===================================================================
+
+        // Warn prepaid customers whose service period is about to lapse, so they can renew before
+        // anything is restricted. SMS only; raises no SOA and no invoice.
+        //
+        // Deliberately its own command rather than a step inside cron:generate-daily-billings.
+        // It concerns prepaid accounts only and produces no bill, so folding it into the billing
+        // run meant a failure in either landed in the other's log, and re-running the warning was
+        // impossible without also re-entering bill generation.
+        //
+        // 01:30, after the billing run rather than alongside it, so the two never contend for the
+        // same accounts. Anything before 08:00 works: the notice is queued with a time_sent of
+        // 08:00 Asia/Manila and is delivered then by cron:process-email-queue.
+        //
+        // Safe to repeat. SmsQueueService deduplicates on (account, contact, message, time_sent),
+        // and the scan marks billing_accounts.prepaid_pre_expiry_notified_for once a warning has
+        // actually gone out — so a second run on the same day queues nothing.
+        // Logs: storage/logs/billing/billing.log (the 'billing' channel)
+        $schedule->command('billing:notify-prepaid-pre-expiry')
+                 ->dailyAt('01:30')
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('Prepaid pre-expiry warnings completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Prepaid pre-expiry warnings failed');
+                 });
+
+        // ===================================================================
         // BILLING NOTIFICATIONS
         // ===================================================================
 

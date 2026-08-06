@@ -14,6 +14,7 @@ import { X, ChevronDown, Minus, Plus } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as discountService from '../services/discountService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { useBillingStore } from '../store/billingStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
@@ -593,7 +594,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   {users.map(user => (
                     <Picker.Item
                       key={user.id}
-                      label={user.email_address || user.username}
+                      label={getUserDisplayName(user, user?.email_address)}
                       value={user.id}
                     />
                   ))}
@@ -621,7 +622,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   {approverUsers.map(user => (
                     <Picker.Item
                       key={user.id}
-                      label={user.email_address || user.username}
+                      label={getUserDisplayName(user, user?.email_address)}
                       value={user.id}
                     />
                   ))}

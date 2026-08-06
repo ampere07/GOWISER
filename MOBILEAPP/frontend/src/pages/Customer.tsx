@@ -35,6 +35,7 @@ import { billingStatusService, BillingStatus } from '../services/billingStatusSe
 import { userService } from '../services/userService';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom, getOnlineStatusInfo } from '../utils/onlineStatus';
 
 const isDarkMode = false;
 
@@ -61,9 +62,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     middleInitial: customerData.middleInitial,
     lastName: customerData.lastName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 1 ? 'Active' : 'Disconnected'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -278,28 +279,9 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     if (!isValid) setSelectedLocation('all');
   }, [regions, cities, barangays, selectedLocation]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || '';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (lowerStatus === 'inactive') bucket = 'offline';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', hex: '#22c55e', hollow: false, hideCircle: false };
-    if (lower === 'offline') return { label: 'OFFLINE', hex: '#facc15', hollow: true, hideCircle: false };
-    if (lower === 'not found') return { label: 'NOT FOUND', hex: '#dc2626', hollow: false, hideCircle: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', hex: '#9ca3af', hollow: false, hideCircle: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', hex: '#f97316', hollow: false, hideCircle: false };
-    if (lower === 'empty') return { label: 'EMPTY', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), hex: '#3b82f6', hollow: false, hideCircle: false };
-  };
+  // Delegated to the shared resolver — this list and the Customer Details panel it opens
+  // must bucket an account the same way. Returned shape is unchanged.
+  const getStatusInfo = getOnlineStatusInfo;
 
   // 1. Global filtered set (org + search) — powers sidebar counts
   const globalFilteredRecords = useMemo(() => {

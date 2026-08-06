@@ -11,6 +11,8 @@ import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
 import { planService, Plan } from '../services/planService';
 import { userService } from '../services/userService';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import { User as UserType } from '../types/api';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
@@ -150,6 +152,10 @@ interface ServiceOrderDetailsProps {
 }
 
 const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder, onClose, onRefresh, isMobile = false }) => {
+  // service_orders stores the actor as an email string, so names come from the shared
+  // (cached) user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const [localIsMobile, setLocalIsMobile] = useState<boolean>(window.innerWidth < 768);
   useEffect(() => {
     const handleResize = () => {
@@ -169,7 +175,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
   const [isTechEditMode, setIsTechEditMode] = useState<boolean>(false);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [showCustomerDetails, setShowCustomerDetails] = useState(false);
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
@@ -904,11 +909,11 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
       case 'visitRemarks':
         return renderField('Visit Remarks', serviceOrder.visitRemarks);
       case 'modifiedBy':
-        return renderField('Modified By', serviceOrder.modifiedBy);
+        return renderField('Modified By', resolveUserDisplayName(serviceOrder.modifiedBy, userDirectory, serviceOrder.modifiedBy));
       case 'modifiedDate':
         return renderField('Modified Date', formatDate(serviceOrder.modifiedDate));
       case 'requestedBy':
-        return renderField('Requested by', serviceOrder.requestedBy);
+        return renderField('Requested by', resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, serviceOrder.requestedBy));
       case 'assignedEmail':
         const assignedEmail = serviceOrder.assignedEmail;
         if (!assignedEmail || assignedEmail === '-' || assignedEmail === 'Not set' || assignedEmail === 'Not specified') return null;
@@ -1081,33 +1086,13 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     }
   };
 
-  if (showCustomerDetails) {
-    return (
-      <BillingDetails
-        billingRecord={{
-          id: serviceOrder.id,
-          applicationId: serviceOrder.accountNumber,
-          customerName: serviceOrder.fullName,
-          address: serviceOrder.fullAddress,
-          status: 'Unknown',
-          balance: 0,
-          onlineStatus: 'Unknown',
-          contactNumber: serviceOrder.contactNumber,
-          emailAddress: serviceOrder.emailAddress,
-          plan: serviceOrder.plan,
-          username: serviceOrder.username,
-          connectionType: serviceOrder.connectionType,
-          routerModemSN: serviceOrder.routerModemSN,
-          lcp: serviceOrder.lcp,
-          nap: serviceOrder.nap,
-          port: serviceOrder.port,
-          vlan: serviceOrder.vlan,
-          houseFrontPicture: serviceOrder.houseFrontPicture
-        } as BillingDetailRecord}
-        onClose={() => setShowCustomerDetails(false)}
-      />
-    );
-  }
+  // NOTE: there was a second render path here, gated on a `showCustomerDetails` flag that
+  // nothing ever set, which opened Customer Details on a record built from the service
+  // order alone — with status and onlineStatus hard-coded to 'Unknown' and balance to 0.
+  // It has been removed rather than left as a template for the next screen to copy: the
+  // "View Customer Details" arrow beside Account No. is the only way this panel opens, and
+  // it fetches the real account (see convertCustomerDataToBillingDetail above), so
+  // connectivity comes from RADIUS rather than from a placeholder.
 
   return (
     <div

@@ -599,7 +599,7 @@ const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
                 renderFilterInput()
               ) : (
                 <div className="space-y-1">
-                  {allColumns.map((column) => {
+                  {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map((column) => {
                     const isActive = !!filterValues[column.key];
                     return (
                       <button

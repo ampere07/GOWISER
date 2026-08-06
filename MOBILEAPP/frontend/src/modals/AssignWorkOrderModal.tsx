@@ -536,7 +536,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                   >
                     <Picker.Item label="Select User" value="" />
                     {assignees.map(t => (
-                      <Picker.Item key={t.email} label={t.email} value={t.email} />
+                      <Picker.Item key={t.email} label={t?.name || t.email} value={t.email} />
                     ))}
                     {formData.assign_to && !assignees.some(t => t.email === formData.assign_to) && (
                       <Picker.Item label={formData.assign_to} value={formData.assign_to} />
