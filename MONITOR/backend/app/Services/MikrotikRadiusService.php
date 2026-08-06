@@ -415,27 +415,37 @@ class MikrotikRadiusService
      */
     public function updateGroup(Request $request, string $group, array $changes): array
     {
-        $attributes = [];
+        $located = $this->client->locate('groups', 'name', $group);
+        if ($located === null) {
+            throw new InvalidArgumentException("No RADIUS group named '{$group}' exists on any reachable server.");
+        }
+
+        $existingRow = $located['row'];
+        $existingAttrs = is_array($existingRow['attributes'] ?? null)
+            ? implode(',', $existingRow['attributes'])
+            : (string) ($existingRow['attributes'] ?? '');
+
         $parsed = null;
+        $newRateLimit = null;
+        $newFramedPool = null;
 
         if (isset($changes['rate_limit']) && trim((string) $changes['rate_limit']) !== '') {
-            // Throws InvalidArgumentException with a message written for the
-            // person typing, which the controller turns into a 422 rather than a
-            // 500 — a mistyped rate is a form error, not a fault.
             $parsed = $this->parseRateLimit((string) $changes['rate_limit']);
-            $attributes['rate-limit'] = $parsed['value'];
+            $newRateLimit = $parsed['value'];
         }
 
         if (isset($changes['framed_pool']) && trim((string) $changes['framed_pool']) !== '') {
-            $attributes['framed-pool'] = trim((string) $changes['framed_pool']);
+            $newFramedPool = trim((string) $changes['framed_pool']);
         }
+
+        $updatedAttrs = $this->updateAttributesString($existingAttrs, $newRateLimit, $newFramedPool);
+
+        $payload = [
+            'attributes' => $updatedAttrs,
+        ];
 
         if (array_key_exists('comment', $changes) && $changes['comment'] !== null) {
-            $attributes['comment'] = (string) $changes['comment'];
-        }
-
-        if ($attributes === []) {
-            throw new InvalidArgumentException('Nothing to change.');
+            $payload['comment'] = (string) $changes['comment'];
         }
 
         AuditLog::record(
@@ -444,10 +454,10 @@ class MikrotikRadiusService
             'mikrotik-group',
             $group,
             "Changed RADIUS group '{$group}'",
-            $attributes
+            $payload
         );
 
-        $result = $this->client->update('groups', 'name', $group, $attributes);
+        $result = $this->client->update('groups', 'name', $group, $payload);
 
         $live = $this->liveSessionsIn($group);
 
@@ -461,6 +471,35 @@ class MikrotikRadiusService
                 ? "{$live} session(s) are still running on the previous settings. Disconnect them to apply the change now, or schedule it."
                 : 'No live sessions on this group — the change applies to the next connection.',
         ];
+    }
+
+    private function updateAttributesString(string $existing, ?string $rateLimit, ?string $framedPool): string
+    {
+        $parts = array_filter(array_map('trim', explode(',', $existing)));
+        $attrs = [];
+
+        foreach ($parts as $part) {
+            if ($part === '') continue;
+            $pair = array_map('trim', explode(':', $part, 2));
+            if (!empty($pair[0])) {
+                $attrs[$pair[0]] = $pair[1] ?? '';
+            }
+        }
+
+        if ($rateLimit !== null) {
+            $attrs['Mikrotik-Rate-Limit'] = $rateLimit;
+        }
+
+        if ($framedPool !== null) {
+            $attrs['Framed-Pool'] = $framedPool;
+        }
+
+        $formatted = [];
+        foreach ($attrs as $k => $v) {
+            $formatted[] = "{$k}:{$v}";
+        }
+
+        return implode(',', $formatted);
     }
 
     /**
@@ -789,15 +828,36 @@ class MikrotikRadiusService
 
     private function group(array $row): array
     {
+        $attributesRaw = $row['attributes'] ?? '';
+        $attributesStr = is_array($attributesRaw)
+            ? implode(', ', $attributesRaw)
+            : (string) $attributesRaw;
+
+        $rateLimit = (string) ($row['rate-limit'] ?? '');
+        $framedPool = (string) ($row['framed-pool'] ?? '');
+
+        // Extract from attributes string if missing at root level (RouterOS v7 User Manager)
+        if ($rateLimit === '' && $attributesStr !== '') {
+            if (preg_match('/Mikrotik-Rate-Limit[:=]\s*([^,\s]+)/i', $attributesStr, $m)) {
+                $rateLimit = trim($m[1]);
+            }
+        }
+
+        if ($framedPool === '' && $attributesStr !== '') {
+            if (preg_match('/Framed-Pool[:=]\s*([^,\s]+)/i', $attributesStr, $m)) {
+                $framedPool = trim($m[1]);
+            }
+        }
+
         return [
             'id' => (string) ($row['.id'] ?? ''),
             'name' => (string) ($row['name'] ?? ''),
-            'rate_limit' => (string) ($row['rate-limit'] ?? ''),
-            'framed_pool' => (string) ($row['framed-pool'] ?? ''),
+            'rate_limit' => $rateLimit,
+            'framed_pool' => $framedPool,
             'shared_users' => (string) ($row['shared-users'] ?? ''),
             'outer_auths' => (string) ($row['outer-auths'] ?? ''),
             'inner_auths' => (string) ($row['inner-auths'] ?? ''),
-            'attributes' => (string) ($row['attributes'] ?? ''),
+            'attributes' => $attributesStr,
             'comment' => (string) ($row['comment'] ?? ''),
         ];
     }

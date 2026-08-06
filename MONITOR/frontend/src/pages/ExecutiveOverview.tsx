@@ -1102,7 +1102,7 @@ const Tile: React.FC<{
           set in tabular figures so a column of them aligns on the decimal point
           — this screen is read down, at a distance, without reading each one. */}
       <p
-        className={`mt-2 text-4xl font-extrabold tabular-nums tracking-tight truncate ${
+        className={`mt-2 text-4xl font-bold tabular-nums tracking-tight truncate ${
           TONE_TEXT[tone] || (isDarkMode ? 'text-white' : 'text-gray-900')
         }`}
       >

@@ -394,7 +394,9 @@ export function MetricDetailModal<T>({
                     {columns.map((column) => (
                       <td
                         key={column.header}
-                        className={`px-4 py-3 ${column.align === 'right' ? 'text-right' : ''} ${
+                        className={`px-4 py-3 ${
+                          isDarkMode ? 'text-gray-200' : 'text-gray-900'
+                        } ${column.align === 'right' ? 'text-right' : ''} ${
                           column.secondary ? 'hidden md:table-cell' : ''
                         }`}
                       >
