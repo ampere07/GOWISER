@@ -940,7 +940,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       }
     }
 
-    if (updatedFormData.visitStatus === 'Reschedule') {
+    if (updatedFormData.visitStatus === 'Reschedule' || technicianChanged) {
       updatedFormData.visitBy = '';
       updatedFormData.visitWith = '';
       updatedFormData.visitWithOther = '';
@@ -1173,7 +1173,14 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         support_remarks: updatedFormData.supportRemarks,
         service_charge: parseFloat(updatedFormData.serviceCharge),
         status: updatedFormData.status,
-        ...(updatedFormData.concern === 'Upgrade/Downgrade Plan' ? { new_plan: updatedFormData.newPlan } : {})
+        ...(updatedFormData.concern === 'Upgrade/Downgrade Plan' ? { new_plan: updatedFormData.newPlan } : {}),
+        ...(technicianChanged || updatedFormData.visitStatus === 'Reschedule' ? {
+          start_time: null,
+          end_time: null,
+          visit_by_user: null,
+          visit_with: null,
+          visit_with_other: null,
+        } : {})
       };
 
       setUploadProgress(85);

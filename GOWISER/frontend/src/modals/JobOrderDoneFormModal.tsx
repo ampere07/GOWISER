@@ -675,13 +675,27 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
   };
 
   const handleSave = async () => {
-    // ── Block technician reassignment once the job has already been started ──
-    const startTime = jobOrderData?.start_time || jobOrderData?.Start_Time || null;
+    // ── Block technician reassignment once the job is actively in progress ──
+    const isRealTs = (v: any) => {
+      const s = (v == null ? '' : String(v)).trim();
+      return s !== '' && s.toLowerCase() !== 'null' && !/^0000-00-00/.test(s);
+    };
+    const rawStart = jobOrderData?.start_time ?? jobOrderData?.startTime ?? jobOrderData?.Start_Time ?? null;
+    const startTime = (rawStart == null ? '' : String(rawStart)).trim();
+    const hasStartTime = isRealTs(rawStart);
+    const hasEndTime = isRealTs(jobOrderData?.end_time ?? jobOrderData?.endTime ?? jobOrderData?.End_Time ?? null);
+
+    const rawOnsiteStatus = (formData.onsiteStatus || jobOrderData?.onsite_status || jobOrderData?.Onsite_Status || jobOrderData?.status || jobOrderData?.Status || '').toString().trim().toLowerCase();
+    const isVisitInProgress = rawOnsiteStatus === 'in progress' || rawOnsiteStatus === 'in-progress' || rawOnsiteStatus === 'inprogress' || rawOnsiteStatus === 'ongoing';
+
     const currentAssigned = (formData.assignedEmail || '').trim();
     const originalAssigned = (originalAssignedEmail || '').trim();
     const technicianChanged = !!originalAssigned && currentAssigned !== originalAssigned;
 
-    if (startTime && technicianChanged) {
+    // Only block while the tech is actively on the job: visit status In Progress, a real
+    // start time, and no end time yet. Reschedule (not In Progress) and finished tickets
+    // (an end time exists) are always transferable, as is a ticket that never started.
+    if (technicianChanged && isVisitInProgress && hasStartTime && !hasEndTime) {
       const originalTechName = technicians.find(t => t.email === originalAssigned)?.name || originalAssigned;
       const newTechName = technicians.find(t => t.email === currentAssigned)?.name || currentAssigned;
       const jobOrderId = jobOrderData?.id || jobOrderData?.JobOrder_ID;
@@ -830,8 +844,10 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         jobOrderUpdateData.end_time = null;
       }
 
-      // Clear visit data when rescheduling so it can be reassigned fresh
-      if (updatedFormData.onsiteStatus === 'Reschedule') {
+      // Clear visit data and timings when rescheduling or reassigning to a new technician so Tech 1 starts fresh
+      if (updatedFormData.onsiteStatus === 'Reschedule' || technicianChanged) {
+        jobOrderUpdateData.start_time = null;
+        jobOrderUpdateData.end_time = null;
         jobOrderUpdateData.visit_by = null;
         jobOrderUpdateData.visit_with = null;
         jobOrderUpdateData.visit_with_other = null;
