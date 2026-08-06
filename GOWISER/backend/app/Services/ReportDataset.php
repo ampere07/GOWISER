@@ -50,11 +50,11 @@ class ReportDataset
     private const DATASETS = [
         'manual transaction' => [
             'table'        => ['transactions'],
-            'date_column'  => ['payment_date', 'created_at'],
-            'order_column' => ['payment_date', 'id'],
+            'date_column'  => ['date_processed', 'payment_date', 'created_at'],
+            'order_column' => ['date_processed', 'payment_date', 'id'],
             'columns'      => [
                 'id', 'account_no', 'transaction_type', 'payment_method',
-                'reference_no', 'or_no', 'status', 'payment_date',
+                'reference_no', 'or_no', 'status', 'date_processed', 'payment_date',
                 'processed_by_user', 'received_payment',
             ],
             'numeric'      => ['received_payment'],
@@ -135,7 +135,7 @@ class ReportDataset
                 [
                     'label'       => 'Manual Transaction',
                     'table'       => ['transactions'],
-                    'date_column' => ['payment_date', 'created_at'],
+                    'date_column' => ['date_processed', 'payment_date', 'created_at'],
                     'map'         => [
                         'source'           => ['literal' => "'Manual Transaction'"],
                         'record_id'        => ['column' => ['id']],
@@ -145,7 +145,7 @@ class ReportDataset
                         'reference_no'     => ['column' => ['reference_no']],
                         'or_no'            => ['column' => ['or_no']],
                         'status'           => ['column' => ['status']],
-                        'transacted_at'    => ['column' => ['payment_date', 'created_at']],
+                        'transacted_at'    => ['column' => ['date_processed', 'payment_date', 'created_at']],
                         'processed_by'     => ['column' => ['processed_by_user', 'created_by_user']],
                         'amount'           => ['column' => ['received_payment']],
                     ],

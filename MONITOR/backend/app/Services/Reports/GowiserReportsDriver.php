@@ -949,7 +949,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function incomeBetween(ConnectionInterface $db, string $from, string $to): float
     {
         $counter = (float) $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->sum('t.received_payment');
 
         return $counter + $this->portalStats($db, $from, $to)['total'];
@@ -1050,7 +1050,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function revenueStats(ConnectionInterface $db, string $from, string $to): array
     {
         $row = $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
             ->selectRaw('COALESCE(MAX(t.received_payment), 0) AS max_amount')
@@ -1094,7 +1094,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function incomeKpi(ConnectionInterface $db, string $from, string $to): array
     {
         $row = $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS office_income')
             ->selectRaw('COUNT(*) AS office_count')
             ->first();
@@ -1118,7 +1118,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function collectionsByType(ConnectionInterface $db, string $from, string $to): array
     {
         return $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw("COALESCE(NULLIF(t.transaction_type, ''), 'Subscription') AS label")
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
@@ -1140,7 +1140,7 @@ class GowiserReportsDriver implements ReportsDriver
         return $this->collectedTransactions($db)
             ->join('billing_accounts as ba', 'ba.account_no', '=', 't.account_no')
             ->join('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw('pl.plan_name AS label')
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
@@ -1158,7 +1158,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function revenueByMethod(ConnectionInterface $db, string $from, string $to): array
     {
         return $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw("COALESCE(NULLIF(t.payment_method, ''), 'Unspecified') AS label")
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(t.received_payment), 0) AS total')
@@ -1182,7 +1182,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function paymentRemarks(ConnectionInterface $db, string $from, string $to): array
     {
         return $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->whereNotNull('t.remarks')
             ->where('t.remarks', '<>', '')
             ->selectRaw('t.remarks AS label')
@@ -1209,7 +1209,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function paymentYears(ConnectionInterface $db, int $currentYear): array
     {
         $years = $this->collectedTransactions($db)
-            ->selectRaw('DISTINCT YEAR(t.payment_date) AS yr')
+            ->selectRaw('DISTINCT YEAR(t.date_processed) AS yr')
             ->orderByDesc('yr')
             ->pluck('yr')
             ->map(fn ($year) => (int) $year)
@@ -1309,8 +1309,8 @@ class GowiserReportsDriver implements ReportsDriver
         string $expensePeriod
     ): array {
         $income = $this->collectedTransactions($db)
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
-            ->selectRaw("DATE_FORMAT(t.payment_date, '%Y-%m-%d') AS day")
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
+            ->selectRaw("DATE_FORMAT(t.date_processed, '%Y-%m-%d') AS day")
             ->selectRaw('SUM(t.received_payment) AS total')
             ->groupBy('day')
             ->get()
@@ -1365,12 +1365,12 @@ class GowiserReportsDriver implements ReportsDriver
         $incomeQuery = $this->collectedTransactions($db);
 
         if ($from !== null) {
-            $incomeQuery->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to]);
+            $incomeQuery->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to]);
         }
 
         $income = $incomeQuery
-            ->selectRaw($bucketFor('t.payment_date') . ' AS bucket')
-            ->selectRaw($labelFor('t.payment_date') . ' AS label')
+            ->selectRaw($bucketFor('t.date_processed') . ' AS bucket')
+            ->selectRaw($labelFor('t.date_processed') . ' AS label')
             ->selectRaw('SUM(t.received_payment) AS total')
             ->groupBy('bucket', 'label')
             ->orderBy('bucket')
@@ -1587,9 +1587,10 @@ class GowiserReportsDriver implements ReportsDriver
         return $this->collectedTransactions($db)
             ->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 't.account_no')
             ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
-            ->whereBetween(DB::raw('DATE(t.payment_date)'), [$from, $to])
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->select(
                 't.id',
+                't.date_processed',
                 't.payment_date',
                 't.or_no',
                 't.received_payment',
@@ -1601,7 +1602,7 @@ class GowiserReportsDriver implements ReportsDriver
                 'c.first_name',
                 'c.last_name'
             )
-            ->orderBy('t.payment_date')
+            ->orderBy('t.date_processed')
             ->orderBy('t.id')
             ->get()
             ->map(fn ($row) => [
@@ -1612,7 +1613,7 @@ class GowiserReportsDriver implements ReportsDriver
                 'method' => (string) ($row->payment_method ?? ''),
                 'status' => strtolower((string) ($row->status ?? '')),
                 'amount' => round((float) $row->received_payment, 2),
-                'payment_date' => $row->payment_date,
+                'payment_date' => $row->date_processed ?? $row->payment_date,
                 'cashier' => (string) ($row->processed_by_user ?? ''),
             ])
             ->all();
@@ -2993,7 +2994,7 @@ class GowiserReportsDriver implements ReportsDriver
     private function collectedTransactions(ConnectionInterface $db): Builder
     {
         return $db->table('transactions as t')
-            ->whereNotNull('t.payment_date')
+            ->whereNotNull('t.date_processed')
             ->whereNotNull('t.received_payment')
             ->where(function ($query) {
                 $query->whereNull('t.status')

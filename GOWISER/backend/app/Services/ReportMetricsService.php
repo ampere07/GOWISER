@@ -157,7 +157,7 @@ class ReportMetricsService
             return null;
         }
 
-        $dateCol = $this->firstColumn('transactions', ['payment_date', 'created_at']);
+        $dateCol = $this->firstColumn('transactions', ['date_processed', 'payment_date', 'created_at']);
         $buckets = $this->groupedAggregate(
             'transactions', 'status', $dateCol, $start, $end, ['amount' => 'received_payment']
         );
@@ -195,7 +195,7 @@ class ReportMetricsService
             return null;
         }
 
-        $dateCol = $this->firstColumn('transactions', ['payment_date', 'created_at']);
+        $dateCol = $this->firstColumn('transactions', ['date_processed', 'payment_date', 'created_at']);
 
         // Restricted to successful transactions: a payment-method breakdown of
         // cancelled attempts is not a breakdown of collections.

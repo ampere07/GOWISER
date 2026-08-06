@@ -47,7 +47,7 @@ class SchemaProfileSeeder extends Seeder
                 'alias' => 'src',
                 'fields' => [
                     'amount' => 'received_payment',
-                    'occurred_at' => 'payment_date',
+                    'occurred_at' => 'date_processed',
                     'method' => 'payment_method',
                     'type' => 'transaction_type',
                     'status' => 'status',
@@ -56,7 +56,7 @@ class SchemaProfileSeeder extends Seeder
                     'processed_by' => 'processed_by_user',
                 ],
                 'filters' => [
-                    ['column' => 'payment_date', 'op' => 'not_null'],
+                    ['column' => 'date_processed', 'op' => 'not_null'],
                     ['column' => 'received_payment', 'op' => 'not_null'],
                     // Cancelled and still-pending rows are not collections.
                     // `nullable` lets rows with no status through.

@@ -81,7 +81,7 @@ if ($isSuperAdmin) {
     fputcsv($out, [
         'OR #', 'Account #', 'Subscriber',
         'Amount', 'Type', 'Method', 'Reference #',
-        'Payment Date', 'Period Start', 'Period End',
+        'Date Processed', 'Period Start', 'Period End',
         'Status', 'Notes',
         'Added By', 'Edited By', 'Router',
     ]);
@@ -94,7 +94,7 @@ if ($isSuperAdmin) {
             $row['type_name'] ?? 'Subscription',
             strtoupper($row['method'] ?? ''),
             $row['reference_number'] ?? '',
-            $row['payment_date'] ?? '',
+            $row['date_processed'] ?? $row['payment_date'] ?? '',
             $row['period_start'] ?? '',
             $row['period_end'] ?? '',
             ucfirst($row['status'] ?? ''),
@@ -109,7 +109,7 @@ if ($isSuperAdmin) {
     fputcsv($out, [
         'OR #', 'Account #', 'Subscriber',
         'Amount', 'Type', 'Method',
-        'Payment Date', 'Period Start', 'Period End',
+        'Date Processed', 'Period Start', 'Period End',
         'Status',
     ]);
     foreach ($rows as $row) {
@@ -120,7 +120,7 @@ if ($isSuperAdmin) {
             $row['amount'],
             $row['type_name'] ?? 'Subscription',
             strtoupper($row['method'] ?? ''),
-            $row['payment_date'] ?? '',
+            $row['date_processed'] ?? $row['payment_date'] ?? '',
             $row['period_start'] ?? '',
             $row['period_end'] ?? '',
             ucfirst($row['status'] ?? ''),
