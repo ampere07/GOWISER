@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\SchemaProfile;
 use App\Models\SiteConnection;
 use App\Services\Connector\ConnectionManager;
+use App\Services\Reports\SchemaMap;
 use App\Services\ReportingService;
 use App\Services\SourceRegistry;
 use Illuminate\Http\Request;
@@ -46,7 +47,8 @@ class DatabaseConnectionController extends Controller
     public function __construct(
         private SourceRegistry $sources,
         private ReportingService $reporting,
-        private ConnectionManager $connections
+        private ConnectionManager $connections,
+        private SchemaMap $schema
     ) {
     }
 
@@ -222,6 +224,64 @@ class DatabaseConnectionController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::warning('Introspection failed', [
+                'connection' => $connection->key,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => config('app.debug') ? $e->getMessage() : 'Could not read this database.',
+            ], 502);
+        }
+    }
+
+    /**
+     * What the reporting drivers expect from this database, and what is there.
+     *
+     * The Databases screen renders this as a table-by-table map: which tables a
+     * connection actually has, which required columns are missing, and — for
+     * every figure that is dated — which real column the driver resolved the
+     * timestamp to.
+     *
+     * ── Why it is worth a screen ──────────────────────────────────────
+     *
+     * The monitored schemas drift and MONITOR cannot migrate them. A branch on
+     * an older SYNC release has `timestamp` where a newer one has `updated_at`,
+     * and a schema missing `date_installed` cannot date an installation at all.
+     * The drivers already cope silently, which is the problem: the visible
+     * result is a figure reading zero with nothing anywhere explaining it. This
+     * makes the drift legible before somebody quotes a number rather than after.
+     *
+     * Always read fresh. A schema map is looked at precisely when somebody has
+     * just changed something, and serving the hour-old cached copy to that
+     * person is the one case where the cache is guaranteed wrong.
+     */
+    public function mapping(Request $request, SiteConnection $connection)
+    {
+        if (!$connection->enabled) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Enable this connection before inspecting it.',
+            ], 422);
+        }
+
+        try {
+            $db = $this->sources->connection($connection->key);
+            $driver = $this->sources->driverName($connection->key);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => array_merge(
+                    $this->schema->describe($db, $driver, $connection->key, true),
+                    [
+                        'connection' => $connection->key,
+                        'label' => $connection->label,
+                        'database' => $connection->database,
+                    ]
+                ),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Schema mapping failed', [
                 'connection' => $connection->key,
                 'error' => $e->getMessage(),
             ]);

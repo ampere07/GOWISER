@@ -28,6 +28,26 @@ export const formatMoneyShort = (value: number | null | undefined): string => {
   return `${sign}₱${Math.round(magnitude)}`;
 };
 
+/**
+ * A peso amount with no currency symbol.
+ *
+ * For the Executive Group Overview, whose value fields carry a bare number and
+ * nothing else: a flash screen is read at a glance and quoted out loud, and a
+ * tile that says "₱12,300.00 (7 days)" is a sentence rather than a figure. The
+ * currency is stated once per section instead, in the header.
+ *
+ * Two decimals, like formatMoney — these are the same figures the Financial
+ * module reconciles against printed receipts, and rounding them here would make
+ * two screens disagree over the same row.
+ */
+const AMOUNT = new Intl.NumberFormat('en-PH', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export const formatAmount = (value: number | null | undefined): string =>
+  AMOUNT.format(Number(value ?? 0));
+
 export const formatNumber = (value: number | null | undefined): string =>
   Number(value ?? 0).toLocaleString('en-PH');
 

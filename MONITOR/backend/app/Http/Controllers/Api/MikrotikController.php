@@ -5,132 +5,137 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\MikrotikKick;
-use App\Services\Mikrotik\UserManagerClient;
+use App\Services\MikrotikRadiusService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use Throwable;
 
 /**
- * The Mikrotik Radius Shortcut: User Manager, from the monitoring portal.
+ * MikroTik RADIUS: User Manager, from the monitoring portal.
  *
  * This is the only controller in MONITOR that changes something outside MONITOR.
  * Everything else here reads branch databases and writes, at most, to its own
  * settings tables. That difference shapes the whole file:
  *
+ *   - the module is restricted to executive roles on top of its permission, the
+ *     same second gate the Group Overview carries — see the route file;
  *   - reads need the module permission; every write needs a second, separate
  *     grant, so "can look at the RADIUS groups" is not the same as "can cut a
  *     thousand people off";
  *   - every write is audited before it is attempted and again with its result,
  *     because the audit trail is the only record that survives a router being
  *     replaced;
- *   - the rate limit and pool inputs are validated against a strict shape rather
- *     than forwarded. RouterOS accepts a great deal of syntax, and a value that
- *     is merely *accepted* can still throttle a region to dial-up.
+ *   - rate limits are parsed and normalised rather than forwarded. RouterOS
+ *     accepts a great deal of syntax, and a value that is merely *accepted* can
+ *     still throttle a region to dial-up — see
+ *     MikrotikRadiusService::parseRateLimit.
  *
  * Reads report which servers answered and which did not, rather than presenting
  * a partial fleet as the whole one.
+ *
+ * The arithmetic and the router calls live in MikrotikRadiusService; this file
+ * is validation, HTTP shapes and error translation. A bad rate limit is a 422
+ * with the message the operator needs, not a 500.
  */
 class MikrotikController extends Controller
 {
-    public function __construct(private UserManagerClient $client)
+    public function __construct(private MikrotikRadiusService $radius)
     {
     }
 
-    /** Everything the screen needs in one round trip. */
+    /** Everything the tabbed screen needs in one round trip. */
     public function index(Request $request)
     {
-        if (!$this->client->configured()) {
+        if (!$this->radius->configured()) {
             return response()->json([
                 'status' => 'success',
                 'data' => [
                     'configured' => false,
-                    'message' => 'No RADIUS server is configured. Set MIKROTIK_1_URL and its credentials.',
+                    'message' => 'No RADIUS server is configured. Add one under Settings → RADIUS API.',
                     'servers' => [],
-                    'groups' => [],
-                    'profiles' => [],
-                    'limitations' => [],
-                    'sessions' => [],
+                    'groups' => $this->emptyBlock(),
+                    'profiles' => $this->emptyBlock(),
+                    'limitations' => $this->emptyBlock(),
+                    'attributes' => $this->emptyBlock(),
+                    'sessions' => $this->emptyBlock(),
+                    'sessions_by_group' => [],
                     'queued' => [],
                 ],
             ]);
         }
 
         try {
-            $groups = $this->client->list('groups');
-            $profiles = $this->client->list('profiles');
-            $limitations = $this->client->list('limitations');
-            $sessions = $this->client->list('sessions');
+            $data = $this->radius->overview();
 
             AuditLog::record(
                 $request,
                 'viewed',
                 'section',
                 'mikrotik-radius',
-                'Mikrotik Radius Shortcut opened'
+                'MikroTik RADIUS opened'
             );
 
-            return response()->json([
-                'status' => 'success',
-                'data' => [
-                    'configured' => true,
-                    'servers' => array_map(
-                        fn ($server) => ['key' => $server['key'], 'label' => $server['label']],
-                        $this->client->servers()
-                    ),
-                    // `reachable` travels with each block. A group list that is
-                    // empty because the router is down must not render the same
-                    // as one that is empty because there are no groups.
-                    'groups' => $this->block($groups, fn ($row) => $this->group($row)),
-                    'profiles' => $this->block($profiles, fn ($row) => $this->profile($row)),
-                    'limitations' => $this->block($limitations, fn ($row) => $this->limitation($row)),
-                    'sessions' => $this->block($sessions, fn ($row) => $this->session($row)),
-                    'queued' => $this->queued(),
-                    'maintenance_window' => [
-                        'start' => config('mikrotik.maintenance_window.start'),
-                        'end' => config('mikrotik.maintenance_window.end'),
-                        'next' => MikrotikKick::nextWindow()->toDateTimeString(),
-                        'open_now' => MikrotikKick::inWindow(),
-                    ],
-                ],
-            ]);
+            return response()->json(['status' => 'success', 'data' => $data]);
         } catch (Throwable $e) {
             return $this->fail($e, 'Unable to read the RADIUS servers.');
         }
     }
 
-    /** Users, paged separately — the list runs to thousands. */
+    /**
+     * Users, searched and paged separately — the list runs to thousands.
+     *
+     * Each row carries its live session state and the caller ID actually
+     * connected, which is what makes this a support tool rather than a list of
+     * names. See MikrotikRadiusService::users for why that costs one request
+     * rather than one per row.
+     */
     public function users(Request $request)
     {
-        $search = trim((string) $request->query('search', ''));
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:128'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:1000'],
+        ]);
 
         try {
-            $result = $this->client->list('users');
-
-            $rows = array_map(fn ($row) => $this->user($row), $result['rows']);
-
-            if ($search !== '') {
-                $needle = strtolower($search);
-
-                $rows = array_values(array_filter(
-                    $rows,
-                    fn ($row) => str_contains(strtolower($row['username'] . ' ' . $row['group']), $needle)
-                ));
-            }
-
             return response()->json([
                 'status' => 'success',
-                'data' => [
-                    'reachable' => $result['reachable'],
-                    'errors' => $result['errors'],
-                    'total' => count($rows),
-                    // Capped in the response, not in the UI. Ten thousand rows
-                    // of JSON is a slow page whether or not the table paginates
-                    // them, and the search above narrows before the cut.
-                    'rows' => array_slice($rows, 0, 250),
-                ],
+                'data' => $this->radius->users(
+                    trim((string) ($validated['search'] ?? '')),
+                    (int) ($validated['limit'] ?? 250)
+                ),
             ]);
         } catch (Throwable $e) {
             return $this->fail($e, 'Unable to read the user list.');
+        }
+    }
+
+    /**
+     * Reads a rate limit without applying it.
+     *
+     * The screen calls this as the operator types, so "250mb" can be shown
+     * resolving to "250M/250M" before anything is saved. Worth an endpoint of
+     * its own rather than a copy of the parser in TypeScript: two
+     * implementations of this conversion would eventually disagree, and the one
+     * that disagreed silently would be the one that set the speed.
+     *
+     * Read-only, so it sits behind the module permission rather than the write
+     * grant — someone allowed to look at the groups may work out what a value
+     * means without being allowed to set it.
+     */
+    public function previewRateLimit(Request $request)
+    {
+        $validated = $request->validate([
+            'rate_limit' => ['required', 'string', 'max:64'],
+        ]);
+
+        try {
+            return response()->json([
+                'status' => 'success',
+                'data' => $this->radius->parseRateLimit($validated['rate_limit']),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->invalid($e, 'rate_limit');
         }
     }
 
@@ -142,77 +147,55 @@ class MikrotikController extends Controller
      * connected with until their session ends. That is exactly why the response
      * reports how many sessions are currently live on the group: the operator
      * needs to know how many people are still on the old limit, and therefore
-     * whether to kick.
+     * whether to disconnect them.
      */
     public function updateGroup(Request $request, string $group)
     {
         $validated = $request->validate([
-            // "150M/150M", "20M/5M", "1500k/1500k" — receive/transmit, in the
-            // form RouterOS writes as Mikrotik-Rate-Limit. Validated by pattern
-            // rather than passed through: a typo here is a region throttled to
-            // kilobits, and the router will accept it without complaint.
-            'rate_limit' => ['nullable', 'string', 'regex:/^\d+[kKmMgG]?\/\d+[kKmMgG]?$/'],
+            // Deliberately permissive here and strict in the service. The
+            // parser understands "250mb", "250 Mbps" and "250M/50M" and produces
+            // a message naming the fix for anything else; a regex at this layer
+            // could only reject with "the format is invalid".
+            'rate_limit' => ['nullable', 'string', 'max:64'],
             // Pool names are RouterOS identifiers — "pool-nat444" and the like.
             'framed_pool' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9._-]+$/'],
             'comment' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $attributes = [];
-
-        if (array_key_exists('rate_limit', $validated) && $validated['rate_limit'] !== null) {
-            $attributes['rate-limit'] = $validated['rate_limit'];
-        }
-
-        if (array_key_exists('framed_pool', $validated) && $validated['framed_pool'] !== null) {
-            $attributes['framed-pool'] = $validated['framed_pool'];
-        }
-
-        if (array_key_exists('comment', $validated) && $validated['comment'] !== null) {
-            $attributes['comment'] = $validated['comment'];
-        }
-
-        if ($attributes === []) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Nothing to change.',
-            ], 422);
-        }
-
-        // Recorded before the attempt, not after. A change that crashes the
-        // router mid-request still happened, and an audit trail that only logs
-        // successes cannot answer what was being done at the time.
-        AuditLog::record(
-            $request,
-            'updated',
-            'mikrotik-group',
-            $group,
-            "Changed RADIUS group '{$group}'",
-            $attributes
-        );
-
         try {
-            $result = $this->client->update('groups', 'name', $group, $attributes);
-
-            $sessions = $this->client->sessions();
-            $affected = count(array_filter(
-                $sessions['rows'],
-                fn ($row) => (string) ($row['user-group'] ?? $row['group'] ?? '') === $group
-            ));
-
             return response()->json([
                 'status' => 'success',
-                'data' => [
-                    'server' => $result['server'],
-                    'before' => $this->group($result['before']),
-                    'after' => $this->group($result['after']),
-                    'live_sessions' => $affected,
-                    'note' => $affected > 0
-                        ? "{$affected} session(s) are still running on the previous settings. Kick them to apply the change now."
-                        : 'No live sessions on this group — the change applies to the next connection.',
-                ],
+                'data' => $this->radius->updateGroup($request, $group, $validated),
             ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->invalid($e, 'rate_limit');
         } catch (Throwable $e) {
             return $this->fail($e, 'The change could not be applied.');
+        }
+    }
+
+    /**
+     * Moves one user into another group.
+     *
+     * Behind the same grant as a rate-limit change, and for the same reason:
+     * moving a subscriber from PLAN-A to Restricted is a change to what they are
+     * paying for.
+     */
+    public function moveUser(Request $request, string $username)
+    {
+        $validated = $request->validate([
+            'group' => ['required', 'string', 'max:64'],
+        ]);
+
+        try {
+            return response()->json([
+                'status' => 'success',
+                'data' => $this->radius->moveUser($request, $username, $validated['group']),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->invalid($e, 'group');
+        } catch (Throwable $e) {
+            return $this->fail($e, 'The user could not be moved.');
         }
     }
 
@@ -225,90 +208,111 @@ class MikrotikController extends Controller
      */
     public function kickNow(Request $request)
     {
-        $validated = $this->validateTarget($request);
-
-        AuditLog::record(
-            $request,
-            'executed',
-            'mikrotik-kick',
-            $validated['group'] ?? implode(',', $validated['usernames']),
-            'Kicked RADIUS sessions immediately',
-            $validated
-        );
+        $target = $this->validateTarget($request);
 
         try {
-            $result = $this->client->kick($validated['usernames'], $validated['group']);
-
-            Log::warning('Mikrotik sessions terminated', [
-                'actor' => $request->user()?->username,
-                'target' => $validated,
-                'result' => $result,
-            ]);
+            $result = $this->radius->kickNow($request, $target['usernames'], $target['group']);
 
             return response()->json([
                 'status' => 'success',
                 'data' => $result,
-                'message' => "Disconnected {$result['killed']} session(s).",
+                'message' => $result['failed'] > 0
+                    ? "Disconnected {$result['killed']} session(s); {$result['failed']} could not be reached."
+                    : "Disconnected {$result['killed']} session(s).",
             ]);
         } catch (Throwable $e) {
             return $this->fail($e, 'The sessions could not be terminated.');
         }
     }
 
+    /**
+     * Schedules the same termination for a wall-clock time in GMT+8.
+     *
+     * The time is read in Asia/Manila whatever the server runs in — see
+     * MikrotikRadiusService::schedule — and the response echoes back the instant
+     * it resolved to, in that zone, so the operator can check it before walking
+     * away from a screen that will disconnect people while they are not looking.
+     */
+    public function scheduleKick(Request $request)
+    {
+        $target = $this->validateTarget($request);
+
+        $validated = $request->validate([
+            // Accepted as text rather than a date rule so the service owns the
+            // timezone. A `date_format` here would validate against the server's
+            // clock, which is the exact confusion this feature exists to remove.
+            'at' => ['required', 'string', 'max:32'],
+        ]);
+
+        try {
+            $kick = $this->radius->schedule(
+                $request,
+                $target['usernames'],
+                $target['group'],
+                $validated['at'],
+                $request->input('reason')
+            );
+
+            $when = $kick->scheduled_for?->copy()->setTimezone(MikrotikRadiusService::TIMEZONE);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'id' => $kick->id,
+                    'target' => $kick->targetLabel(),
+                    'scheduled_for' => $when?->toDateTimeString(),
+                    'timezone' => MikrotikRadiusService::TIMEZONE,
+                ],
+                'message' => sprintf(
+                    'Re-authorisation scheduled for %s (GMT+8). It can be cancelled until it runs.',
+                    $when?->format('D j M Y, H:i') ?? 'the chosen time'
+                ),
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return $this->invalid($e, 'at');
+        } catch (Throwable $e) {
+            return $this->fail($e, 'The re-authorisation could not be scheduled.');
+        }
+    }
+
     /** Queues the same termination for the next maintenance window. */
     public function kickLater(Request $request)
     {
-        $validated = $this->validateTarget($request);
+        $target = $this->validateTarget($request);
 
-        $kick = MikrotikKick::create([
-            'target_group' => $validated['group'],
-            'target_usernames' => $validated['usernames'] ?: null,
-            'reason' => $request->input('reason'),
-            'requested_by' => $request->user()?->id,
-            'requested_by_name' => $request->user()?->username,
-            'status' => MikrotikKick::STATUS_PENDING,
-            'scheduled_for' => MikrotikKick::nextWindow(),
-        ]);
+        try {
+            $kick = $this->radius->scheduleForWindow(
+                $request,
+                $target['usernames'],
+                $target['group'],
+                $request->input('reason')
+            );
 
-        AuditLog::record(
-            $request,
-            'queued',
-            'mikrotik-kick',
-            (string) $kick->id,
-            "Queued a session kick for {$kick->targetLabel()} at {$kick->scheduled_for}",
-            $validated
-        );
-
-        return response()->json([
-            'status' => 'success',
-            'data' => [
-                'id' => $kick->id,
-                'scheduled_for' => $kick->scheduled_for?->toDateTimeString(),
-                'target' => $kick->targetLabel(),
-            ],
-            'message' => "Queued for {$kick->scheduled_for?->format('D j M, H:i')}.",
-        ]);
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'id' => $kick->id,
+                    'target' => $kick->targetLabel(),
+                    'scheduled_for' => $kick->scheduled_for?->toDateTimeString(),
+                ],
+                'message' => "Queued for {$kick->scheduled_for?->format('D j M, H:i')}.",
+            ]);
+        } catch (Throwable $e) {
+            return $this->fail($e, 'The kick could not be queued.');
+        }
     }
 
     /** Cancels a queued kick that has not fired yet. */
     public function cancelKick(Request $request, MikrotikKick $kick)
     {
-        if ($kick->status !== MikrotikKick::STATUS_PENDING) {
+        // Conditional on the row still being pending, inside the service, so two
+        // operators cancelling at once cannot both be told they succeeded.
+        if (!$this->radius->cancel($request, $kick)) {
             return response()->json([
                 'status' => 'error',
-                'message' => "This kick is already {$kick->status}.",
+                'message' => "This kick is already {$kick->fresh()?->status}.",
             ], 422);
         }
-
-        $kick->update(['status' => MikrotikKick::STATUS_CANCELLED]);
-
-        AuditLog::record(
-            $request,
-            'cancelled',
-            'mikrotik-kick',
-            (string) $kick->id,
-            "Cancelled the queued session kick for {$kick->targetLabel()}"
-        );
 
         return response()->json(['status' => 'success', 'message' => 'Cancelled.']);
     }
@@ -346,114 +350,41 @@ class MikrotikController extends Controller
         return ['group' => $group ?: null, 'usernames' => $usernames];
     }
 
-    /** @param callable $shape */
-    private function block(array $result, callable $shape): array
+    /** A block shaped like a real one, for the unconfigured response. */
+    private function emptyBlock(): array
     {
-        return [
-            'reachable' => $result['reachable'],
-            'errors' => $result['errors'],
-            'rows' => array_map($shape, $result['rows']),
-        ];
+        return ['reachable' => false, 'errors' => [], 'rows' => []];
     }
 
-    private function queued(): array
+    /**
+     * A value the operator can fix, reported as one.
+     *
+     * 422 with the field named, so the form highlights the input rather than the
+     * page showing a red banner about a server error. The parser's messages are
+     * written for the person typing and are passed through verbatim — including
+     * in production, unlike fail() below, because none of them reveal anything
+     * about the infrastructure.
+     */
+    private function invalid(InvalidArgumentException $e, string $field)
     {
-        return MikrotikKick::query()
-            ->orderByDesc('id')
-            ->limit(25)
-            ->get()
-            ->map(fn (MikrotikKick $kick) => [
-                'id' => $kick->id,
-                'target' => $kick->targetLabel(),
-                'group' => $kick->target_group,
-                'reason' => $kick->reason,
-                'status' => $kick->status,
-                'requested_by' => $kick->requested_by_name,
-                'scheduled_for' => $kick->scheduled_for?->toDateTimeString(),
-                'executed_at' => $kick->executed_at?->toDateTimeString(),
-                'sessions_killed' => $kick->sessions_killed,
-                'sessions_failed' => $kick->sessions_failed,
-                'result_note' => $kick->result_note,
-            ])
-            ->all();
-    }
-
-    // ── Shapers ──────────────────────────────────────────────────────────
-    //
-    // RouterOS returns kebab-case keys, a leading-dot id, and different spellings
-    // between major versions. Normalised once here so the frontend reads one
-    // shape and a RouterOS upgrade cannot become a UI change.
-
-    private function group(array $row): array
-    {
-        return [
-            'id' => (string) ($row['.id'] ?? ''),
-            'name' => (string) ($row['name'] ?? ''),
-            'rate_limit' => (string) ($row['rate-limit'] ?? ''),
-            'framed_pool' => (string) ($row['framed-pool'] ?? ''),
-            'shared_users' => (string) ($row['shared-users'] ?? ''),
-            'comment' => (string) ($row['comment'] ?? ''),
-        ];
-    }
-
-    private function profile(array $row): array
-    {
-        return [
-            'id' => (string) ($row['.id'] ?? ''),
-            'name' => (string) ($row['name'] ?? ''),
-            'price' => (string) ($row['price'] ?? ''),
-            'validity' => (string) ($row['validity'] ?? ''),
-            'starts_at' => (string) ($row['starts-at'] ?? ''),
-        ];
-    }
-
-    private function limitation(array $row): array
-    {
-        return [
-            'id' => (string) ($row['.id'] ?? ''),
-            'name' => (string) ($row['name'] ?? ''),
-            'rate_limit' => (string) ($row['rate-limit'] ?? ''),
-            'download_limit' => (string) ($row['download-limit'] ?? ''),
-            'upload_limit' => (string) ($row['upload-limit'] ?? ''),
-            'uptime_limit' => (string) ($row['uptime-limit'] ?? ''),
-        ];
-    }
-
-    private function user(array $row): array
-    {
-        return [
-            'id' => (string) ($row['.id'] ?? ''),
-            'username' => (string) ($row['name'] ?? ''),
-            'group' => (string) ($row['group'] ?? ''),
-            'shared_users' => (string) ($row['shared-users'] ?? ''),
-            'disabled' => filter_var($row['disabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
-            'comment' => (string) ($row['comment'] ?? ''),
-            // Deliberately no password field. This screen has no reason to read
-            // one and every reason not to put it in a JSON payload.
-        ];
-    }
-
-    private function session(array $row): array
-    {
-        return [
-            'id' => (string) ($row['.id'] ?? ''),
-            'user' => (string) ($row['user'] ?? ''),
-            'group' => (string) ($row['user-group'] ?? $row['group'] ?? ''),
-            'address' => (string) ($row['user-address'] ?? $row['address'] ?? ''),
-            'nas' => (string) ($row['nas-ip-address'] ?? ''),
-            'uptime' => (string) ($row['uptime'] ?? ''),
-            'started' => (string) ($row['started'] ?? ''),
-        ];
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage(),
+            'errors' => [$field => [$e->getMessage()]],
+        ], 422);
     }
 
     private function fail(Throwable $e, string $message)
     {
-        Log::error('Mikrotik shortcut failed: ' . $e->getMessage(), [
+        Log::error('MikroTik RADIUS failed: ' . $e->getMessage(), [
             'exception' => get_class($e),
+            'trace' => $e->getTraceAsString(),
         ]);
 
         return response()->json([
             'status' => 'error',
+            // The router's own error text can name hosts and credentials, so it
+            // is only returned with debug on.
             'message' => config('app.debug') ? $e->getMessage() : $message,
         ], 500);
     }

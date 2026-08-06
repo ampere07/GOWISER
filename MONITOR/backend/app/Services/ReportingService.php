@@ -204,6 +204,221 @@ class ReportingService
         return $this->section($sourceKey, 'subscriber_analytics', $params);
     }
 
+    /**
+     * The subscribers behind one billing-status counter, across every database.
+     *
+     * Backs the Group Overview drill-down: the counters answer "how many", and
+     * this answers the only useful next question.
+     *
+     * ── Paging a fleet ────────────────────────────────────────────────
+     *
+     * Fleet page P is guaranteed to lie inside the union of each database's first
+     * P pages: a row cannot rank in the merged page P if it ranked below
+     * P × per_page within its own database, because both orderings are the same
+     * key. So each database is asked for that much, the pool is re-sorted on the
+     * same key, and the exact page is sliced out. The alternative — a cross-
+     * database cursor — is not available over separate connections, and pulling
+     * every active subscriber back to page twenty-five of them is not an option
+     * at this size.
+     *
+     * Deliberately uncached. A drill-down is opened to check a specific account
+     * against what the operating system says right now, and a minute-old copy is
+     * exactly the thing that makes someone distrust the whole screen. The counter
+     * above it is cached; this is the thing you reconcile it against.
+     *
+     * A database that fails is reported in the payload rather than aborting the
+     * request — one unreachable branch must not blank the modal — but the total
+     * must never be quietly short either, so the failure travels with the rows.
+     *
+     * @return array<string,mixed>
+     */
+    public function subscriberDirectory(array $params): array
+    {
+        $sources = $this->sourcesFor('subscriber_analytics');
+
+        if ($sources === []) {
+            throw new InvalidArgumentException('No database provides a subscriber view.');
+        }
+
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+
+        $rows = [];
+        $total = 0;
+        $failures = [];
+        $answered = [];
+
+        foreach ($sources as $source) {
+            $key = $source['key'];
+
+            try {
+                $driver = $this->driver($key);
+                $db = $this->sources->connection($key);
+
+                $result = $driver->subscribersByStatus($db, array_merge($params, [
+                    'page' => 1,
+                    // The widening described above. Capped so a request for page
+                    // 400 cannot be turned into a ten-thousand-row fetch per
+                    // database by editing the query string.
+                    'per_page' => min(100, $perPage) * min($page, 20),
+                ]));
+
+                $total += (int) ($result['total'] ?? 0);
+                $answered[] = $source['label'];
+
+                foreach ($result['rows'] ?? [] as $row) {
+                    $row['source'] = $key;
+                    $row['source_label'] = $source['label'];
+                    $rows[] = $row;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Subscriber drill-down failed for one database', [
+                    'source' => $key,
+                    'status' => $params['status'] ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+
+                $failures[$key] = config('app.debug')
+                    ? $e->getMessage()
+                    : 'This database could not be reached.';
+            }
+        }
+
+        if ($answered === [] && $failures !== []) {
+            throw new \RuntimeException('None of the configured databases could be reached.');
+        }
+
+        // Re-sorted on the same key each driver ordered by, which is what makes
+        // the widening argument above hold.
+        usort($rows, fn ($a, $b) => strcasecmp(
+            (string) ($a['subscriber'] ?? ''),
+            (string) ($b['subscriber'] ?? '')
+        ) ?: strcmp((string) ($a['account_number'] ?? ''), (string) ($b['account_number'] ?? '')));
+
+        return [
+            'status' => (string) ($params['status'] ?? 'active'),
+            'search' => (string) ($params['search'] ?? ''),
+            'rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int) ceil($total / $perPage),
+            'answered' => $answered,
+            'failed' => $failures,
+        ];
+    }
+
+    /**
+     * The records behind one Group Overview metric tile, across every database.
+     *
+     * Same fan-out and same page-widening argument as subscriberDirectory above.
+     * Uncached for the same reason too: a drill-down exists to be reconciled
+     * against the operating system, and a cached copy is exactly what makes
+     * someone distrust the tile that opened it.
+     *
+     * The facet lists — plans and areas for the filter dropdowns — are unioned
+     * across whichever databases answered, so a dropdown never offers an option
+     * from a source that is currently unreachable and then returns nothing.
+     *
+     * @return array<string,mixed>
+     */
+    public function workRecordDirectory(array $params): array
+    {
+        $sources = $this->sourcesFor('operations');
+
+        if ($sources === []) {
+            throw new InvalidArgumentException('No database provides a field-work view.');
+        }
+
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+
+        $rows = [];
+        $total = 0;
+        $plans = [];
+        $areas = [];
+        $failures = [];
+        $answered = [];
+
+        foreach ($sources as $source) {
+            $key = $source['key'];
+
+            try {
+                $driver = $this->driver($key);
+                $db = $this->sources->connection($key);
+
+                $result = $driver->workRecords($db, array_merge($params, [
+                    'page' => 1,
+                    'per_page' => min(100, $perPage) * min($page, 20),
+                ]));
+
+                $total += (int) ($result['total'] ?? 0);
+                $plans = array_merge($plans, $result['plans'] ?? []);
+                $areas = array_merge($areas, $result['areas'] ?? []);
+                $answered[] = $source['label'];
+
+                foreach ($result['rows'] ?? [] as $row) {
+                    $row['source'] = $key;
+                    $row['source_label'] = $source['label'];
+                    $rows[] = $row;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Metric drill-down failed for one database', [
+                    'source' => $key,
+                    'metric' => $params['metric'] ?? null,
+                    'error' => $e->getMessage(),
+                ]);
+
+                $failures[$key] = config('app.debug')
+                    ? $e->getMessage()
+                    : 'This database could not be reached.';
+            }
+        }
+
+        if ($answered === [] && $failures !== []) {
+            throw new \RuntimeException('None of the configured databases could be reached.');
+        }
+
+        // Re-sorted on the key each driver ordered by, which is what makes the
+        // page-widening above sound. Sorting is done here rather than trusting
+        // the concatenation: two databases each returning their own ordered page
+        // do not concatenate into an ordered list.
+        $sort = (string) ($params['sort'] ?? 'occurred_at');
+        $descending = strtolower((string) ($params['direction'] ?? 'desc')) !== 'asc';
+
+        usort($rows, function (array $a, array $b) use ($sort, $descending) {
+            $left = (string) ($a[$sort] ?? '');
+            $right = (string) ($b[$sort] ?? '');
+
+            $comparison = $sort === 'occurred_at'
+                ? strcmp($left, $right)
+                : strcasecmp($left, $right);
+
+            return $descending ? -$comparison : $comparison;
+        });
+
+        $unique = function (array $values): array {
+            $values = array_values(array_unique(array_filter($values, fn ($v) => trim((string) $v) !== '')));
+            sort($values, SORT_NATURAL | SORT_FLAG_CASE);
+
+            return $values;
+        };
+
+        return [
+            'metric' => (string) ($params['metric'] ?? ''),
+            'range' => ['from' => $params['date_from'] ?? null, 'to' => $params['date_to'] ?? null],
+            'rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int) ceil($total / $perPage),
+            'plans' => $unique($plans),
+            'areas' => $unique($areas),
+            'answered' => $answered,
+            'failed' => $failures,
+        ];
+    }
+
     public function financial(string $sourceKey, array $params): array
     {
         return $this->section($sourceKey, 'financial', $params);

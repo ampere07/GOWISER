@@ -63,6 +63,10 @@ class Kernel extends HttpKernel
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'executive' => \App\Http\Middleware\EnsureExecutiveAccess::class,
+        // The role half of the gate above, without its read-only rule — for
+        // MikroTik RADIUS, which is executive-only *and* has to write to a
+        // router. See EnsureExecutiveRole.
+        'executive-role' => \App\Http\Middleware\EnsureExecutiveRole::class,
         // The only middleware in this app that permits a write, and it permits
         // it against MONITOR's own tables only. See EnsureDatabaseAdmin.
         'db-admin' => \App\Http\Middleware\EnsureDatabaseAdmin::class,

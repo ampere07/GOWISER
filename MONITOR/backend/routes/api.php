@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\FinancialsController;
 use App\Http\Controllers\Api\MikrotikController;
 use App\Http\Controllers\Api\MonitorController;
 use App\Http\Controllers\Api\PayableController;
+use App\Http\Controllers\Api\RadiusConfigController;
 use App\Http\Controllers\Api\ReportingController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\SiteController;
@@ -55,9 +56,21 @@ Route::get('/settings-color-palette', [SettingsColorPaletteController::class, 'i
 Route::get('/settings-color-palette/active', [SettingsColorPaletteController::class, 'active']);
 Route::get('/settings/logo', [SettingsController::class, 'logo']);
 
+// The logo bytes, streamed by PHP rather than served off the public disk. The
+// login screen renders this before a session exists, so it is unauthenticated
+// like the JSON endpoint above it — see SettingsController::logoFile for why it
+// does not go through Storage::url().
+Route::get('/settings/logo/file', [SettingsController::class, 'logoFile']);
+
 Route::middleware('auth')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+
+    // How often this user's dashboards re-read themselves. Deliberately on the
+    // plain auth group: it is the one thing on the Settings page that belongs to
+    // the person rather than the portal, and gating it behind an administrative
+    // grant would mean nobody but an administrator could set their own.
+    Route::put('/me/preferences', [AuthController::class, 'updatePreferences']);
 });
 
 /*
@@ -135,6 +148,18 @@ Route::middleware(['auth', 'executive'])->prefix('reporting')->group(function ()
 Route::middleware(['auth', 'executive'])->group(function () {
     Route::get('/executive/overview', [ExecutiveOverviewController::class, 'show']);
     Route::get('/executive/work-streams', [ExecutiveOverviewController::class, 'workStreams']);
+
+    // The drill-down behind the Subscriber Analytics counters — a named,
+    // paginated list of everyone in one billing status. Same two gates as the
+    // dashboard: a list of every customer in a status is strictly more sensitive
+    // than the count that opened it.
+    Route::get('/executive/subscribers', [ExecutiveOverviewController::class, 'subscribers']);
+
+    // The records behind one metric tile — application, installed, repair,
+    // reschedule, pending — over the window the card was counted in. Built on
+    // the same query the counter used, so the modal can never show a different
+    // population from the tile that opened it.
+    Route::get('/executive/records', [ExecutiveOverviewController::class, 'metricRecords']);
 });
 
 /*
@@ -197,39 +222,87 @@ Route::middleware('auth')->group(function () {
 });
 
 /*
- * Mikrotik Radius Shortcut.
+ * MikroTik RADIUS — User Manager control.
  *
  * The only routes in MONITOR that change something outside MONITOR. Everything
  * else here reads a monitored database or writes to a local settings table; these
  * reach a live router and can disconnect subscribers.
  *
- * Three grants, not one, and the split is the safety property:
+ * Four gates, and the split is the safety property:
  *
+ *   executive-role           the signed-in user's ROLE is an executive one
  *   MODULE_MIKROTIK          read the User Manager
- *   ACTION_MIKROTIK_WRITE    change a group's rate limit or framed pool
- *   ACTION_MIKROTIK_KICK     terminate live sessions
+ *   ACTION_MIKROTIK_WRITE    change a group's rate limit, pool, or a user's group
+ *   ACTION_MIKROTIK_KICK     terminate live sessions, now or on a schedule
  *
- * Granting somebody the tab therefore does not grant them the ability to cut a
+ * The role gate is first and is the one that cannot be granted from inside the
+ * app. Module and action permissions are editable on the Roles screen, so a
+ * permission alone can be handed to anyone by anyone who can edit roles — and
+ * the ability to re-shape every subscriber's bandwidth is not access that should
+ * be acquirable that way. Permissions::EXECUTIVE_ROLES only changes in a deploy.
+ *
+ * Granting somebody the tab still does not grant them the ability to cut a
  * region off, which a single permission covering the whole feature would.
  *
- * Deliberately outside the 'executive' group: that middleware enforces the
- * read-only guarantee the reporting pages rely on, and these endpoints are the
- * documented exception to it rather than a hole in it.
+ * Deliberately NOT behind the 'executive' middleware: that one enforces the
+ * read-only guarantee the reporting pages rely on and would reject every write
+ * here with a 405. 'executive-role' is its role check without that rule — see
+ * EnsureExecutiveRole for why the two are separate rather than parameterised.
  */
-Route::middleware(['auth', 'permission:' . Permissions::MODULE_MIKROTIK])
+Route::middleware(['auth', 'executive-role', 'permission:' . Permissions::MODULE_MIKROTIK])
     ->prefix('mikrotik')
     ->group(function () {
         Route::get('/', [MikrotikController::class, 'index']);
         Route::get('/users', [MikrotikController::class, 'users']);
 
-        Route::put('/groups/{group}', [MikrotikController::class, 'updateGroup'])
-            ->middleware('permission:' . Permissions::ACTION_MIKROTIK_WRITE);
+        // Reads a rate limit without setting it, so the form can show "250mb"
+        // resolving to "250M/250M" as it is typed. Read-only, hence no write
+        // grant — see MikrotikController::previewRateLimit.
+        Route::post('/rate-limit/preview', [MikrotikController::class, 'previewRateLimit']);
+
+        Route::middleware('permission:' . Permissions::ACTION_MIKROTIK_WRITE)->group(function () {
+            Route::put('/groups/{group}', [MikrotikController::class, 'updateGroup']);
+
+            // Moving a subscriber between groups changes what they are paying
+            // for, so it sits behind the same grant as re-shaping a group.
+            Route::put('/users/{username}/group', [MikrotikController::class, 'moveUser']);
+        });
 
         Route::middleware('permission:' . Permissions::ACTION_MIKROTIK_KICK)->group(function () {
             Route::post('/kick/now', [MikrotikController::class, 'kickNow']);
+            // A named wall-clock time in Asia/Manila (GMT+8).
+            Route::post('/kick/schedule', [MikrotikController::class, 'scheduleKick']);
+            // The next maintenance window, whenever that is.
             Route::post('/kick/later', [MikrotikController::class, 'kickLater']);
             Route::delete('/kick/{kick}', [MikrotikController::class, 'cancelKick']);
         });
+    });
+
+/*
+ * RADIUS API Settings — where MikroTik RADIUS points.
+ *
+ * Ported from GOWISER's radius_config so the endpoints are managed in one place
+ * rather than in two environments. These rows hold credentials for hardware that
+ * can take the network offline, so they carry their own grant rather than
+ * sharing ACTION_SETTINGS_MANAGE with the logo and the colour palette — and the
+ * executive role gate applies here too, since a RADIUS endpoint somebody else
+ * controls is a more complete compromise of this feature than any permission on
+ * the module itself.
+ *
+ * Outside the 'executive' group for the same reason as the block above: these
+ * are writes, and that middleware rejects anything that is not a GET.
+ */
+Route::middleware(['auth', 'executive-role', 'permission:' . Permissions::ACTION_RADIUS_MANAGE])
+    ->prefix('radius-config')
+    ->group(function () {
+        Route::get('/', [RadiusConfigController::class, 'index']);
+        Route::post('/', [RadiusConfigController::class, 'store']);
+        Route::put('/{radius}', [RadiusConfigController::class, 'update']);
+        Route::delete('/{radius}', [RadiusConfigController::class, 'destroy']);
+
+        // Authenticates against the stored credentials rather than anything in
+        // the request, so this cannot become a way to probe arbitrary hosts.
+        Route::post('/{radius}/test', [RadiusConfigController::class, 'test']);
     });
 
 /*
@@ -256,4 +329,11 @@ Route::middleware(['auth', 'db-admin'])->prefix('databases')->group(function () 
     // connection reaches the database they meant.
     Route::post('/{connection}/test', [DatabaseConnectionController::class, 'test']);
     Route::get('/{connection}/introspect', [DatabaseConnectionController::class, 'introspect']);
+
+    // What the reporting drivers expect from this database against what is
+    // actually there — table by table, column by column, including which real
+    // timestamp column each dated figure resolved to. The monitored schemas
+    // drift and MONITOR cannot migrate them, so the drift needs somewhere to be
+    // visible before a figure reads zero for a reason nobody can see.
+    Route::get('/{connection}/mapping', [DatabaseConnectionController::class, 'mapping']);
 });

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ChevronDown,
+  ChevronRight,
   Crown,
   Database,
   HardHat,
@@ -106,9 +106,19 @@ export const MENU_ITEMS: MenuItem[] = [
 
   // The one item here that reaches outside MONITOR. Everything above reads a
   // monitored database or edits a local setting; this talks to a live router and
-  // can disconnect subscribers, which is why it carries two further permissions
-  // of its own beyond the module id (see Permissions::ACTION_MIKROTIK_*).
-  { id: 'mikrotik-radius', label: 'Mikrotik Radius Shortcut', icon: Radio },
+  // can disconnect subscribers.
+  //
+  // `executiveOnly` for the same reason the Group Overview carries it, and with
+  // more at stake: the backend pins this module to the executive role list on
+  // top of the module permission (see EnsureExecutiveRole), so a menu entry
+  // without the check would offer a page that 403s. It also carries two further
+  // permissions beyond the module id — see Permissions::ACTION_MIKROTIK_*.
+  {
+    id: 'mikrotik-radius',
+    label: 'MikroTik RADIUS',
+    icon: Radio,
+    executiveOnly: true,
+  },
 ];
 
 interface SidebarProps {
@@ -264,10 +274,22 @@ const Sidebar: React.FC<SidebarProps> = ({
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
 
+  /**
+   * The active-item treatment, matched to GOWISER's sidebar.
+   *
+   * A 20% tint of the brand colour (the `33` alpha suffix), the brand colour for
+   * the label, and a 2px rule down the right edge. Previously this was a 13%
+   * tint and a 3px rule — close enough to look like a mistake rather than a
+   * variation when the two apps sit side by side on the same desk, which they
+   * do.
+   *
+   * The alpha suffix is why palettes are stored as six-digit hex: appending to a
+   * named colour produces an invalid value that silently drops the tint.
+   */
   const activeStyle = {
-    backgroundColor: `${palette.primary}22`,
+    backgroundColor: `${palette.primary}33`,
     color: palette.primary,
-    borderRightWidth: '3px',
+    borderRightWidth: '2px',
     borderRightStyle: 'solid' as const,
     borderRightColor: palette.primary,
   };
@@ -275,7 +297,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   // ---- COLLAPSED MODE ----
   if (isCollapsed) {
     return (
+      // Keyed per mode so toggling remounts the tree instead of reconciling the
+      // icon-only list against the labelled one. Both branches return
+      // div > nav > keyed rows, so without this React matches them position by
+      // position and carries stale tooltip and expansion state across.
       <div
+        key="sidebar-collapsed"
         className={`w-14 h-full flex flex-col border-r transition-all duration-300 ease-in-out overflow-visible ${
           isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
         }`}
@@ -343,6 +370,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           className={`px-0 py-3 border-t flex-shrink-0 flex justify-center ${
             isDarkMode ? 'border-gray-600' : 'border-gray-300'
           }`}
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
         >
           <button
             onClick={onLogout}
@@ -363,6 +391,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   // ---- EXPANDED MODE ----
   return (
     <div
+      key="sidebar-expanded"
       className={`w-64 border-r h-full ${
         isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
       } flex flex-col transition-all duration-300 ease-in-out overflow-hidden`}
@@ -389,8 +418,8 @@ const Sidebar: React.FC<SidebarProps> = ({
             <React.Fragment key={item.id}>
               {heading && (
                 <p
-                  className={`px-4 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-widest ${
-                    isDarkMode ? 'text-gray-500' : 'text-gray-400'
+                  className={`px-4 pt-4 pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
+                    isDarkMode ? 'text-gray-500' : 'text-gray-500'
                   }`}
                 >
                   {heading}
@@ -398,7 +427,19 @@ const Sidebar: React.FC<SidebarProps> = ({
               )}
 
               <button
-                onClick={() => (isParent ? toggle(item.id) : onSectionChange(item.id))}
+                onClick={() => {
+                  if (isParent) {
+                    toggle(item.id);
+                    return;
+                  }
+
+                  // Collapse any open group when navigating to a top-level
+                  // item, matching GOWISER: an expanded tray left open under
+                  // an unrelated active page is noise the reader has to
+                  // re-parse every time.
+                  setExpanded([]);
+                  onSectionChange(item.id);
+                }}
                 aria-expanded={isParent ? isOpen : undefined}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${
                   isActive
@@ -421,17 +462,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                   <span className="truncate">{item.label}</span>
                 </div>
 
+                {/* Rotating ChevronRight, not a flipping ChevronDown: GOWISER
+                    uses the first and the two sidebars are read by the same
+                    people minutes apart. */}
                 {isParent && (
-                  <ChevronDown
+                  <ChevronRight
                     className={`h-4 w-4 flex-shrink-0 transition-transform duration-200 ${
-                      isOpen ? 'rotate-180' : ''
-                    } ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}
+                      isOpen ? 'rotate-90' : ''
+                    } ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}
                   />
                 )}
               </button>
 
+              {/* No tinted tray behind the children. GOWISER indents them and
+                  leaves the surface flat; a second background here made the
+                  group read as a separate panel rather than as nesting. */}
               {isParent && isOpen && (
-                <div className={isDarkMode ? 'bg-gray-900/40' : 'bg-gray-50'}>
+                <div>
                   {(item.children ?? []).map((child) => {
                     const ChildIcon = child.icon;
                     const childActive = activeSection === child.id;
@@ -440,18 +487,18 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={child.id}
                         onClick={() => onSectionChange(child.id)}
-                        className={`w-full flex items-center pl-10 pr-4 py-2.5 text-sm transition-colors ${
+                        className={`w-full flex items-center pl-8 pr-4 py-3 text-sm transition-colors ${
                           childActive
                             ? ''
                             : isDarkMode
-                            ? 'text-gray-400 hover:text-white hover:bg-gray-700'
-                            : 'text-gray-600 hover:text-black hover:bg-gray-100'
+                            ? 'text-gray-300 hover:text-white hover:bg-gray-700'
+                            : 'text-gray-700 hover:text-black hover:bg-gray-100'
                         }`}
                         style={childActive ? activeStyle : {}}
                       >
                         <ChildIcon
-                          className={`h-4 w-4 mr-3 flex-shrink-0 ${
-                            isDarkMode ? 'text-gray-500' : 'text-gray-500'
+                          className={`h-5 w-5 mr-3 flex-shrink-0 ${
+                            isDarkMode ? 'text-gray-400' : 'text-gray-600'
                           }`}
                           style={childActive ? { color: palette.primary } : {}}
                         />
@@ -474,6 +521,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       <div
         className={`px-3 py-3 ${isDarkMode ? 'border-gray-600' : 'border-gray-300'} border-t flex-shrink-0`}
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
       >
         <div className="mb-3">
           <div className={`text-xs mb-2 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>

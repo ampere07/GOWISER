@@ -1691,14 +1691,24 @@ class EnhancedBillingGenerationServiceWithNotifications
      * Deliberately NOT filtered on billing_status, mirroring the expiry scan: the point is to reach
      * the customer whatever state their account is in. VIP is therefore excluded explicitly.
      *
-     * Idempotent: `prepaid_pre_expiry_notified_for` records the expiry the warning went out for, so
-     * a customer sitting inside the window is warned once, not every morning. It is a separate
-     * column from `prepaid_expiry_notified_for` on purpose — both notices key off the same expiry
-     * timestamp, so a shared marker would let this warning suppress the lapse notice days later.
-     * It needs no cleanup: renewing moves prepaid_expires_at forward, the stored value stops
-     * matching, and the next period warns again.
+     * Idempotent, at two levels. `prepaid_pre_expiry_notified_for` records the expiry the warning
+     * went out for, so a customer sitting inside the window is warned once, not every morning; it
+     * is a separate column from `prepaid_expiry_notified_for` on purpose, because both notices key
+     * off the same expiry timestamp and a shared marker would let this warning suppress the lapse
+     * notice days later. It needs no cleanup: renewing moves prepaid_expires_at forward, the stored
+     * value stops matching, and the next period warns again. Beneath that,
+     * {@see \App\Services\SmsQueueService::queueSms()} deduplicates on
+     * (account, contact, message, time_sent) under a UNIQUE index — so even a run whose marker
+     * write fails, or two runs overlapping, cannot text the same customer twice.
      *
      * Each account is isolated so one failure never aborts the batch.
+     *
+     * NOT part of bill generation. This concerns prepaid accounts only and raises no SOA and no
+     * invoice, so it runs from its own command and its own schedule entry —
+     * {@see \App\Console\Commands\NotifyPrepaidPreExpiry} / 'billing:notify-prepaid-pre-expiry',
+     * daily at 01:30. It used to be a step inside cron:generate-daily-billings, which meant a
+     * failure in either landed in the other's log and the warning could not be re-run without
+     * re-entering bill generation. Use `--dry-run` on that command to see what a run would do.
      *
      * @return array{success:int, failed:int, skipped:int, errors:array, notifications:array}
      */

@@ -48,6 +48,29 @@ class GowiserReportsDriver implements ReportsDriver
     /** A technician_locations row older than this is no longer "live". */
     private const LOCATION_STALE_MINUTES = 15;
 
+    /**
+     * Rows returned in a "done today" list before it is capped.
+     *
+     * A list, not a count — the count is beside it and is exact. The cap exists
+     * because a busy month can close several hundred and nobody reads past the
+     * first screen of a drill-down.
+     */
+    private const DONE_LIST_LIMIT = 100;
+
+    /** Subscribers returned per page of the status drill-down. */
+    private const DIRECTORY_PER_PAGE = 25;
+
+    /**
+     * Job-order states meaning "installed", and service-visit states meaning
+     * "repaired".
+     *
+     * Deliberately wider than the literal "Done" the brief names. The app writes
+     * these free-text and three spellings of finished are already in the data;
+     * matching only 'done' would under-report every completion recorded as
+     * 'Completed', which is how a field team's month goes missing.
+     */
+    private const COMPLETED_STATES = ['done', 'completed', 'resolved', 'approved'];
+
     public function capabilities(): array
     {
         return ['subscriber_analytics', 'financial', 'operations', 'tech', 'employee'];
@@ -117,6 +140,220 @@ class GowiserReportsDriver implements ReportsDriver
             ],
             'overdue' => $this->overdueAccounts($db, $params),
             'sessions' => $this->sessionBreakdown($db),
+        ];
+    }
+
+    /**
+     * The subscribers behind one billing-status counter.
+     *
+     * ── Why the status filter is built from StatusMap ─────────────────
+     *
+     * The counter this drills into was produced by StatusMap::rewrite, which
+     * folds several raw source values onto one reported label — 'suspended' and
+     * 'restricted' both read as Restricted, 'expired' and 'overdue' both as
+     * Disconnected. Filtering here on the *label* would return nothing, and
+     * filtering on a single guessed raw value would return a subset. Both are
+     * ways for a drill-down to disagree with the number that opened it, so the
+     * bucket's whole membership list drives the WHERE clause.
+     *
+     * ── Query shape ───────────────────────────────────────────────────
+     *
+     * Two queries: one COUNT for the true total, one page of rows with the
+     * customer and plan joined. Not one query and a PHP slice — that would pull
+     * every active subscriber across the fleet into memory to show twenty-five of
+     * them. The joins are LEFT so an account whose plan row was deleted still
+     * appears; dropping it would make the page disagree with the counter for a
+     * second, subtler reason.
+     */
+    public function subscribersByStatus(ConnectionInterface $db, array $params): array
+    {
+        $status = strtolower(trim((string) ($params['status'] ?? 'active')));
+        $search = trim((string) ($params['search'] ?? ''));
+        $plan = trim((string) ($params['plan'] ?? ''));
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
+
+        $members = StatusMap::BILLING_BUCKETS[$status] ?? null;
+
+        if ($members === null) {
+            return [
+                'rows' => [], 'total' => 0, 'page' => 1,
+                'per_page' => $perPage, 'total_pages' => 0, 'status' => $status,
+            ];
+        }
+
+        $base = function () use ($db, $members, $search, $plan): Builder {
+            $query = $db->table('billing_accounts as ba')
+                ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+                // ── Why the customer join tests two keys ──────────────
+                //
+                // SYNC links these two tables both ways and neither is
+                // populated everywhere. Accounts created through the app carry
+                // `billing_accounts.customer_id`; accounts that came through the
+                // migration have it null and are reachable only by matching
+                // `customers.account_no` — which is why that column exists on
+                // both tables.
+                //
+                // `customer_id` is the only link worth joining on. Measured
+                // against production: 3,594 of 3,594 billing accounts resolve
+                // through it, none are null and none dangle. A fallback join on
+                // `customers.account_no` was tried here and removed — it could
+                // never fire, and it carried a real hazard, because five
+                // account numbers in `customers` map to more than one row and an
+                // account reaching that join would have been returned twice.
+                ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+                ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+                ->whereIn(DB::raw("LOWER(TRIM(COALESCE(bs.status_name, '')))"), $members);
+
+            // Drilling into one Subscriber Plan tile.
+            //
+            // Matched against the resolved plan name, falling back to the
+            // customer's free-text plan for accounts whose `plan_id` was lost in
+            // the migration — the same two populations planMix counts, so the
+            // list a tile opens is the population that tile counted rather than
+            // only the half that still has a plan row.
+            if ($plan !== '') {
+                // Compared on the flattened name — case, spaces, hyphens and
+                // underscores removed — because the tile's label is the
+                // canonical `plan_list.plan_name` while the legacy accounts
+                // carry a free-text string that agrees only after
+                // normalisation. Matching literally would make a tile reading
+                // 1,601 open a modal reading 0, which is worse than not
+                // offering the drill-down at all.
+                //
+                // Mirrors PlanReconciler::compact(), which is what produced the
+                // label. Measured against production: this resolves 2,801 of
+                // the 2,801 active accounts whose plan_id no longer resolves.
+                $flatten = fn (string $column) =>
+                    "LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM({$column}), '-', ''), '_', ''), ' ', ''), '.', ''))";
+
+                $needle = strtolower(preg_replace('/[-_ .]/', '', $plan) ?? '');
+
+                $query->where(function ($group) use ($needle, $flatten) {
+                    $group->whereRaw($flatten('pl.plan_name') . ' = ?', [$needle])
+                        ->orWhere(function ($legacy) use ($needle, $flatten) {
+                            $legacy->whereNull('pl.id')
+                                ->whereRaw($flatten("COALESCE(c.desired_plan, '')") . ' = ?', [$needle]);
+                        });
+                });
+            }
+
+            if ($search !== '') {
+                $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+
+                // Searched across whichever customer row resolved, so a search
+                // finds migrated accounts as readily as app-created ones.
+                $query->where(function ($group) use ($like) {
+                    $group->where('ba.account_no', 'like', $like)
+                        ->orWhere('c.first_name', 'like', $like)
+                        ->orWhere('c.last_name', 'like', $like)
+                        ->orWhere('c.contact_number_primary', 'like', $like)
+                        ->orWhere('c.barangay', 'like', $like)
+                        ->orWhere('c.address', 'like', $like);
+                });
+            }
+
+            return $query;
+        };
+
+        $total = (int) $base()->count();
+
+        if ($total === 0) {
+            return [
+                'rows' => [], 'total' => 0, 'page' => 1,
+                'per_page' => $perPage, 'total_pages' => 0, 'status' => $status,
+            ];
+        }
+
+        $rows = $base()
+            ->select('ba.id', 'ba.account_no', 'ba.date_installed', 'ba.vip_expiration')
+            ->selectRaw('bs.status_name AS status_name')
+            ->selectRaw('c.first_name AS first_name')
+            ->selectRaw('c.last_name AS last_name')
+            ->selectRaw('c.contact_number_primary AS contact_number_primary')
+            ->selectRaw('c.email_address AS email_address')
+            ->selectRaw('c.barangay AS barangay')
+            ->selectRaw('c.city AS city')
+            ->selectRaw('c.address AS address')
+            ->selectRaw('c.desired_plan AS desired_plan')
+            ->selectRaw('pl.plan_name AS plan_name')
+            ->orderBy('c.last_name')
+            ->orderBy('ba.account_no')
+            ->forPage($page, $perPage)
+            ->get();
+
+        return [
+            'rows' => $rows->map(fn ($row) => $this->subscriberRow($row))->all(),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int) ceil($total / $perPage),
+            'status' => $status,
+        ];
+    }
+
+    /**
+     * One subscriber row, shaped for the drill-down table.
+     *
+     * ── Why every field is emitted under two names ────────────────────
+     *
+     * The reporting payloads speak one vocabulary (`subscriber`, `location`,
+     * `plan`) and SYNC's own screens speak another (`customer_name`, `area`,
+     * `plan_name`). Both are legitimate readers of this endpoint, and a
+     * consumer written against the wrong one renders a table of empty cells
+     * with no error anywhere — which is exactly the failure this drill-down
+     * shipped with.
+     *
+     * Emitting both aliases costs a few hundred bytes a page and removes the
+     * whole class of bug. It is deliberately not a compatibility shim to be
+     * removed later: the two vocabularies belong to two systems that will keep
+     * existing, and picking one would only move the problem.
+     *
+     * `area` falls back through barangay → city → street address, because a
+     * subscriber with no barangay recorded still has somewhere to visit, and an
+     * empty Area column is indistinguishable from a broken join.
+     *
+     * @param object $row
+     * @return array<string,mixed>
+     */
+    private function subscriberRow($row): array
+    {
+        $name = $this->fullName($row->first_name ?? '', $row->last_name ?? '');
+        $account = (string) ($row->account_no ?? '');
+        $contact = (string) ($row->contact_number_primary ?? '');
+        // The plan row where one resolves, the free-text string where it does
+        // not — the same fallback planMix reconciles on, so the two screens name
+        // the same plan for the same account.
+        $plan = (string) ($row->plan_name ?: $row->desired_plan ?: '');
+        $area = $this->joinLocation([$row->barangay ?? null, $row->city ?? null])
+            ?: trim((string) ($row->address ?? ''));
+        // The source's own word, not the reported label: a reader looking at a
+        // Restricted list is entitled to see which of them the system calls
+        // Suspended.
+        $status = (string) ($row->status_name ?? '');
+
+        return [
+            'id' => (string) ($row->id ?? ''),
+
+            // Reporting vocabulary.
+            'subscriber' => $name,
+            'account_number' => $account,
+            'contact_number' => $contact,
+            'plan' => $plan,
+            'location' => $area,
+            'raw_status' => $status,
+
+            // SYNC vocabulary, same values.
+            'customer_name' => $name,
+            'account_no' => $account,
+            'contact' => $contact,
+            'plan_name' => $plan,
+            'area' => $area,
+            'status' => $status,
+
+            'email' => (string) ($row->email_address ?? ''),
+            'date_installed' => $row->date_installed ?: null,
+            'vip_expiration' => $row->vip_expiration ?: null,
         ];
     }
 
@@ -273,24 +510,97 @@ class GowiserReportsDriver implements ReportsDriver
     /**
      * Active accounts per plan.
      *
-     * Grouped on `plan_list` via billing_accounts.plan_id, not on the customer's
-     * free-text `desired_plan`. That column is what the applicant *asked* for at
-     * sign-up and is often stale; plan_id is what they are actually billed on.
+     * ── Why this is no longer a plain join ────────────────────────────
+     *
+     * It used to be `JOIN plan_list ON pl.id = ba.plan_id`, which silently
+     * dropped every account whose `plan_id` is null or points at a plan row that
+     * has since been renamed or deleted. On the Group Overview that showed up as
+     * a Subscriber Plan section whose cards added to noticeably fewer than the
+     * Active counter three rows above it — the inner join was doing the
+     * subtracting, invisibly.
+     *
+     * The unresolved tail is now reconciled the same way `planDistribution` does
+     * it: the surviving free-text plan string is matched against the canonical
+     * `plan_list` names by PlanReconciler, which normalises punctuation and case,
+     * tries containment, then bandwidth and price signatures — and refuses ties
+     * rather than guessing. Anything genuinely unidentifiable is grouped under
+     * one label instead of vanishing.
+     *
+     * Both halves are grouped in SQL before they reach PHP: one row per plan and
+     * one per *distinct legacy string*, typically a handful, never one per
+     * account.
+     *
+     * `desired_plan` is only consulted for accounts whose plan_id resolved to
+     * nothing. It is what the applicant asked for at sign-up and is often stale,
+     * so it is a last resort rather than the grouping key.
      */
     private function planMix(ConnectionInterface $db): array
     {
-        return $db->table('billing_accounts as ba')
+        $activeOnly = "LOWER(TRIM(COALESCE(bs.status_name, ''))) = 'active'";
+
+        $reconciler = PlanReconciler::fromCanonical(
+            $db->table('plan_list')->select('id', 'plan_name', 'price')->get()
+        );
+
+        $counts = [];
+
+        // Accounts whose plan_id resolves — the large population, grouped in SQL.
+        $matched = $db->table('billing_accounts as ba')
             ->join('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
             ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
-            ->whereRaw("LOWER(COALESCE(bs.status_name, '')) = 'active'")
-            ->selectRaw('pl.plan_name AS label')
+            ->whereRaw($activeOnly)
+            ->selectRaw('pl.id AS plan_id')
             ->selectRaw('COUNT(*) AS cnt')
-            ->groupBy('pl.id', 'pl.plan_name')
-            ->orderByRaw('COUNT(*) DESC')
-            ->limit(self::TOP_N)
-            ->get()
-            ->map(fn ($row) => ['label' => (string) $row->label, 'count' => (int) $row->cnt])
-            ->all();
+            ->groupBy('pl.id')
+            ->get();
+
+        foreach ($matched as $row) {
+            $plan = $reconciler->plan((int) $row->plan_id);
+
+            if ($plan === null) {
+                continue;
+            }
+
+            $counts[$plan['label']] = ($counts[$plan['label']] ?? 0) + (int) $row->cnt;
+        }
+
+        // The tail: no plan_id, or one pointing at a row that no longer exists.
+        $legacy = $db->table('billing_accounts as ba')
+            ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
+            ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->whereRaw($activeOnly)
+            ->whereNull('pl.id')
+            ->selectRaw("COALESCE(NULLIF(TRIM(c.desired_plan), ''), '') AS raw_plan")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('raw_plan')
+            ->get();
+
+        foreach ($legacy as $row) {
+            $raw = (string) $row->raw_plan;
+            $count = (int) $row->cnt;
+
+            $planId = $raw === '' ? null : $reconciler->match($raw);
+            $plan = $planId === null ? null : $reconciler->plan($planId);
+
+            $label = $plan['label'] ?? PlanReconciler::UNMAPPED_LABEL;
+
+            $counts[$label] = ($counts[$label] ?? 0) + $count;
+        }
+
+        arsort($counts);
+
+        $rows = [];
+
+        foreach ($counts as $label => $count) {
+            $rows[] = ['label' => (string) $label, 'count' => (int) $count];
+        }
+
+        // Capped, like every other league table here. The unmapped bucket is
+        // deliberately allowed to compete for a slot on merit: if it is large
+        // enough to make the top ten, that is a fact worth seeing rather than one
+        // to hide behind a tidier list.
+        return array_slice($rows, 0, self::TOP_N);
     }
 
     /**
@@ -619,11 +929,36 @@ class GowiserReportsDriver implements ReportsDriver
      */
     private function expectedMrc(ConnectionInterface $db): float
     {
+        // ── Why the plan price is reached two ways ────────────────────
+        //
+        // `billing_accounts.plan_id` is very largely unpopulated in production:
+        // of 2,892 active accounts, 91 resolve a plan row and 2,801 do not. The
+        // surviving description of what those 2,801 are on is the free-text
+        // `customers.desired_plan`, which — measured — holds the exact canonical
+        // plan names and reconciles for all 2,801 of them.
+        //
+        // Priced through `plan_id` alone this figure came to ₱101,600 against a
+        // real ₱3,194,400. Expected MRC drives the collection-rate metric, so a
+        // 31× understatement made collection rate read as roughly 31× too good
+        // — a headline that was not slightly wrong but inverted in meaning.
+        //
+        // The fallback join is constrained to accounts the first could not
+        // price, so no account is counted twice. Names are compared flattened
+        // (case, spaces, hyphens, underscores removed), mirroring
+        // PlanReconciler::compact() so this agrees with the plan mix beside it.
+        $flat = fn (string $column) =>
+            "LOWER(REPLACE(REPLACE(REPLACE(REPLACE(TRIM({$column}), '-', ''), '_', ''), ' ', ''), '.', ''))";
+
         return (float) $db->table('billing_accounts as ba')
             ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id')
             ->leftJoin('billing_status as bs', 'bs.id', '=', 'ba.billing_status_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->leftJoin('plan_list as fallback', function ($join) use ($flat) {
+                $join->whereNull('pl.id')
+                    ->whereRaw($flat('fallback.plan_name') . ' = ' . $flat("COALESCE(c.desired_plan, '')"));
+            })
             ->whereIn(DB::raw("LOWER(COALESCE(bs.status_name, ''))"), ['active', 'online'])
-            ->sum(DB::raw('COALESCE(pl.price, 0)'));
+            ->sum(DB::raw('COALESCE(pl.price, fallback.price, 0)'));
     }
 
     /**
@@ -1839,6 +2174,18 @@ class GowiserReportsDriver implements ReportsDriver
             // independent of the selected range. See workCadence.
             'work_cadence' => $this->workCadence($db, $anchor),
 
+            // The Group Overview's five field metrics over the selected range,
+            // each counted on the status and the date column its label actually
+            // means. Deliberately NOT derived from work_cadence above: that block
+            // dates every queue on one COALESCE'd "effective date", which is the
+            // right rule for "what moved recently" and the wrong one for all five
+            // of these. See WORK_METRICS.
+            'executive_workload' => $this->executiveWorkload(
+                $db,
+                ReportPeriod::parse($from) ?? $anchor->copy()->startOfDay(),
+                ReportPeriod::parse($to) ?? $anchor->copy()->startOfDay()
+            ),
+
             // Resolution speed: what closed, and what has been waiting longest.
             'resolution' => $this->resolutionSla($db, $anchor),
 
@@ -2060,6 +2407,506 @@ class GowiserReportsDriver implements ReportsDriver
             ->all();
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    //  Executive workload — the five field metrics, over the selected range
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * The five field metrics, each with the status and the date column its label
+     * actually means.
+     *
+     * ── Why each row is what it is ────────────────────────────────────
+     *
+     * Every one of these was previously derived from the generic work cadence,
+     * which dates all three queues on one COALESCE(updated_at, timestamp,
+     * created_at) "effective date" and buckets them through a shared status map.
+     * That is the right rule for "what moved recently" and the wrong one for
+     * every label on this screen. Specifically:
+     *
+     *   application  Counted on `created_at` — when the application was filed —
+     *                and with NO status filter at all. An application that was
+     *                later cancelled was still received, and filtering it out is
+     *                what made this figure disagree with the applications module.
+     *
+     *   installed    `date_installed`, not `updated_at`. The two differ whenever
+     *                a job order is edited after the fact — a photo attached the
+     *                next morning, a remark corrected a week later — and every
+     *                one of those edits used to move an installation into the
+     *                wrong day. `date_installed` is the date the field team
+     *                actually put the service in.
+     *
+     *   repair       `visit_status`, not `support_status`. GOWISER records the
+     *                engineer's outcome in the first and the ticket's support
+     *                state in the second, and they disagree routinely: a ticket
+     *                can sit "In Progress" for support while the visit that fixed
+     *                it is Done. Dated on `updated_at`, which is when the visit
+     *                was closed out.
+     *
+     *   reschedule   Job orders moved to a later date. Dated on `updated_at`,
+     *                because the meaningful moment is when it was rescheduled,
+     *                not when it was raised.
+     *
+     *   pending      Service visits still in progress, on `updated_at`. Note this
+     *                is `service_orders.visit_status`, not a job-order state —
+     *                "pending" on this dashboard means a repair somebody is part
+     *                way through.
+     *
+     * The date columns are listed best-first and resolved against the live
+     * schema; the first that exists wins. That is a whole-schema fallback, not a
+     * per-row COALESCE — a source that does not stamp installations cannot answer
+     * "installed on the 4th" any more precisely than "touched on the 4th", and
+     * pretending otherwise per row is how the original bug happened.
+     */
+    private const WORK_METRICS = [
+        'application' => [
+            'table' => 'applications',
+            'status_column' => null,
+            'statuses' => [],
+            'dates' => ['created_at', 'timestamp'],
+            'label' => 'Applications',
+        ],
+        'installed' => [
+            'table' => 'job_orders',
+            'status_column' => 'onsite_status',
+            'statuses' => ['done', 'completed'],
+            'dates' => ['date_installed', 'updated_at', 'timestamp'],
+            'label' => 'Installed',
+        ],
+        'repair' => [
+            'table' => 'service_orders',
+            'status_column' => 'visit_status',
+            'statuses' => ['done', 'completed'],
+            'dates' => ['updated_at', 'timestamp'],
+            'label' => 'Repairs',
+        ],
+        'reschedule' => [
+            'table' => 'job_orders',
+            'status_column' => 'onsite_status',
+            'statuses' => ['reschedule', 'rescheduled'],
+            'dates' => ['updated_at', 'timestamp'],
+            'label' => 'Reschedule',
+        ],
+        'pending' => [
+            'table' => 'service_orders',
+            'status_column' => 'visit_status',
+            'statuses' => ['in progress', 'in-progress', 'inprogress'],
+            'dates' => ['updated_at', 'timestamp'],
+            'label' => 'Pending',
+        ],
+    ];
+
+    /** @return string[] */
+    public static function workMetrics(): array
+    {
+        return array_keys(self::WORK_METRICS);
+    }
+
+    /**
+     * All five metrics counted over one window.
+     *
+     * One aggregate per metric — five short indexed range scans — rather than one
+     * pass per metric per window. The range predicates keep the indexed column
+     * bare on both sides so they stay sargable; there is no DATE() wrapping a
+     * column anywhere in here, which is what a literal reading of
+     * `DATE(updated_at) = CURRENT_DATE` would have produced and what would have
+     * turned every one of these into a full table scan.
+     *
+     * @return array<string,mixed>
+     */
+    private function executiveWorkload(ConnectionInterface $db, Carbon $from, Carbon $to): array
+    {
+        $out = [
+            'range' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
+        ];
+
+        $anyTracked = false;
+
+        foreach (self::WORK_METRICS as $key => $metric) {
+            $count = $this->metricCount($db, $metric, $from, $to);
+
+            $out[$key] = $count ?? 0;
+            $anyTracked = $anyTracked || $count !== null;
+        }
+
+        // False when this schema models none of these queues. NETMANAGER has one
+        // installations table and no applications at all, and five confident
+        // zeros for a system with no concept of them is a claim rather than a
+        // measurement.
+        $out['tracked'] = $anyTracked;
+
+        return $out;
+    }
+
+    /**
+     * One metric's count, or null when this schema cannot answer it at all.
+     *
+     * Null rather than zero is the whole point: a missing table and an empty one
+     * are different answers, and only the second is a number.
+     */
+    private function metricCount(ConnectionInterface $db, array $metric, Carbon $from, Carbon $to): ?int
+    {
+        $query = $this->metricQuery($db, $metric, $from, $to);
+
+        return $query === null ? null : (int) $query->count();
+    }
+
+    /**
+     * The base query behind one metric: the status rule and the date window.
+     *
+     * Shared by the counter and by the drill-down that lists the same rows, so
+     * the modal can never show a different population from the tile that opened
+     * it. That is not tidiness — two queries expressing "the same" filter is
+     * precisely how a count and its list come to disagree, and a drill-down that
+     * disagrees with its own number destroys trust in both.
+     *
+     * Null when the table or its status column is absent from this schema.
+     */
+    private function metricQuery(
+        ConnectionInterface $db,
+        array $metric,
+        Carbon $from,
+        Carbon $to,
+        ?string $alias = null
+    ): ?Builder {
+        $table = $metric['table'];
+        $dates = $this->presentColumns($db, $table, $metric['dates']);
+
+        if ($dates === []) {
+            return null;
+        }
+
+        $statusColumn = $metric['status_column'];
+
+        if ($statusColumn !== null && !$this->hasColumn($db, $table, $statusColumn)) {
+            return null;
+        }
+
+        $prefix = $alias === null ? '' : $alias . '.';
+        $date = $prefix . $dates[0];
+
+        $query = $db->table($alias === null ? $table : "{$table} as {$alias}")
+            // Half-open upper bound: everything before the day after `to` at
+            // midnight. Catches every time on the last day of the range without
+            // wrapping the column in DATE(), which would make it unindexable.
+            ->where($date, '>=', $from->copy()->startOfDay()->toDateTimeString())
+            ->where($date, '<', $to->copy()->startOfDay()->addDay()->toDateTimeString());
+
+        // No status filter at all for applications, by instruction — see the
+        // WORK_METRICS docblock.
+        if ($statusColumn !== null && $metric['statuses'] !== []) {
+            $query->whereIn(
+                DB::raw("LOWER(TRIM(COALESCE({$prefix}{$statusColumn}, '')))"),
+                $metric['statuses']
+            );
+        }
+
+        return $query;
+    }
+
+    /**
+     * The records behind one metric tile, searched, sorted and paged.
+     *
+     * Built on exactly the query the counter used (see metricQuery), so the modal
+     * lists the same population the tile counted — filtered further by whatever
+     * the operator typed, never by a second interpretation of the metric itself.
+     *
+     * ── Joins ─────────────────────────────────────────────────────────
+     *
+     * Two per query, resolved in SQL rather than per row. Applications carry the
+     * customer inline; job orders reach them through `billing_accounts.id`;
+     * service orders through `billing_accounts.account_no`, which is a string key
+     * rather than a foreign one. Each is a LEFT join so a row whose account was
+     * deleted still appears — dropping it would make the list disagree with the
+     * count for a second, subtler reason.
+     */
+    public function workRecords(ConnectionInterface $db, array $params): array
+    {
+        $key = (string) ($params['metric'] ?? '');
+        $metric = self::WORK_METRICS[$key] ?? null;
+
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
+
+        $empty = [
+            'metric' => $key, 'rows' => [], 'total' => 0, 'page' => 1,
+            'per_page' => $perPage, 'total_pages' => 0, 'plans' => [], 'areas' => [],
+        ];
+
+        if ($metric === null) {
+            return $empty;
+        }
+
+        [$from, $to] = $this->range($params);
+
+        $fromDate = ReportPeriod::parse($from) ?? Carbon::now()->startOfDay();
+        $toDate = ReportPeriod::parse($to) ?? $fromDate->copy();
+
+        $build = fn (): ?Builder => $this->decorateRecords(
+            $db,
+            $key,
+            $this->metricQuery($db, $metric, $fromDate, $toDate, 'r'),
+            $params
+        );
+
+        $counter = $build();
+
+        if ($counter === null) {
+            return $empty;
+        }
+
+        $total = (int) $counter->count();
+
+        if ($total === 0) {
+            return array_merge($empty, ['plans' => [], 'areas' => []]);
+        }
+
+        $rows = $this->selectRecords($build(), $key, $params)
+            ->forPage($page, $perPage)
+            ->get();
+
+        return [
+            'metric' => $key,
+            'label' => $metric['label'],
+            'range' => ['from' => $from, 'to' => $to],
+            // Both vocabularies, for the same reason subscriberRow emits both —
+            // see that method. A drill-down that renders empty cells because the
+            // reader expected `account_no` and got `account_number` fails
+            // silently, and this table is the thing people check the tile
+            // against.
+            'rows' => $rows->map(function ($row) {
+                $name = $this->fullName($row->first_name ?? '', $row->last_name ?? '');
+                $account = (string) ($row->account_no ?? '');
+                $contact = (string) ($row->contact_number ?? '');
+                $plan = (string) ($row->plan_name ?? '');
+                $area = $this->joinLocation([$row->barangay ?? null, $row->city ?? null]) ?? '';
+                $status = (string) ($row->row_status ?? '');
+
+                return [
+                    'id' => (string) ($row->id ?? ''),
+
+                    'subscriber' => $name,
+                    'account_number' => $account,
+                    'contact_number' => $contact,
+                    'plan' => $plan,
+                    'location' => $area,
+                    'status' => $status,
+
+                    'customer_name' => $name,
+                    'account_no' => $account,
+                    'contact' => $contact,
+                    'plan_name' => $plan,
+                    'area' => $area,
+
+                    'technician' => (string) ($row->technician ?? ''),
+                    'occurred_at' => $row->occurred_at,
+                ];
+            })->all(),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int) ceil($total / $perPage),
+            // The filter dropdowns are built from the rows actually in range, not
+            // from every plan and barangay that has ever existed. A dropdown
+            // offering forty options that all return nothing is worse than none.
+            'plans' => $this->recordFacet($build(), 'plan_name'),
+            'areas' => $this->recordFacet($build(), 'barangay'),
+        ];
+    }
+
+    /**
+     * Adds the subscriber joins and the operator's own search and filters.
+     *
+     * The joins differ per metric because the three tables reach a customer three
+     * different ways; everything downstream reads one shape.
+     */
+    private function decorateRecords(
+        ConnectionInterface $db,
+        string $key,
+        ?Builder $query,
+        array $params
+    ): ?Builder {
+        if ($query === null) {
+            return null;
+        }
+
+        if ($key === 'application') {
+            // Applications hold the applicant inline — there is no account yet.
+            $query->leftJoin('plan_list as pl', function ($join) {
+                $join->on(DB::raw('LOWER(TRIM(pl.plan_name))'), '=', DB::raw('LOWER(TRIM(r.desired_plan))'));
+            });
+        } elseif ($key === 'installed' || $key === 'reschedule') {
+            $query->leftJoin('billing_accounts as ba', 'ba.id', '=', 'r.account_id')
+                ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+                ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id');
+        } else {
+            // service_orders keys the account by number, not by id.
+            $query->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 'r.account_no')
+                ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+                ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id');
+        }
+
+        $name = $key === 'application'
+            ? ['r.first_name', 'r.last_name', 'r.mobile_number', 'r.barangay', 'r.city']
+            : ['c.first_name', 'c.last_name', 'c.contact_number_primary', 'c.barangay', 'c.city'];
+
+        $account = $key === 'application' ? 'r.email_address' : 'ba.account_no';
+
+        $search = trim((string) ($params['search'] ?? ''));
+
+        if ($search !== '') {
+            $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+
+            $query->where(function ($group) use ($like, $name, $account) {
+                $group->where($account, 'like', $like);
+
+                foreach ($name as $column) {
+                    $group->orWhere($column, 'like', $like);
+                }
+
+                $group->orWhere('pl.plan_name', 'like', $like);
+            });
+        }
+
+        $plan = trim((string) ($params['plan'] ?? ''));
+
+        if ($plan !== '') {
+            $query->where('pl.plan_name', $plan);
+        }
+
+        $area = trim((string) ($params['area'] ?? ''));
+
+        if ($area !== '') {
+            $query->where($key === 'application' ? 'r.barangay' : 'c.barangay', $area);
+        }
+
+        return $query;
+    }
+
+    /**
+     * The SELECT list and ordering for a decorated record query.
+     *
+     * Sort keys are mapped through a whitelist rather than interpolated. The
+     * column name arrives from a query string, and letting it reach the ORDER BY
+     * unchecked would be an injection point on a connection that is read-only but
+     * is still pointed at a production database.
+     */
+    private function selectRecords(?Builder $query, string $key, array $params): Builder
+    {
+        $metric = self::WORK_METRICS[$key];
+        $isApplication = $key === 'application';
+
+        $person = $isApplication ? 'r' : 'c';
+        $date = $metric['dates'][0];
+
+        $query
+            ->select('r.id')
+            ->selectRaw(($isApplication ? "r.email_address" : 'ba.account_no') . ' AS account_no')
+            ->selectRaw("{$person}.first_name AS first_name")
+            ->selectRaw("{$person}.last_name AS last_name")
+            ->selectRaw(($isApplication ? 'r.mobile_number' : 'c.contact_number_primary') . ' AS contact_number')
+            ->selectRaw("{$person}.barangay AS barangay")
+            ->selectRaw("{$person}.city AS city")
+            ->selectRaw('pl.plan_name AS plan_name')
+            ->selectRaw("r.{$date} AS occurred_at");
+
+        $status = $metric['status_column'];
+        $query->selectRaw($status === null ? "r.status AS row_status" : "r.{$status} AS row_status");
+
+        // Technician, where the table records one at all.
+        if ($key === 'installed' || $key === 'reschedule') {
+            $query->selectRaw('COALESCE(NULLIF(r.visit_by, \'\'), r.assigned_email) AS technician');
+        } elseif ($key === 'repair' || $key === 'pending') {
+            $query->selectRaw('r.visit_by_user AS technician');
+        } else {
+            $query->selectRaw("'' AS technician");
+        }
+
+        $sortable = [
+            'subscriber' => "{$person}.last_name",
+            'account_number' => $isApplication ? 'r.email_address' : 'ba.account_no',
+            'occurred_at' => "r.{$date}",
+            'status' => $status === null ? 'r.status' : "r.{$status}",
+            'plan' => 'pl.plan_name',
+            'location' => "{$person}.barangay",
+        ];
+
+        $sort = (string) ($params['sort'] ?? 'occurred_at');
+        $column = $sortable[$sort] ?? $sortable['occurred_at'];
+        $direction = strtolower((string) ($params['direction'] ?? 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        return $query->orderBy(DB::raw($column), $direction);
+    }
+
+    /**
+     * Distinct values of one column across the rows in range, for a dropdown.
+     *
+     * Capped and grouped in SQL. A facet built in PHP would mean fetching every
+     * matching row to list twelve barangays.
+     *
+     * @return string[]
+     */
+    private function recordFacet(?Builder $query, string $column): array
+    {
+        if ($query === null) {
+            return [];
+        }
+
+        $expression = $column === 'plan_name' ? 'pl.plan_name' : 'COALESCE(c.barangay, r.barangay)';
+
+        try {
+            return $query
+                ->selectRaw("{$expression} AS facet")
+                ->whereRaw("COALESCE({$expression}, '') <> ''")
+                ->groupBy(DB::raw($expression))
+                ->orderBy(DB::raw($expression))
+                ->limit(100)
+                ->pluck('facet')
+                ->map(fn ($value) => (string) $value)
+                ->all();
+        } catch (\Throwable $e) {
+            // A schema without one of these columns loses its dropdown, not the
+            // table it filters.
+            report($e);
+
+            return [];
+        }
+    }
+
+    /**
+     * Whichever of the candidate columns this table actually has, in order.
+     *
+     * Resolved against the live schema rather than assumed, because the two
+     * monitored systems are at different migration levels and a hard-coded
+     * column turns one missing field into a failed section.
+     *
+     * @param string[] $candidates
+     * @return string[]
+     */
+    private function presentColumns(ConnectionInterface $db, string $table, array $candidates): array
+    {
+        try {
+            $schema = $db->getSchemaBuilder();
+
+            if (!$schema->hasTable($table)) {
+                return [];
+            }
+
+            return array_values(array_filter(
+                $candidates,
+                fn ($column) => $schema->hasColumn($table, $column)
+            ));
+        } catch (\Throwable $e) {
+            report($e);
+
+            return [];
+        }
+    }
+
+    private function hasColumn(ConnectionInterface $db, string $table, string $column): bool
+    {
+        return $this->presentColumns($db, $table, [$column]) !== [];
+    }
+
     /**
      * The date columns this table actually has, in the brief's order of
      * preference.
@@ -2090,12 +2937,28 @@ class GowiserReportsDriver implements ReportsDriver
         }
     }
 
-    /** COALESCE over the resolved columns, for SELECT and GROUP BY. */
-    private function effectiveDateSql(array $columns): string
+    /**
+     * COALESCE over the resolved columns, for SELECT and GROUP BY.
+     *
+     * `$alias` qualifies every column with the table it belongs to. It is not
+     * optional decoration: `created_at` and `timestamp` exist on `job_orders`,
+     * on `billing_accounts` and on `customers`, so the moment this expression
+     * appears in a query that joins any of them MySQL rejects the whole
+     * statement with "Column 'created_at' in SELECT is ambiguous" — which is
+     * exactly what took the resolution panel down in production.
+     *
+     * Callers that query a single table with no joins can pass nothing; anything
+     * that joins must pass its alias.
+     */
+    private function effectiveDateSql(array $columns, string $alias = ''): string
     {
-        return count($columns) === 1
-            ? $columns[0]
-            : 'COALESCE(' . implode(', ', $columns) . ')';
+        $prefix = $alias === '' ? '' : rtrim($alias, '.') . '.';
+
+        $qualified = array_map(fn (string $column) => $prefix . $column, $columns);
+
+        return count($qualified) === 1
+            ? $qualified[0]
+            : 'COALESCE(' . implode(', ', $qualified) . ')';
     }
 
     /**
@@ -2199,7 +3062,9 @@ class GowiserReportsDriver implements ReportsDriver
                 return null;
             }
 
-            $openedSql = $this->effectiveDateSql($openedColumns);
+            // Qualified with the queue's alias. This query joins billing
+            // accounts and customers, and all three tables carry `created_at`.
+            $openedSql = $this->effectiveDateSql($openedColumns, 'q');
 
             $buckets = StatusBuckets::workOrders();
 

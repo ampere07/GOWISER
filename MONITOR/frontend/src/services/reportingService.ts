@@ -1,9 +1,14 @@
 import api from '../config/api';
 import { requestCache } from '../utils/requestCache';
 import {
+  DrillDownPage,
   EmployeeData,
+  ExecutiveMetricKey,
   ExecutiveOverviewData,
+  ExecutiveTimeframe,
   FinancialData,
+  MetricRecord,
+  SubscriberRecord,
   OperationsData,
   PrintableData,
   ReportingBranch,
@@ -154,19 +159,93 @@ export const reportingService = {
    * a 403 here means the sidebar and the backend disagree — which the caller
    * surfaces rather than swallows.
    */
-  getExecutiveOverview: async (widget?: WidgetQuery): Promise<ExecutiveOverviewData> =>
+  getExecutiveOverview: async (
+    range?: { timeframe?: ExecutiveTimeframe; dateFrom?: string; dateTo?: string }
+  ): Promise<ExecutiveOverviewData> =>
     requestCache.get(
-      `reporting_executive_${JSON.stringify(widget ?? {})}`,
+      `reporting_executive_${JSON.stringify(range ?? {})}`,
       async () => {
         const response = await api.get<{ status: string; data: ExecutiveOverviewData }>(
           '/executive/overview',
-          { params: clean({ date_from: widget?.dateFrom, date_to: widget?.dateTo }) }
+          {
+            params: clean({
+              timeframe: range?.timeframe,
+              date_from: range?.dateFrom,
+              date_to: range?.dateTo,
+            }),
+          }
         );
 
         return response.data.data;
       },
       CACHE_MS
     ),
+
+  /**
+   * The records behind one metric tile.
+   *
+   * Uncached on both sides. A drill-down is opened to reconcile a tile against
+   * the operating system, and a ten-second-old copy is exactly what makes
+   * someone distrust the number that opened it. The counter is cached; this is
+   * the thing you check it with.
+   */
+  getMetricRecords: async (query: {
+    metric: ExecutiveMetricKey;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+    plan?: string;
+    area?: string;
+    sort?: string;
+    direction?: 'asc' | 'desc';
+    page?: number;
+    perPage?: number;
+  }): Promise<DrillDownPage<MetricRecord>> => {
+    const response = await api.get<{ status: string; data: DrillDownPage<MetricRecord> }>(
+      '/executive/records',
+      {
+        params: clean({
+          metric: query.metric,
+          date_from: query.dateFrom,
+          date_to: query.dateTo,
+          search: query.search,
+          plan: query.plan,
+          area: query.area,
+          sort: query.sort,
+          direction: query.direction,
+          page: query.page,
+          per_page: query.perPage,
+        }),
+      }
+    );
+
+    return response.data.data;
+  },
+
+  /** The subscribers behind one billing-status counter. Uncached, as above. */
+  getSubscribersByStatus: async (query: {
+    status: string;
+    /** Set when a Subscriber Plan tile was clicked: that status within that plan. */
+    plan?: string;
+    search?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<DrillDownPage<SubscriberRecord>> => {
+    const response = await api.get<{ status: string; data: DrillDownPage<SubscriberRecord> }>(
+      '/executive/subscribers',
+      {
+        params: clean({
+          status: query.status,
+          plan: query.plan,
+          search: query.search,
+          page: query.page,
+          per_page: query.perPage,
+        }),
+      }
+    );
+
+    return response.data.data;
+  },
 
   /**
    * One window of the Applications / Job Orders / Service Orders widgets.

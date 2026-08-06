@@ -928,6 +928,7 @@ class SectionAggregator
             'work_streams' => $this->mergeWorkStreams($payloads),
             'work_timeline' => $this->mergeWorkTimeline($payloads),
             'work_cadence' => $this->mergeWorkCadence($payloads),
+            'executive_workload' => $this->mergeExecutiveWorkload($payloads, $labels),
             'resolution' => $this->mergeResolution($payloads, $labels),
             'series' => $this->mergeWorkSeries($payloads),
             'turnaround' => $this->mergeTurnaround($payloads),
@@ -1098,6 +1099,49 @@ class SectionAggregator
      * from the same anchor, so they are identical, and a "merged" date range
      * would only be a way for two of them to disagree.
      */
+    /**
+     * The Group Overview's five field metrics across the fleet.
+     *
+     * Counts sum. `tracked` is true when *any* database modelled the metrics at
+     * all — NETMANAGER models none of them, so a fleet of one NETMANAGER and one
+     * GOWISER must report GOWISER's figures rather than declaring the row
+     * untracked, and a fleet of NETMANAGER alone must say "not tracked here"
+     * rather than five confident zeros.
+     *
+     * An empty array when no database produced the block, which the dashboard
+     * renders as blanks rather than as nil.
+     */
+    private function mergeExecutiveWorkload(array $payloads, array $labels): array
+    {
+        $merged = array_fill_keys(GowiserReportsDriver::workMetrics(), 0);
+
+        $seen = false;
+        $tracked = false;
+        $range = null;
+
+        foreach ($payloads as $payload) {
+            $block = $payload['executive_workload'] ?? null;
+
+            if (!is_array($block) || $block === []) {
+                continue;
+            }
+
+            $seen = true;
+            $tracked = $tracked || (bool) ($block['tracked'] ?? false);
+            $range ??= $block['range'] ?? null;
+
+            foreach (array_keys($merged) as $metric) {
+                $merged[$metric] += (int) ($block[$metric] ?? 0);
+            }
+        }
+
+        if (!$seen) {
+            return [];
+        }
+
+        return array_merge($merged, ['tracked' => $tracked, 'range' => $range]);
+    }
+
     private function mergeWorkCadence(array $payloads): array
     {
         $streams = ['applications', 'job_orders', 'service_orders'];

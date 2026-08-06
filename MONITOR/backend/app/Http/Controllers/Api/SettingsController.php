@@ -10,6 +10,7 @@ use App\Services\Reports\HostingFee;
 use App\Services\Reports\SyncPricing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -30,6 +31,16 @@ class SettingsController extends Controller
 {
     /** Where uploaded logos live on the public disk. */
     private const LOGO_DIR = 'branding';
+
+    /**
+     * Setting key holding the uploaded logo's content type.
+     *
+     * Recorded at upload rather than guessed at serve time. `mimeType()` on a
+     * file whose extension the web server does not recognise returns
+     * application/octet-stream, which browsers download instead of rendering —
+     * and the first anyone knows about it is a portal with no logo.
+     */
+    private const LOGO_MIME = 'system_logo_mime';
 
     /**
      * Everything the Settings screen renders in one call.
@@ -167,20 +178,138 @@ class SettingsController extends Controller
         ]);
     }
 
+    /**
+     * The stored logo, streamed.
+     *
+     * ── Why the file is served by PHP rather than by the web server ───
+     *
+     * `Storage::disk('public')->url()` — what this used to hand out — is only a
+     * working URL when two things happen to be true: `php artisan storage:link`
+     * has been run on the box, and `APP_URL` matches the host the browser is
+     * actually talking to. Neither is true often enough. An upload would succeed,
+     * the row would be written, `Storage::exists()` would say yes, and the
+     * portal would still show a broken image — with nothing anywhere to say why.
+     * On this deployment the SPA and the API are not even on the same origin, so
+     * APP_URL is a third thing to get wrong.
+     *
+     * Streaming it removes all three failure modes. There is no symlink to
+     * create, no APP_URL to match, and the Content-Type is the one recorded at
+     * upload rather than whatever the web server guesses from the extension.
+     *
+     * ── Caching ───────────────────────────────────────────────────────
+     *
+     * The URL carries a fingerprint of the stored path (see logoUrl), so it
+     * changes whenever the logo does and never otherwise. That makes the response
+     * safely immutable for a year — the browser stops asking, and a new upload is
+     * picked up instantly because it is a different URL. An ETag is sent as well
+     * so a client that ignores the fingerprint still gets a 304 rather than the
+     * bytes.
+     *
+     * Unauthenticated, like logo() beside it: the login screen renders this
+     * before a session exists.
+     */
+    public function logoFile()
+    {
+        $path = AppSetting::get(AppSetting::LOGO);
+        $disk = Storage::disk('public');
+
+        if (!$path || !$disk->exists($path)) {
+            // 404 rather than a placeholder: the JSON endpoint already told the
+            // frontend there is no logo and it is rendering the bundled mark. A
+            // request reaching here for a missing file is a stale cached URL.
+            abort(404);
+        }
+
+        $mime = AppSetting::get(self::LOGO_MIME) ?: $disk->mimeType($path) ?: 'application/octet-stream';
+
+        return response()->file($disk->path($path), [
+            'Content-Type' => $mime,
+            'Cache-Control' => 'public, max-age=31536000, immutable',
+            'ETag' => '"' . md5($path) . '"',
+            // The file is user-supplied and served from our own origin; this
+            // stops a browser from ever treating it as anything but an image.
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    /**
+     * Replaces the system logo.
+     *
+     * ── Validation ────────────────────────────────────────────────────
+     *
+     * Three checks, not one, because they catch different things:
+     *
+     *   image        the file is decodable as an image at all
+     *   mimes        the *extension* is one we serve
+     *   mimetypes    the sniffed content type agrees with it
+     *
+     * `mimes` alone passes a PHP script renamed to .png. `mimetypes` alone passes
+     * a real PNG saved as `logo.php`. Requiring both means the extension and the
+     * bytes have to tell the same story — which matters here more than usual,
+     * because this file is served to every visitor including on the
+     * unauthenticated login screen.
+     *
+     * SVG is deliberately excluded from all three. It is a script-bearing format.
+     */
     public function uploadLogo(Request $request)
     {
         $request->validate([
-            // SVG is deliberately excluded. It is a script-bearing format and
-            // this file is served to every browser that opens the portal,
-            // including on the unauthenticated login screen.
-            'logo' => ['required', 'image', 'mimes:png,jpg,jpeg,webp', 'max:2048'],
+            'logo' => [
+                'required',
+                'image',
+                'mimes:png,jpg,jpeg,webp',
+                'mimetypes:image/png,image/jpeg,image/webp',
+                'max:2048',
+            ],
+        ], [
+            'logo.mimetypes' => 'That file is not a PNG, JPEG or WebP image, whatever its name says.',
+            'logo.max' => 'That image is over 2 MB. Please use a smaller file.',
         ]);
 
+        $file = $request->file('logo');
         $previous = AppSetting::get(AppSetting::LOGO);
 
-        $path = $request->file('logo')->store(self::LOGO_DIR, 'public');
+        // The directory is created and checked before the write rather than
+        // after the failure. A storage volume mounted read-only, or a directory
+        // owned by root because someone ran artisan as root once, both surface
+        // here as a clear message instead of an unhandled exception behind
+        // "Upload failed".
+        try {
+            $disk = Storage::disk('public');
 
-        AppSetting::put(AppSetting::LOGO, $path, $request->user()?->username);
+            if (!$disk->exists(self::LOGO_DIR)) {
+                $disk->makeDirectory(self::LOGO_DIR);
+            }
+
+            $path = $file->store(self::LOGO_DIR, 'public');
+
+            if ($path === false || $path === '') {
+                throw new \RuntimeException('The file could not be written.');
+            }
+        } catch (\Throwable $e) {
+            Log::error('Logo upload failed: ' . $e->getMessage(), [
+                'directory' => self::LOGO_DIR,
+                'disk_root' => config('filesystems.disks.public.root'),
+                'exception' => get_class($e),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'The logo could not be saved. The storage directory is not writable — check permissions on storage/app/public.',
+            ], 500);
+        }
+
+        // Both keys move together or neither does: a path with a stale mime type
+        // would be served as the wrong content type, which some browsers refuse
+        // to render at all.
+        DB::transaction(function () use ($path, $file, $request) {
+            AppSetting::put(AppSetting::LOGO, $path, $request->user()?->username);
+            AppSetting::put(
+                self::LOGO_MIME,
+                (string) ($file->getClientMimeType() ?: 'image/png'),
+                $request->user()?->username
+            );
+        });
 
         // Removed only after the new one is safely stored, so a failed upload
         // leaves the old logo in place rather than none at all.
@@ -206,7 +335,11 @@ class SettingsController extends Controller
     {
         $previous = AppSetting::get(AppSetting::LOGO);
 
-        AppSetting::clear(AppSetting::LOGO);
+        DB::transaction(function () {
+            AppSetting::clear(AppSetting::LOGO);
+            AppSetting::clear(self::LOGO_MIME);
+        });
+
         $this->deleteFile($previous);
 
         AuditLog::record(
@@ -353,7 +486,20 @@ class SettingsController extends Controller
         ]);
     }
 
-    /** Absolute URL of the stored logo, or null when none is set. */
+    /**
+     * URL of the stored logo, or null when none is set.
+     *
+     * Points at this controller's own streaming route rather than at the public
+     * disk — see logoFile() for the three deployment failures that removes.
+     *
+     * The `v` parameter is a fingerprint of the stored path, which changes on
+     * every upload because the stored filename is a fresh hash. That is what
+     * makes the year-long cache on the file itself safe: a new logo is a new URL,
+     * so it appears immediately, and an unchanged one is never re-fetched.
+     * Cache-busting on a timestamp would defeat the cache entirely; on nothing at
+     * all, an operator would upload a new mark and keep seeing the old one until
+     * they cleared their browser.
+     */
     private function logoUrl(): ?string
     {
         $path = AppSetting::get(AppSetting::LOGO);
@@ -368,7 +514,7 @@ class SettingsController extends Controller
             return null;
         }
 
-        return Storage::disk('public')->url($path);
+        return url('/api/settings/logo/file') . '?v=' . substr(md5($path), 0, 12);
     }
 
     private function deleteFile(?string $path): void

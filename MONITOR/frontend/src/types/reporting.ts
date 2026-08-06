@@ -1055,16 +1055,202 @@ export interface OperationsTechSummary {
   top_tech?: TechnicianWorkload[];
 }
 
+// ── Executive Group Overview (daily flash) ─────────────────────────────
+//
+// Four blocks of bare numbers. Every value is a number or null — never a
+// pre-formatted string — so the screen decides how to render it and a figure
+// that could not be measured stays distinguishable from a measured zero.
+
+/** The timeframes the global date toolbar offers. */
+export type ExecutiveTimeframe = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
+
+/** One of the windows the flash screen reports over. */
+export interface ExecutiveWindow {
+  key: string;
+  label: string;
+  from: string;
+  to: string;
+  /** "Aug 06, 2026", "Last 7 days", "August 2026 to date". */
+  label_long: string;
+}
+
+/** Fields every money block carries, whether or not it could be built. */
+interface ExecutiveMoneyBlock {
+  available: boolean;
+  /** True when the role may open this view but not read the money on it. */
+  masked?: boolean;
+  range?: DateRange | null;
+  range_label?: string;
+  /** Collections whose payment method matched no configured channel. */
+  unmatched?: number;
+  opex?: number | null;
+  capex?: number | null;
+}
+
+/** Today: the headline trio, the three channels, and the two rate figures. */
+export interface ExecutiveDaily extends ExecutiveMoneyBlock {
+  income?: number;
+  expenses?: number;
+  net?: number;
+  /** (month-to-date ÷ days elapsed) × days in month. Not today's figure. */
+  monthly_projected_sales?: number | null;
+  office_collection?: number;
+  pnb?: number;
+  xendit?: number;
+  /** The last seven days ÷ 7. Not today's figure. */
+  daily_sales_average?: number | null;
+}
+
+/** Year to date, carried inside the monthly block as the layout states it. */
+export interface ExecutiveYearly extends ExecutiveMoneyBlock {
+  income?: number;
+  expenses?: number;
+  net?: number;
+}
+
+/** Month to date, plus the yearly trio. */
+export interface ExecutiveMonthly extends ExecutiveMoneyBlock {
+  total_income?: number;
+  total_expenses?: number;
+  net_income?: number;
+  /** The last seven days in full — the daily rate multiplied back out. */
+  weekly_sales_average?: number | null;
+  total_cash?: number;
+  total_pnb?: number;
+  total_xendit?: number;
+  /**
+   * Absent when the block is masked.
+   *
+   * Optional rather than always-present because the server strips the whole
+   * money payload for a role without `widget.executive.finance`, and a type that
+   * promised this key would be lying about exactly the case the UI has to handle.
+   */
+  yearly?: ExecutiveYearly;
+}
+
+/**
+ * The billing-status headcount and the field force's day and month.
+ *
+ * Every work figure is null rather than 0 when no monitored schema models these
+ * queues — reporting zero applications for a system with no concept of them is a
+ * claim, not a measurement.
+ */
+export interface ExecutiveSubscribers {
+  available: boolean;
+  /** False when no monitored schema models these queues — blanks, not zeros. */
+  work_available: boolean;
+  // Current state; the date toolbar does not move these.
+  active: number | null;
+  vip: number | null;
+  inactive: number | null;
+  pullout: number | null;
+  // The five field metrics, all driven by the global date toolbar. Each is
+  // counted on the status and target-date column its label means — see
+  // GowiserReportsDriver::WORK_METRICS.
+  /** Every application filed in range, any status, on created_at. */
+  application: number | null;
+  /** onsite_status Done, on date_installed. */
+  installed: number | null;
+  /** visit_status Done, on updated_at. */
+  repair: number | null;
+  /** onsite_status Reschedule, on updated_at. Was called "Schedule". */
+  reschedule: number | null;
+  /** visit_status In Progress, on updated_at. */
+  pending: number | null;
+}
+
+/** The metric keys a card can drill into. */
+export type ExecutiveMetricKey = 'application' | 'installed' | 'repair' | 'reschedule' | 'pending';
+
+/**
+ * One record behind a metric tile.
+ *
+ * Every field arrives under two names — the reporting vocabulary
+ * (`subscriber`, `location`) and SYNC's own (`customer_name`, `area`). The
+ * server emits both deliberately; see GowiserReportsDriver::subscriberRow for
+ * why. Read them through `cellText()` rather than picking one, so a payload
+ * from either vocabulary renders.
+ */
+export interface MetricRecord {
+  id: string;
+  account_number?: string;
+  subscriber?: string;
+  contact_number?: string;
+  location?: string;
+  plan?: string;
+  status?: string;
+  /** SYNC aliases for the same values. */
+  customer_name?: string;
+  account_no?: string;
+  contact?: string;
+  area?: string;
+  plan_name?: string;
+  technician: string;
+  occurred_at: string | null;
+  source?: string;
+  source_label?: string;
+}
+
+/** One subscriber behind a billing-status counter. Dual-aliased, as above. */
+export interface SubscriberRecord {
+  id: string;
+  account_number?: string;
+  subscriber?: string;
+  contact_number?: string;
+  email?: string;
+  location?: string;
+  plan?: string;
+  raw_status?: string;
+  /** SYNC aliases for the same values. */
+  customer_name?: string;
+  account_no?: string;
+  contact?: string;
+  area?: string;
+  plan_name?: string;
+  status?: string;
+  date_installed?: string | null;
+  vip_expiration?: string | null;
+  expires_on?: string | null;
+  source?: string;
+  source_label?: string;
+}
+
+/** A page of drill-down rows, plus the facets its filter dropdowns offer. */
+export interface DrillDownPage<T> {
+  rows: T[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+  plans?: string[];
+  areas?: string[];
+  answered?: string[];
+  failed?: Record<string, string>;
+}
+
+/** Active subscribers per plan. Plans carrying nobody are omitted. */
+export interface ExecutivePlans {
+  available: boolean;
+  rows: { label: string; count: number }[];
+  total: number;
+}
+
 export interface ExecutiveOverviewData {
   as_of: string;
   generated_at: string;
-  range: DateRange;
-  range_label: string;
-  subscriber_health: SubscriberHealth;
-  subscriber_overview: SubscriberOverview;
-  financial_summary: ExecutiveFinancialSummary;
-  work_streams: WorkStreams;
-  operations_tech: OperationsTechSummary;
+  /** Which pill the global date toolbar is on. */
+  timeframe: ExecutiveTimeframe;
+  /**
+   * `selected` follows the toolbar; `monthly` and `yearly` are fixed
+   * comparatives and deliberately do not move — a tile labelled "Monthly"
+   * showing a yearly figure would be a lie about what the label means.
+   */
+  windows: Record<'selected' | 'monthly' | 'yearly', ExecutiveWindow>;
+  /** The range section. Follows the toolbar; `windows.selected` names it. */
+  daily: ExecutiveDaily;
+  monthly: ExecutiveMonthly;
+  subscribers: ExecutiveSubscribers;
+  plans: ExecutivePlans;
   databases: {
     answered: string[];
     answered_labels: string[];

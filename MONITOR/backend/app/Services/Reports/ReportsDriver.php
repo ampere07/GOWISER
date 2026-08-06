@@ -38,6 +38,60 @@ interface ReportsDriver
     public function subscriberAnalytics(ConnectionInterface $db, array $params): array;
 
     /**
+     * The subscribers behind one billing-status counter, a page at a time.
+     *
+     * The drill-down under the Group Overview's Subscriber Analytics grid. Its
+     * counters answer "how many", and the only useful next question is "which" —
+     * previously answerable only by leaving the portal and opening the operating
+     * system.
+     *
+     * `$status` is one of the reported bucket keys (active, vip, inactive,
+     * pullout), not a raw source value: the two monitored systems spell their
+     * statuses differently and StatusMap::BILLING_BUCKETS owns the translation,
+     * so a caller naming a bucket gets the same population the counter counted.
+     *
+     * `total` is the true count and is taken independently of the page, so a
+     * capped page is visibly capped rather than quietly short.
+     *
+     * @param array{status?:string, search?:string, page?:int, per_page?:int} $params
+     * @return array{
+     *     rows:array<int,array<string,mixed>>, total:int,
+     *     page:int, per_page:int, total_pages:int, status:string
+     * }
+     */
+    public function subscribersByStatus(ConnectionInterface $db, array $params): array;
+
+    /**
+     * The records behind one Group Overview metric tile.
+     *
+     * Backs the drill-down modal: every metric card on the dashboard opens the
+     * rows it counted, searchable, filterable, sortable and paged.
+     *
+     * `metric` is one of the keys in GowiserReportsDriver::WORK_METRICS —
+     * application, installed, repair, reschedule, pending — and the same status
+     * rule and target-date column that produced the count produce this list. That
+     * is a correctness requirement, not a convenience: a modal built on a second
+     * interpretation of "installed" would eventually disagree with the number
+     * that opened it, and a drill-down that contradicts its own tile discredits
+     * both.
+     *
+     * A schema that does not model the metric returns an empty result rather than
+     * raising, so one source without job orders does not blank a fleet-wide list.
+     *
+     * @param array{
+     *     metric?:string, date_from?:string|null, date_to?:string|null,
+     *     search?:string, plan?:string, area?:string,
+     *     sort?:string, direction?:string, page?:int, per_page?:int
+     * } $params
+     * @return array{
+     *     metric:string, rows:array<int,array<string,mixed>>, total:int,
+     *     page:int, per_page:int, total_pages:int,
+     *     plans:string[], areas:string[]
+     * }
+     */
+    public function workRecords(ConnectionInterface $db, array $params): array;
+
+    /**
      * Money in, money out, and what is behind both.
      *
      * @param array{

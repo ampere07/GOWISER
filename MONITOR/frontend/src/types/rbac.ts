@@ -25,6 +25,7 @@ export const MODULE = {
   audit: 'audit',
   settings: 'settings',
   databases: 'databases',
+  mikrotik: 'mikrotik-radius',
 } as const;
 
 // ── Widgets ────────────────────────────────────────────────────────────
@@ -51,6 +52,10 @@ export const ACTION = {
   rolesManage: 'action.roles.manage',
   auditView: 'action.audit.view',
   settingsManage: 'action.settings.manage',
+  mikrotikWrite: 'action.mikrotik.write',
+  mikrotikKick: 'action.mikrotik.kick',
+  /** Edit the RADIUS endpoints themselves — separate from settingsManage. */
+  radiusManage: 'action.radius.manage',
 } as const;
 
 export type PermissionId =

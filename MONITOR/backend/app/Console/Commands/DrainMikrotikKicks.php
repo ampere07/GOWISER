@@ -54,10 +54,33 @@ class DrainMikrotikKicks extends Command
             return self::SUCCESS;
         }
 
+        // Window-mode rows only. A kick the operator scheduled for a named time
+        // belongs to `mikrotik:run-scheduled`; holding it until the maintenance
+        // window would mean "2pm" quietly became "1am tomorrow", which is the
+        // opposite of what naming a time asks for.
+        //
+        // Overdue `at` rows are still swept up here as a safety net — see the
+        // second clause. If the scheduler stopped for a day, a re-authorisation
+        // running late in the maintenance window is far better than one that
+        // never runs at all.
         $due = MikrotikKick::query()
             ->where('status', MikrotikKick::STATUS_PENDING)
             ->where(function ($query) {
-                $query->whereNull('scheduled_for')->orWhere('scheduled_for', '<=', now());
+                $query
+                    ->where(function ($window) {
+                        $window
+                            ->where('mode', MikrotikKick::MODE_WINDOW)
+                            ->where(function ($schedule) {
+                                $schedule
+                                    ->whereNull('scheduled_for')
+                                    ->orWhere('scheduled_for', '<=', now());
+                            });
+                    })
+                    ->orWhere(function ($stranded) {
+                        $stranded
+                            ->where('mode', MikrotikKick::MODE_AT)
+                            ->where('scheduled_for', '<=', now()->subHour());
+                    });
             })
             ->orderBy('id')
             ->limit(max(1, (int) $this->option('limit')))

@@ -18,7 +18,29 @@ export interface UserData {
    * every company's figures on one screen.
    */
   is_executive_role?: boolean;
+  /**
+   * This user's own refresh intervals, in seconds. Zero means off.
+   *
+   * Sent with the session rather than fetched separately, so a dashboard never
+   * opens on the default interval and then jumps to the user's a moment later.
+   */
+  preferences?: UserPreferences | null;
 }
+
+/** Per-user display preferences. Seconds; 0 is off. */
+export interface UserPreferences {
+  overview_refresh: number;
+  mikrotik_refresh: number;
+}
+
+/** The intervals the Settings screen offers — must match User::REFRESH_CHOICES. */
+export const REFRESH_CHOICES: { value: number; label: string }[] = [
+  { value: 0, label: 'Off' },
+  { value: 10, label: '10 seconds' },
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '1 minute' },
+  { value: 300, label: '5 minutes' },
+];
 
 export interface LoginResponse {
   status: string;

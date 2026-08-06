@@ -7,17 +7,21 @@ return [
     | Mikrotik User Manager servers
     |--------------------------------------------------------------------------
     |
-    | The RADIUS servers the Mikrotik Radius Shortcut talks to, in failover
-    | order: the first that answers a read wins, and a write is applied to the
-    | server the record was found on.
+    | FALLBACK ONLY. The managed list is Settings → RADIUS API, which writes the
+    | `radius_config` table; UserManagerClient::servers() reads that first and
+    | only falls back to this block when it is empty. See the migration for why
+    | the credentials moved out of the environment and what replaced the deploy
+    | gate they lost — encryption at rest, a grant of their own, and an audit row
+    | per change.
     |
-    | In config rather than in a database table, unlike the monitored database
-    | connections. These credentials open a router that can cut every subscriber
-    | in the region off, and that is not something to make editable from a web
-    | form — the blast radius of a mistyped host here is the whole network, and a
-    | change to it should require a deploy and appear in a diff.
+    | Everything below still applies to whichever list is in use: the servers are
+    | tried in failover order, the first that answers a read wins, and a write is
+    | applied to the server the record was found on.
     |
-    | Configure through the environment:
+    | Precedence rather than merge. Two half-configured sources producing a
+    | three-server fleet is a worse failure than either being wrong alone.
+    |
+    | Configure through the environment (or leave unset and use the screen):
     |
     |   MIKROTIK_1_URL=https://10.0.0.2:443
     |   MIKROTIK_1_USER=monitor-ro

@@ -33,6 +33,7 @@ class User extends Authenticatable
         'contact_number',
         'role_id',
         'permission_overrides',
+        'preferences',
         'darkmode',
         'last_login',
         'active',
@@ -47,7 +48,67 @@ class User extends Authenticatable
         'active' => 'boolean',
         'last_login' => 'datetime',
         'permission_overrides' => 'array',
+        'preferences' => 'array',
     ];
+
+    /**
+     * How often each auto-refreshing screen re-reads itself, in seconds.
+     *
+     * Zero means off. The defaults are deliberately different: the Group
+     * Overview fans out across every monitored database and is read at a glance
+     * a few times a day, so it starts off; MikroTik RADIUS describes live
+     * sessions an operator is in the middle of changing and is stale within a
+     * minute, so it starts at sixty seconds — frequent enough to be current,
+     * long enough not to hammer a router that is also serving authentication.
+     */
+    public const REFRESH_DEFAULTS = [
+        'overview_refresh' => 0,
+        'mikrotik_refresh' => 60,
+    ];
+
+    /** Intervals the Settings screen offers, and the only ones accepted. */
+    public const REFRESH_CHOICES = [0, 10, 30, 60, 300];
+
+    /**
+     * This user's refresh intervals, with the defaults filled in.
+     *
+     * Always complete, so no caller has to know what the fallback is — one place
+     * that knows is what stops the dashboard and the settings form disagreeing
+     * about what "default" means.
+     *
+     * ── Why it is not called preferences() ────────────────────────────
+     *
+     * A method named for a column is a trap in Eloquent: on a database where the
+     * column does not exist yet, `$this->preferences` misses the attribute bag,
+     * falls through to the relation resolver, finds this method and dies with
+     * "must return a relationship instance". That is exactly the state a box is
+     * in between deploying this code and running the migration, so the name is
+     * kept distinct and the attribute is read out of the raw bag below.
+     *
+     * @return array<string,int>
+     */
+    public function refreshPreferences(): array
+    {
+        // getAttributes() rather than the magic property: it never consults the
+        // relation resolver, so this is safe before the migration has run.
+        $raw = $this->getAttributes()['preferences'] ?? null;
+
+        $stored = is_string($raw) ? json_decode($raw, true) : $raw;
+        $stored = is_array($stored) ? $stored : [];
+
+        $out = [];
+
+        foreach (self::REFRESH_DEFAULTS as $key => $default) {
+            $value = $stored[$key] ?? null;
+
+            // An unrecognised interval falls back rather than being honoured. A
+            // stale value from an older build — or a hand-edited row — must not
+            // put a two-second poll on eight databases.
+            $out[$key] = in_array($value, self::REFRESH_CHOICES, true) ? (int) $value : $default;
+        }
+
+        return $out;
+    }
 
     protected $appends = [
         'full_name',

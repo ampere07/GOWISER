@@ -16,6 +16,8 @@ import {
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import { Button, ErrorBanner, Pill, useControlClass } from '../components/reporting/primitives';
+import RadiusApiSettings from '../components/settings/RadiusApiSettings';
+import AutoRefreshSettings from '../components/settings/AutoRefreshSettings';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import {
@@ -389,6 +391,17 @@ const Settings: React.FC<SettingsProps> = ({ refreshToken }) => {
           </div>
         </CardBody>
       </Card>
+
+      {/* ── Auto-refresh ─────────────────────────────────────────────────────────
+          The one setting on this page that belongs to the person rather than the
+          portal, so it needs no administrative grant — see AutoRefreshSettings. */}
+      <AutoRefreshSettings />
+
+      {/* ── RADIUS API ────────────────────────────────────────────────────────────
+          Renders nothing without `action.radius.manage`. Unlike the branding
+          cards below, there is no useful read-only version: the interesting half
+          is the credentials, which are never sent to the browser. */}
+      <RadiusApiSettings refreshToken={refreshToken} />
 
       {/* ── System logo ───────────────────────────────────────────────── */}
       <Card flush>

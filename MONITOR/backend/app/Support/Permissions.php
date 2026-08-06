@@ -92,6 +92,17 @@ class Permissions
     public const ACTION_MIKROTIK_KICK = 'action.mikrotik.kick';
 
     /**
+     * Add, change or remove a RADIUS server under Administration Settings.
+     *
+     * Separate from ACTION_SETTINGS_MANAGE, which covers the logo and the colour
+     * palette. Those change how the portal looks; this holds the credentials for
+     * the hardware every subscriber authenticates against, and pointing it
+     * somewhere else takes the whole network offline. The two have no business
+     * sharing a grant merely because they share a page.
+     */
+    public const ACTION_RADIUS_MANAGE = 'action.radius.manage';
+
+    /**
      * Every module id, including the executive rollups this refactor left in
      * place. Order is the order the sidebar presents them.
      */
@@ -132,6 +143,7 @@ class Permissions
         self::ACTION_SETTINGS_MANAGE,
         self::ACTION_MIKROTIK_WRITE,
         self::ACTION_MIKROTIK_KICK,
+        self::ACTION_RADIUS_MANAGE,
     ];
 
     /**
@@ -167,7 +179,7 @@ class Permissions
         self::MODULE_AUDIT => 'Audit Trail',
         self::MODULE_SETTINGS => 'Settings',
         self::MODULE_DATABASES => 'Databases',
-        self::MODULE_MIKROTIK => 'Mikrotik Radius Shortcut',
+        self::MODULE_MIKROTIK => 'MikroTik RADIUS',
 
         self::WIDGET_FINANCIAL_REVENUE => 'Revenue figures (unmasked)',
         self::WIDGET_FINANCIAL_CHANNELS => 'Income channels (Cash / PNB / Payment Portal)',
@@ -186,8 +198,9 @@ class Permissions
         self::ACTION_ROLES_MANAGE => 'Edit role permission maps',
         self::ACTION_AUDIT_VIEW => 'Read the audit trail',
         self::ACTION_SETTINGS_MANAGE => 'Change the logo and colour palette',
-        self::ACTION_MIKROTIK_WRITE => 'Change RADIUS group rate limits and pools',
-        self::ACTION_MIKROTIK_KICK => 'Disconnect live RADIUS sessions',
+        self::ACTION_MIKROTIK_WRITE => 'Change RADIUS group rate limits, pools and user groups',
+        self::ACTION_MIKROTIK_KICK => 'Disconnect and schedule re-authorisation of live RADIUS sessions',
+        self::ACTION_RADIUS_MANAGE => 'Configure the RADIUS API endpoints and credentials',
     ];
 
     /**
@@ -208,16 +221,24 @@ class Permissions
             'permissions' => null, // null = everything; expanded by all()
         ],
         'Executive' => [
-            'description' => 'Full read across the business, plus export. No user or database administration.',
+            'description' => 'Full read across the business, plus export and RADIUS control. No user or database administration.',
             'permissions' => [
                 self::MODULE_EXECUTIVE, self::MODULE_SUBSCRIBERS, self::MODULE_FINANCIAL,
                 self::MODULE_OPERATIONS, self::MODULE_TECH, self::MODULE_EMPLOYEE,
+                // MikroTik RADIUS is executive-only — the middleware pins it to
+                // the role list below, and this is the only shipped preset that
+                // holds it. Auditor is an executive *role* for reading purposes
+                // and deliberately does not get it: an auditor may read every
+                // figure in the business and may not change anyone's bandwidth.
+                self::MODULE_MIKROTIK,
                 self::WIDGET_FINANCIAL_REVENUE, self::WIDGET_FINANCIAL_CHANNELS,
                 self::WIDGET_FINANCIAL_METRICS, self::WIDGET_FINANCIAL_OPEX,
                 self::WIDGET_FINANCIAL_PAYABLES, self::WIDGET_SUBSCRIBER_BILLING,
                 self::WIDGET_SUBSCRIBER_BARANGAY, self::WIDGET_OPERATIONS_SLA,
                 self::WIDGET_EXECUTIVE_FINANCE,
                 self::ACTION_FINANCIAL_EXPORT, self::ACTION_FILTERS_MODIFY,
+                self::ACTION_MIKROTIK_WRITE, self::ACTION_MIKROTIK_KICK,
+                self::ACTION_RADIUS_MANAGE,
             ],
         ],
         'Finance Admin' => [

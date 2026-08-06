@@ -90,6 +90,169 @@ class NetmanagerReportsDriver implements ReportsDriver
      * right now. The one exception is `growth`, which needs a window to mean
      * anything, so it takes the range and says so.
      */
+    /**
+     * The subscribers behind one billing-status counter.
+     *
+     * The NETMANAGER half of the Group Overview drill-down. Same contract as
+     * GowiserReportsDriver::subscribersByStatus and the same reasoning behind it:
+     * the filter is built from StatusMap::BILLING_BUCKETS rather than from the
+     * reported label, so the page returns exactly the population the counter
+     * counted — this schema writes 'suspended' where the portal reports
+     * Restricted, and filtering on either alone would disagree with the number
+     * that opened the modal.
+     *
+     * Two queries — one COUNT, one page — rather than one query and a PHP slice,
+     * which would pull the whole active base into memory to show twenty-five rows.
+     */
+    public function subscribersByStatus(ConnectionInterface $db, array $params): array
+    {
+        $status = strtolower(trim((string) ($params['status'] ?? 'active')));
+        $search = trim((string) ($params['search'] ?? ''));
+        $page = max(1, (int) ($params['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+
+        $members = StatusMap::BILLING_BUCKETS[$status] ?? null;
+
+        $empty = [
+            'rows' => [], 'total' => 0, 'page' => 1,
+            'per_page' => $perPage, 'total_pages' => 0, 'status' => $status,
+        ];
+
+        if ($members === null) {
+            return $empty;
+        }
+
+        $branch = $this->branchId($params['branch'] ?? null);
+
+        $plan = trim((string) ($params['plan'] ?? ''));
+
+        $base = function () use ($db, $members, $search, $branch, $plan): Builder {
+            $query = $db->table('subscribers as s')
+                ->leftJoin('plans as p', 'p.plan_id', '=', 's.plan_id')
+                ->whereIn(DB::raw("LOWER(TRIM(COALESCE(s.status, '')))"), $members);
+
+            if ($branch !== null) {
+                $query->where('s.router_id', $branch);
+            }
+
+            // Drilling into one Subscriber Plan tile.
+            if ($plan !== '') {
+                $query->whereRaw('LOWER(TRIM(COALESCE(p.title, ""))) = ?', [strtolower($plan)]);
+            }
+
+            if ($search !== '') {
+                $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+
+                $query->where(function ($group) use ($like) {
+                    $group->where('s.account_number', 'like', $like)
+                        ->orWhere('s.firstname', 'like', $like)
+                        ->orWhere('s.lastname', 'like', $like)
+                        ->orWhere('s.contact_number', 'like', $like)
+                        ->orWhere('s.barangay', 'like', $like);
+                });
+            }
+
+            return $query;
+        };
+
+        $total = (int) $base()->count();
+
+        if ($total === 0) {
+            return $empty;
+        }
+
+        $rows = $base()
+            ->select(
+                's.subscriber_id',
+                's.account_number',
+                's.firstname',
+                's.lastname',
+                's.contact_number',
+                's.email',
+                's.barangay',
+                's.municipality',
+                's.status',
+                's.subscription_end',
+                'p.title as plan_title'
+            )
+            ->orderBy('s.lastname')
+            ->orderBy('s.account_number')
+            ->forPage($page, $perPage)
+            ->get();
+
+        return [
+            // Both vocabularies, matching GowiserReportsDriver::subscriberRow —
+            // a merged fleet payload must not have one database's rows readable
+            // and the other's rendering as empty cells.
+            'rows' => $rows->map(function ($row) {
+                $name = $this->fullName($row->firstname ?? '', $row->lastname ?? '');
+                $account = (string) ($row->account_number ?? '');
+                $contact = (string) ($row->contact_number ?? '');
+                $plan = (string) ($row->plan_title ?? '');
+                $area = $this->joinLocation([$row->barangay ?? null, $row->municipality ?? null]) ?? '';
+                $status = (string) ($row->status ?? '');
+
+                return [
+                    'id' => (string) $row->subscriber_id,
+
+                    'subscriber' => $name,
+                    'account_number' => $account,
+                    'contact_number' => $contact,
+                    'plan' => $plan,
+                    'location' => $area,
+                    'raw_status' => $status,
+
+                    'customer_name' => $name,
+                    'account_no' => $account,
+                    'contact' => $contact,
+                    'plan_name' => $plan,
+                    'area' => $area,
+                    'status' => $status,
+
+                    'email' => (string) ($row->email ?? ''),
+                    // No install date in this schema; the subscription end is the
+                    // date this system actually tracks, and reporting it under a
+                    // key called date_installed would be a lie about what it is.
+                    'date_installed' => null,
+                    'expires_on' => $row->subscription_end ?: null,
+                ];
+            })->all(),
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => (int) ceil($total / $perPage),
+            'status' => $status,
+        ];
+    }
+
+    /**
+     * The records behind one Group Overview metric tile.
+     *
+     * NETMANAGER models none of the five. It has one installations table and no
+     * applications, job orders, service orders or visit statuses at all — see
+     * capabilities(), which is why this driver never produces an
+     * `executive_workload` block either.
+     *
+     * An empty result rather than a thrown exception: the drill-down fans out
+     * across every database that can serve subscribers, and one source that
+     * cannot answer a metric must contribute nothing rather than fail the whole
+     * modal. The counter it drills into is likewise zero from this source, so the
+     * two agree.
+     */
+    public function workRecords(ConnectionInterface $db, array $params): array
+    {
+        return [
+            'metric' => (string) ($params['metric'] ?? ''),
+            'rows' => [],
+            'total' => 0,
+            'page' => 1,
+            'per_page' => min(100, max(1, (int) ($params['per_page'] ?? 25))),
+            'total_pages' => 0,
+            'plans' => [],
+            'areas' => [],
+        ];
+    }
+
     public function subscriberAnalytics(ConnectionInterface $db, array $params): array
     {
         $branch = $this->branchId($params['branch'] ?? null);

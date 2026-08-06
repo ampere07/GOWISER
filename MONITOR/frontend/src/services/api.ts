@@ -1,5 +1,5 @@
 import apiClient from '../config/api';
-import { HealthCheckResponse, LoginResponse, UserData } from '../types/api';
+import { HealthCheckResponse, LoginResponse, UserData, UserPreferences } from '../types/api';
 
 export const login = async (email: string, password: string): Promise<LoginResponse> => {
   const response = await apiClient.post<LoginResponse>('/login', { email, password });
@@ -17,6 +17,32 @@ export const logout = async (): Promise<void> => {
 export const me = async (): Promise<UserData> => {
   const response = await apiClient.get<{ status: string; data: { user: UserData } }>('/me');
   return response.data.data.user;
+};
+
+/**
+ * Saves this user's own refresh intervals.
+ *
+ * Announces the change on the window afterwards. The signed-in user lives in
+ * App's state and is read through PermissionContext by every dashboard, so the
+ * Settings page has no way to push a new value down to them — and without the
+ * event the timer on an already-open Group Overview would keep running at the
+ * old interval until the next full reload.
+ */
+export const updatePreferences = async (
+  preferences: UserPreferences
+): Promise<UserPreferences> => {
+  const response = await apiClient.put<{
+    status: string;
+    data: { preferences: UserPreferences };
+  }>('/me/preferences', preferences);
+
+  const saved = response.data.data.preferences;
+
+  window.dispatchEvent(
+    new CustomEvent<Partial<UserData>>('auth:user-updated', { detail: { preferences: saved } })
+  );
+
+  return saved;
 };
 
 export const healthCheck = async (): Promise<HealthCheckResponse> => {

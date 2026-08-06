@@ -58,6 +58,37 @@ function App() {
     return () => window.removeEventListener('auth:session-expired', handleSessionExpired);
   }, []);
 
+  /**
+   * A page changed something about the signed-in user.
+   *
+   * Currently the refresh interval, saved on the Settings page. The user object
+   * lives here and is read through PermissionContext by every dashboard, so a
+   * page that changes it has no way to push the new value down — an event is the
+   * shortest path that does not turn `user` into a global store for one field.
+   *
+   * Merged rather than replaced: the event carries only what changed, and a
+   * partial object would drop the permission list the whole app gates on.
+   */
+  useEffect(() => {
+    const handleUserUpdated = (event: Event) => {
+      const patch = (event as CustomEvent<Partial<UserData>>).detail;
+
+      if (!patch) return;
+
+      setUserData((current) => {
+        if (!current) return current;
+
+        const next = { ...current, ...patch };
+        localStorage.setItem('authData', JSON.stringify(next));
+
+        return next;
+      });
+    };
+
+    window.addEventListener('auth:user-updated', handleUserUpdated);
+    return () => window.removeEventListener('auth:user-updated', handleUserUpdated);
+  }, []);
+
   const handleLogin = (user: UserData) => {
     resetAllStores();
     localStorage.setItem('authData', JSON.stringify(user));

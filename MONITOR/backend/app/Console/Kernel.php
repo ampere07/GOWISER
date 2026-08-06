@@ -66,6 +66,32 @@ class Kernel extends ConsoleKernel
             ->onFailure(function () {
                 \Illuminate\Support\Facades\Log::error('Scheduled mikrotik:drain-kicks failed.');
             });
+
+        /*
+         * Performs the re-authorisations an operator scheduled for a named time
+         * in Asia/Manila.
+         *
+         * Every minute rather than every fifteen, because this one is answering
+         * to a time somebody typed: a quarter-hour schedule would make "14:00"
+         * mean "somewhere in the next fifteen minutes", and a maintenance notice
+         * sent to subscribers would be wrong by up to that much.
+         *
+         * The query is a single indexed lookup that returns nothing almost every
+         * time — see RunScheduledRadiusKicks for why the scheduler drives this
+         * rather than a delayed dispatch.
+         *
+         * withoutOverlapping for the same reason as the drain above: the work is
+         * disconnecting real sessions. The job claims each row before acting, so
+         * an overlap could not double-kick anyone even without this, but two
+         * guards are cheap next to that outcome.
+         */
+        $schedule->command('mikrotik:run-scheduled')
+            ->everyMinute()
+            ->withoutOverlapping(10)
+            ->runInBackground()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('Scheduled mikrotik:run-scheduled failed.');
+            });
     }
 
     /**

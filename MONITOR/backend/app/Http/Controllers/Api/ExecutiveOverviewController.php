@@ -5,10 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Services\ExecutiveOverviewService;
+use App\Services\Reports\GowiserReportsDriver;
+use App\Services\Reports\StatusMap;
+use App\Services\ReportingService;
 use App\Support\PayloadMasker;
 use App\Support\Permissions;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 
 /**
  * Module 5 — the consolidated C-suite summary.
@@ -25,8 +29,10 @@ use Illuminate\Support\Facades\Log;
  */
 class ExecutiveOverviewController extends Controller
 {
-    public function __construct(private ExecutiveOverviewService $overview)
-    {
+    public function __construct(
+        private ExecutiveOverviewService $overview,
+        private ReportingService $reporting
+    ) {
     }
 
     public function show(Request $request)
@@ -50,13 +56,24 @@ class ExecutiveOverviewController extends Controller
                 'Executive Dashboard opened'
             );
 
-            // The financial half still honours the widget permission. An auditor
-            // may open this view without being entitled to the money on it, and
-            // masking here rather than in React means the figures never reach the
+            // The two money blocks still honour the widget permission. An auditor
+            // may open this view without being entitled to the figures on it, and
+            // masking here rather than in React means they never reach the
             // browser at all.
-            $data['financial_summary'] = $user->can_(Permissions::WIDGET_EXECUTIVE_FINANCE)
-                ? $data['financial_summary']
-                : ['available' => false, 'masked' => true];
+            //
+            // `masked` rather than an absent key: the layout keeps its shape and
+            // the panel says "restricted" instead of "no data", which are
+            // different claims and send a reader to different places.
+            if (!$user->can_(Permissions::WIDGET_EXECUTIVE_FINANCE)) {
+                foreach (['daily', 'monthly'] as $block) {
+                    $data[$block] = [
+                        'available' => false,
+                        'masked' => true,
+                        'range' => $data[$block]['range'] ?? null,
+                        'range_label' => $data[$block]['range_label'] ?? '',
+                    ];
+                }
+            }
 
             return response()->json([
                 'status' => 'success',
@@ -116,6 +133,137 @@ class ExecutiveOverviewController extends Controller
         }
     }
 
+    /**
+     * The subscribers behind one billing-status counter.
+     *
+     * The drill-down under the Subscriber Analytics grid. Behind the same two
+     * gates as the dashboard itself — this is a named list of every customer in
+     * a status, which is strictly more sensitive than the count that opened it,
+     * and it must not be reachable by a role that cannot open the page.
+     *
+     * Not audited per request. Opening the dashboard is the access event and
+     * show() records it; a row per page of a modal somebody is scrolling would
+     * bury it.
+     */
+    public function subscribers(Request $request)
+    {
+        $denied = $this->guard($request);
+
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        $validated = $request->validate([
+            // The reported bucket keys, not raw source statuses — see
+            // ReportsDriver::subscribersByStatus for why the distinction matters.
+            'status' => ['required', 'string', Rule::in(array_keys(StatusMap::BILLING_BUCKETS))],
+            // Set when a Subscriber Plan tile was the thing clicked: the list is
+            // then that status *within* that plan, which is exactly the
+            // population the tile counted.
+            'plan' => ['nullable', 'string', 'max:128'],
+            'search' => ['nullable', 'string', 'max:128'],
+            'page' => ['nullable', 'integer', 'min:1', 'max:10000'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        try {
+            return response()->json([
+                'status' => 'success',
+                'data' => $this->reporting->subscriberDirectory([
+                    'status' => $validated['status'],
+                    'plan' => trim((string) ($validated['plan'] ?? '')),
+                    'search' => trim((string) ($validated['search'] ?? '')),
+                    'page' => (int) ($validated['page'] ?? 1),
+                    'per_page' => (int) ($validated['per_page'] ?? 25),
+                    'branch' => null,
+                ]),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Subscriber drill-down failed: ' . $e->getMessage(), [
+                'status' => $validated['status'],
+                'exception' => get_class($e),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => config('app.debug')
+                    ? $e->getMessage()
+                    : 'Unable to list those subscribers.',
+            ], 500);
+        }
+    }
+
+    /**
+     * The records behind one metric tile.
+     *
+     * Every metric card on the Group Overview opens this: the same rows the tile
+     * counted, searchable, filterable, sortable and paged. Behind the same two
+     * gates as the dashboard — a named list of subscribers is strictly more
+     * sensitive than the count above it.
+     *
+     * The window comes from the caller rather than being recomputed here, so the
+     * modal is scoped to exactly the range the card was counted in. Recomputing
+     * it from the timeframe would be a second interpretation of the same control
+     * and the two would drift.
+     */
+    public function metricRecords(Request $request)
+    {
+        $denied = $this->guard($request);
+
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        $validated = $request->validate([
+            'metric' => ['required', 'string', Rule::in(GowiserReportsDriver::workMetrics())],
+            'date_from' => ['nullable', 'date_format:Y-m-d'],
+            'date_to' => ['nullable', 'date_format:Y-m-d'],
+            'search' => ['nullable', 'string', 'max:128'],
+            'plan' => ['nullable', 'string', 'max:128'],
+            'area' => ['nullable', 'string', 'max:128'],
+            // Whitelisted rather than free-form: this reaches an ORDER BY, and
+            // the driver maps it through its own list as well. Two gates because
+            // the connection is read-only but is still pointed at production.
+            'sort' => ['nullable', Rule::in([
+                'subscriber', 'account_number', 'occurred_at', 'status', 'plan', 'location',
+            ])],
+            'direction' => ['nullable', Rule::in(['asc', 'desc'])],
+            'page' => ['nullable', 'integer', 'min:1', 'max:10000'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        try {
+            return response()->json([
+                'status' => 'success',
+                'data' => $this->reporting->workRecordDirectory([
+                    'metric' => $validated['metric'],
+                    'date_from' => $validated['date_from'] ?? null,
+                    'date_to' => $validated['date_to'] ?? null,
+                    'search' => trim((string) ($validated['search'] ?? '')),
+                    'plan' => trim((string) ($validated['plan'] ?? '')),
+                    'area' => trim((string) ($validated['area'] ?? '')),
+                    'sort' => $validated['sort'] ?? 'occurred_at',
+                    'direction' => $validated['direction'] ?? 'desc',
+                    'page' => (int) ($validated['page'] ?? 1),
+                    'per_page' => (int) ($validated['per_page'] ?? 25),
+                    'branch' => null,
+                ]),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Metric drill-down failed: ' . $e->getMessage(), [
+                'metric' => $validated['metric'],
+                'exception' => get_class($e),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => config('app.debug')
+                    ? $e->getMessage()
+                    : 'Unable to list those records.',
+            ], 500);
+        }
+    }
+
     /** The two gates, or null when both pass. */
     private function guard(Request $request)
     {
@@ -135,7 +283,16 @@ class ExecutiveOverviewController extends Controller
     /** The section parameters, from a request whose dates are already validated. */
     private function params(Request $request): array
     {
+        $timeframe = strtolower(trim((string) $request->query('timeframe', 'daily')));
+
         return [
+            // The global date toolbar. An unrecognised value falls back to daily
+            // in the service rather than erroring — a stale bookmark carrying a
+            // timeframe this build no longer offers should open the dashboard,
+            // not a 422.
+            'timeframe' => in_array($timeframe, ExecutiveOverviewService::TIMEFRAMES, true)
+                ? $timeframe
+                : 'daily',
             'date_from' => $this->date($request->query('date_from')),
             'date_to' => $this->date($request->query('date_to')),
             'as_of' => $this->date($request->query('as_of')),

@@ -161,6 +161,13 @@ class PlanReconciler
             return $this->byCompact[$compact];
         }
 
+        // Containment, before the numeric signatures. See contains().
+        $contained = $this->contains($exact);
+
+        if ($contained !== null) {
+            return $contained;
+        }
+
         // Signature passes, unambiguous only. See the class comment.
         foreach (self::speeds($value) as $speed) {
             $owners = array_unique($this->bySpeed[$speed] ?? []);
@@ -179,6 +186,104 @@ class PlanReconciler
         }
 
         return null;
+    }
+
+    /**
+     * The canonical plan whose name is contained in the subscriber string, or
+     * whose name contains it.
+     *
+     * ── Why this pass exists ──────────────────────────────────────────
+     *
+     * The exact and compact passes both require the *whole* string to match, and
+     * most legacy plan strings are the canonical name with something attached:
+     * "SwitchNet PLAN A Fiber", "PLAN B (promo)", "PLAN C — 2024". None of those
+     * reach "Plan A", "Plan B" or "Plan C" by equality, none of them carry an
+     * unambiguous speed or price signature, and so every one of them was landing
+     * in the unmapped bucket. That is the inaccuracy this pass fixes, and it is
+     * why the Subscriber Plan cards did not add up to the active base.
+     *
+     * ── Whole tokens, not substrings ──────────────────────────────────
+     *
+     * Matching is on token boundaries, so "Plan A" is found inside "Plan A Fiber"
+     * but not inside "Plan Alpha". A raw `str_contains` — or the SQL `LIKE
+     * '%plan a%'` this replaces the need for — would match both, and quietly
+     * moving every Alpha subscriber onto Plan A is exactly the kind of confident
+     * wrong answer the rest of this class refuses to give.
+     *
+     * ── Longest wins, ties refuse ─────────────────────────────────────
+     *
+     * Where several canonical names are contained, the longest is taken: with
+     * both "Plan A" and "Plan A Plus" on the list, "Plan A Plus Fiber" belongs to
+     * the second, and the more specific name is always the better answer. Two
+     * *different* plans tying at that longest length is genuine ambiguity and
+     * returns null, leaving the account visibly unmapped rather than silently
+     * misfiled.
+     *
+     * The reverse direction is tried too — the subscriber string contained in the
+     * canonical name — which catches accounts recorded as "PLAN A" against a
+     * canonical "PLAN A - 1500". Same rules.
+     *
+     * @param string $normalised the already-normalised subscriber string
+     */
+    private function contains(string $normalised): ?int
+    {
+        if ($normalised === '') {
+            return null;
+        }
+
+        $best = null;
+        $bestLength = 0;
+        $tied = false;
+
+        foreach ($this->plans as $id => $plan) {
+            $candidate = self::normalise($plan['label']);
+
+            // A one-character plan name matches almost anything once tokenised,
+            // and there is no reading of "A" inside a sentence that is worth a
+            // subscriber reassignment.
+            if (strlen($candidate) < 2) {
+                continue;
+            }
+
+            if (!self::containsTokens($normalised, $candidate)
+                && !self::containsTokens($candidate, $normalised)) {
+                continue;
+            }
+
+            $length = strlen($candidate);
+
+            if ($length > $bestLength) {
+                $best = $id;
+                $bestLength = $length;
+                $tied = false;
+
+                continue;
+            }
+
+            // Same length, different plan: nothing distinguishes them.
+            if ($length === $bestLength && $best !== $id) {
+                $tied = true;
+            }
+        }
+
+        return $tied ? null : $best;
+    }
+
+    /**
+     * Whether $needle appears in $haystack on whole-token boundaries.
+     *
+     * Both are already normalised to lower-case words separated by single
+     * spaces, so padding each with spaces turns a token-boundary test into a
+     * plain substring test — "plan a" is in " plan a fiber " but not in
+     * " plan alpha ".
+     */
+    private static function containsTokens(string $haystack, string $needle): bool
+    {
+        if ($needle === '' || $haystack === '') {
+            return false;
+        }
+
+        return str_contains(' ' . $haystack . ' ', ' ' . $needle . ' ');
     }
 
     /**

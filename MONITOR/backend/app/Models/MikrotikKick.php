@@ -23,7 +23,9 @@ class MikrotikKick extends Model
         'requested_by',
         'requested_by_name',
         'status',
+        'mode',
         'scheduled_for',
+        'scheduled_timezone',
         'executed_at',
         'sessions_killed',
         'sessions_failed',
@@ -39,9 +41,27 @@ class MikrotikKick extends Model
     ];
 
     public const STATUS_PENDING = 'pending';
+    public const STATUS_RUNNING = 'running';
     public const STATUS_DONE = 'done';
     public const STATUS_FAILED = 'failed';
     public const STATUS_CANCELLED = 'cancelled';
+
+    /**
+     * Wait for the next maintenance window.
+     *
+     * The operator said "not during business hours", not a time. Performed by
+     * `mikrotik:drain-kicks`, which only acts inside the window.
+     */
+    public const MODE_WINDOW = 'window';
+
+    /**
+     * Fire at the named wall-clock time.
+     *
+     * The operator picked an instant, in Asia/Manila. Performed by
+     * `mikrotik:run-scheduled` at that time, whatever the maintenance window
+     * says — a named time that waits for a window is not a named time.
+     */
+    public const MODE_AT = 'at';
 
     /**
      * The start of the next maintenance window.

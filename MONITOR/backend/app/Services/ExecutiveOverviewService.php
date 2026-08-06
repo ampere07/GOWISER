@@ -3,22 +3,39 @@
 namespace App\Services;
 
 use App\Services\Reports\ReportPeriod;
-use App\Services\Reports\StatusBuckets;
-use App\Services\Reports\HostingFee;
-use App\Services\Reports\SyncPricing;
-use App\Services\Reports\WorkCadence;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
 /**
- * The Executive Dashboard: one screen, every company.
+ * The Executive Group Overview: one daily flash screen, every company.
  *
- * Composed from the existing section payloads rather than from new SQL. That is
- * the important design decision here — if this view queried the databases itself
+ * Four blocks, in the order the layout reads them:
+ *
+ *   1. Daily      — today's income, expenses and net, plus the three collection
+ *                   channels and the two rate figures derived from them
+ *   2. Monthly    — the same shape month-to-date, with the year-to-date trio
+ *                   carried inside it
+ *   3. Subscribers— the billing-status headcount, and what the field force
+ *                   applied for, installed and repaired today and this month
+ *   4. Plans      — active subscribers per plan, plans that carry none omitted
+ *
+ * Every figure is a bare number. This screen is read at a glance and quoted out
+ * loud; a value field carrying its own unit or a qualifier ("₱12,300 (7 days)")
+ * is a sentence, and a wall of sentences is not a flash report. The units and
+ * the arithmetic live in the labels and captions around the numbers instead.
+ *
+ * ── Why three financial windows rather than one ───────────────────────
+ *
+ * The layout states Daily, Monthly and Yearly side by side, so all three are
+ * true at once and none of them can follow a date picker. Each is therefore its
+ * own section run over its own fixed window, composed from the existing section
+ * payloads rather than from new SQL — if this view queried the databases itself
  * it would eventually disagree with the modules it summarises, and a board
- * meeting would be spent reconciling two of our own numbers. Every figure below
- * is the same figure the module shows, arrived at by the same code path and
- * through the same cache.
+ * meeting would be spent reconciling two of our own numbers.
+ *
+ * The three runs are not three fan-outs in practice: ReportingService caches per
+ * parameter bucket, and the monthly and yearly windows change once a day at
+ * most, so the second viewer of the morning pays for the daily window alone.
  *
  * A section that cannot be reached degrades to null rather than to zero, and the
  * gap is named in `unavailable`. Zero and "we could not ask" are different
@@ -26,8 +43,8 @@ use Illuminate\Support\Facades\Log;
  */
 class ExecutiveOverviewService
 {
-    /** Sections this view composes. */
-    private const SECTIONS = ['subscriber_analytics', 'financial', 'operations', 'tech'];
+    /** Sections composed for the subscriber and work blocks. */
+    private const SECTIONS = ['subscriber_analytics', 'operations'];
 
     /** Sections the work-stream widgets need, and nothing else. */
     private const WORK_SECTIONS = ['operations'];
@@ -38,36 +55,61 @@ class ExecutiveOverviewService
 
     public function build(array $params): array
     {
-        [$from, $to] = [$params['date_from'] ?? null, $params['date_to'] ?? null];
+        $anchor = ReportPeriod::anchor($params['as_of'] ?? null);
 
-        // Daily by default, matching the dashboard's own default view. The old
-        // monthly window meant the page opened on a range none of its controls
-        // were showing.
-        $window = ReportPeriod::dashboardWindow('daily', $params['as_of'] ?? null);
-        $params['date_from'] = $from ?: $window['from'];
-        $params['date_to'] = $to ?: $window['to'];
+        $timeframe = in_array($params['timeframe'] ?? null, self::TIMEFRAMES, true)
+            ? (string) $params['timeframe']
+            : 'daily';
 
-        [$sections, $unavailable] = $this->sections(self::SECTIONS, $params);
+        $windows = $this->windows(
+            $anchor,
+            $timeframe,
+            $params['date_from'] ?? null,
+            $params['date_to'] ?? null
+        );
+
+        // The three fixed financial windows, and the two anchor-scoped sections.
+        // Collected in one pass so a single unreachable database is named once
+        // rather than four times.
+        $unavailable = [];
+
+        $finance = [];
+
+        foreach ($windows as $key => $window) {
+            $finance[$key] = $this->window('financial', $params, $window, $unavailable, $key);
+        }
+
+        // Subscriber counts are current state and ignore the range; the work
+        // metrics inside `operations` are driven by it. Both come from one pass
+        // over the selected window rather than two, so the drill-down a card
+        // opens is scoped to exactly the window the card was counted in.
+        [$sections, $sectionGaps] = $this->sections(
+            self::SECTIONS,
+            $this->scoped($params, $windows['selected'])
+        );
+
+        $unavailable += $sectionGaps;
+
+        $subscribers = $sections['subscriber_analytics'] ?? null;
+        $operations = $sections['operations'] ?? null;
 
         return [
-            'as_of' => ReportPeriod::anchor($params['as_of'] ?? null)->toDateString(),
+            'as_of' => $anchor->toDateString(),
             'generated_at' => now()->toDateTimeString(),
-            'range' => ['from' => $params['date_from'], 'to' => $params['date_to']],
-            'range_label' => $this->rangeLabel($params['date_from'], $params['date_to']),
+            'timeframe' => $timeframe,
+            'windows' => $windows,
 
-            'subscriber_health' => $this->subscriberHealth($sections['subscriber_analytics'] ?? null),
-            'subscriber_overview' => $this->subscriberOverview($sections['subscriber_analytics'] ?? null),
-            'financial_summary' => $this->financialSummary(
-                $sections['financial'] ?? null,
-                $sections['subscriber_analytics'] ?? null
+            'daily' => $this->daily($finance['selected'], $windows['selected']),
+            'monthly' => $this->monthly(
+                $finance['monthly'],
+                $finance['yearly'],
+                $windows['monthly'],
+                $windows['yearly']
             ),
-            'work_streams' => $this->workStreams($sections['operations'] ?? null, $params),
-            'operations_tech' => $this->operationsTech(
-                $sections['operations'] ?? null,
-                $sections['tech'] ?? null
-            ),
+            'subscribers' => $this->subscribers($subscribers, $operations),
+            'plans' => $this->plans($subscribers),
 
-            'databases' => $this->databases($sections),
+            'databases' => $this->databases(array_merge($finance, $sections)),
             'unavailable' => $unavailable,
         ];
     }
@@ -75,11 +117,11 @@ class ExecutiveOverviewService
     /**
      * One work stream for its own date range.
      *
-     * The Applications, Job Orders and Service Orders widgets each carry an
-     * independent range, so each asks for its own window rather than the whole
-     * dashboard reloading when one of them moves. It runs through
-     * ReportingService like everything else, so three widgets sitting on the same
-     * range share one cached section rather than issuing three fan-outs.
+     * Retained for the Applications / Job Orders / Service Orders endpoint, which
+     * carries an independent range and is served separately so moving it does not
+     * re-run the financial fan-out behind the rest of the page. It runs through
+     * ReportingService like everything else, so several callers sitting on the
+     * same range share one cached section rather than issuing several fan-outs.
      */
     public function workStreamsFor(array $params): array
     {
@@ -89,20 +131,179 @@ class ExecutiveOverviewService
 
         [$sections, $unavailable] = $this->sections(self::WORK_SECTIONS, $params);
 
+        $operations = $sections['operations'] ?? null;
+
         return [
             'range' => ['from' => $params['date_from'], 'to' => $params['date_to']],
             'range_label' => $this->rangeLabel($params['date_from'], $params['date_to']),
-            'streams' => $this->workStreams($sections['operations'] ?? null, $params),
+            'streams' => $operations === null
+                ? ['available' => false]
+                : [
+                    'available' => true,
+                    'applications' => $operations['work_streams']['applications'] ?? [],
+                    'job_orders' => $operations['work_streams']['job_orders'] ?? [],
+                    'service_orders' => $operations['work_streams']['service_orders'] ?? [],
+                    'timeline' => $operations['work_timeline'] ?? [],
+                    'cadence' => $operations['work_cadence'] ?? [],
+                ],
             'unavailable' => $unavailable,
         ];
+    }
+
+    /** Timeframes the global toolbar offers. */
+    public const TIMEFRAMES = ['daily', 'weekly', 'monthly', 'yearly', 'custom'];
+
+    /**
+     * The three windows this screen reports over.
+     *
+     * The first — `selected` — follows the global date toolbar. The other two are
+     * fixed comparatives and deliberately do not move: a tile labelled "Total
+     * Income (Monthly)" showing a yearly figure because somebody pressed a pill
+     * is not a smaller error than showing the wrong month, it is a lie about what
+     * the label means. So the toolbar drives the range section and the metrics
+     * that carry a target date, and the month-to-date and year-to-date blocks
+     * stay what they say they are.
+     *
+     * Month and year are *to date*, not whole calendar periods. A month-to-date
+     * total sitting beside a running one is a figure an executive can act on; a
+     * whole-month window would report the same number all afternoon and then jump
+     * on the 1st, and a whole-year one would spend eleven months claiming a total
+     * that had not happened yet.
+     *
+     * @return array<string,array{key:string,label:string,from:string,to:string,label_long:string}>
+     */
+    private function windows(Carbon $anchor, string $timeframe, ?string $from, ?string $to): array
+    {
+        $day = $anchor->copy()->startOfDay();
+        $selected = $this->selectedWindow($day, $timeframe, $from, $to);
+
+        return [
+            'selected' => $selected,
+            'monthly' => [
+                'key' => 'monthly',
+                'label' => 'Monthly',
+                'from' => $day->copy()->startOfMonth()->toDateString(),
+                'to' => $day->toDateString(),
+                'label_long' => $day->format('F Y') . ' to date',
+            ],
+            'yearly' => [
+                'key' => 'yearly',
+                'label' => 'Yearly',
+                'from' => $day->copy()->startOfYear()->toDateString(),
+                'to' => $day->toDateString(),
+                'label_long' => $day->format('Y') . ' to date',
+            ],
+        ];
+    }
+
+    /**
+     * The window the global toolbar is asking for.
+     *
+     * Weekly is the last seven days ending today rather than the calendar week,
+     * matching ReportPeriod::dashboardWindow and therefore the rest of the
+     * portal. Two definitions of "this week" on one system is how two people
+     * quote different numbers off the same button.
+     *
+     * A custom range with the ends the wrong way round is swapped rather than
+     * rejected: the operator plainly meant the span between the two dates, and a
+     * validation error for a date picker they dragged backwards is friction with
+     * no safety value. An unparseable custom range falls back to today, which is
+     * the safest window to be wrong about.
+     *
+     * @return array{key:string,label:string,from:string,to:string,label_long:string}
+     */
+    private function selectedWindow(Carbon $day, string $timeframe, ?string $from, ?string $to): array
+    {
+        if ($timeframe === 'custom') {
+            $start = ReportPeriod::parse($from) ?? $day->copy();
+            $end = ReportPeriod::parse($to) ?? $start->copy();
+
+            if ($end->lessThan($start)) {
+                [$start, $end] = [$end, $start];
+            }
+
+            return [
+                'key' => 'custom',
+                'label' => 'Custom Range',
+                'from' => $start->toDateString(),
+                'to' => $end->toDateString(),
+                'label_long' => $this->rangeLabel($start->toDateString(), $end->toDateString()),
+            ];
+        }
+
+        switch ($timeframe) {
+            case 'weekly':
+                $start = $day->copy()->subDays(6);
+                $label = 'Last 7 days';
+                break;
+            case 'monthly':
+                $start = $day->copy()->startOfMonth();
+                $label = $day->format('F Y') . ' to date';
+                break;
+            case 'yearly':
+                $start = $day->copy()->startOfYear();
+                $label = $day->format('Y') . ' to date';
+                break;
+            default:
+                $timeframe = 'daily';
+                $start = $day->copy();
+                $label = $day->format('M d, Y');
+        }
+
+        return [
+            'key' => $timeframe,
+            'label' => ucfirst($timeframe),
+            'from' => $start->toDateString(),
+            'to' => $day->toDateString(),
+            'label_long' => $label,
+        ];
+    }
+
+    /** The section parameters, scoped to one window. */
+    private function scoped(array $params, array $window): array
+    {
+        return array_merge($params, [
+            'date_from' => $window['from'],
+            'date_to' => $window['to'],
+        ]);
+    }
+
+    /**
+     * One section over one window, collecting the failure rather than raising it.
+     *
+     * @param array<string,string> $unavailable written by reference
+     */
+    private function window(
+        string $section,
+        array $params,
+        array $window,
+        array &$unavailable,
+        string $key
+    ): ?array {
+        try {
+            return $this->reporting->aggregate($section, $this->scoped($params, $window));
+        } catch (\Throwable $e) {
+            Log::warning('Executive overview window unavailable', [
+                'section' => $section,
+                'window' => $key,
+                'range' => [$window['from'], $window['to']],
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+            ]);
+
+            $unavailable[$section . ':' . $key] = config('app.debug')
+                ? $e->getMessage()
+                : 'This data could not be reached.';
+
+            return null;
+        }
     }
 
     /**
      * Runs the named sections, collecting failures rather than propagating them.
      *
      * One unreachable section must not blank the whole summary — the subscriber
-     * and operations halves are still worth showing when the finance database is
-     * down.
+     * half is still worth showing when the operations database is down.
      *
      * @param string[] $names
      * @return array{0:array<string,array>,1:array<string,string>}
@@ -116,7 +317,7 @@ class ExecutiveOverviewService
             try {
                 $sections[$section] = $this->reporting->aggregate($section, $params);
             } catch (\Throwable $e) {
-                Log::warning('Executive dashboard section unavailable', [
+                Log::warning('Executive overview section unavailable', [
                     'section' => $section,
                     'range' => [$params['date_from'] ?? null, $params['date_to'] ?? null],
                     'error' => $e->getMessage(),
@@ -132,633 +333,331 @@ class ExecutiveOverviewService
         return [$sections, $unavailable];
     }
 
+    // ── 1. Daily ──────────────────────────────────────────────────────────
+
     /**
-     * Active subscribers, net growth and churn rate.
+     * Today's money: the headline trio, the three channels, and the two rates.
      *
-     * Net growth is new-in-range minus disconnections, not simply new accounts:
-     * a month that signed 40 and lost 45 grew by minus five, and reporting the
-     * 40 alone is the single most flattering way to present a shrinking base.
+     * Total income is the sum of the three channels finance reconciles against —
+     * Office Collection, PNB and Xendit — rather than the headline `kpi.income`.
+     * The two differ by the residue: collections whose payment method matched
+     * none of the configured channel patterns. That residue is carried as
+     * `unmatched` rather than folded into the total, because it is the signal
+     * that a new payment method appeared, and a headline that quietly absorbs it
+     * hides exactly the thing finance needs to see.
+     *
+     * The last two tiles are deliberately *not* today's figures and are not
+     * derived from this window at all — see rates(). They are stated here because
+     * the layout puts them here, and their divisors are named in the captions the
+     * frontend renders beside them.
      */
-    private function subscriberHealth(?array $subscribers): array
+    private function daily(?array $financial, array $window): array
     {
-        if ($subscribers === null) {
-            return ['available' => false];
+        if ($financial === null) {
+            return ['available' => false] + $this->windowMeta($window);
         }
 
-        $active = (int) ($subscribers['kpi']['active'] ?? 0);
-        $vip = (int) ($subscribers['kpi']['vip'] ?? 0);
-        $disconnected = (int) ($subscribers['kpi']['disconnected'] ?? 0);
-        $newInRange = (int) ($subscribers['growth']['new_in_range'] ?? 0);
-
-        $base = $active + $vip;
-
-        // Churn against the base that could have churned — active plus the ones
-        // that already did — rather than against the survivors alone, which
-        // understates it.
-        $churnBase = $base + $disconnected;
+        $channels = $this->channels($financial);
+        $expenses = $this->expenses($financial);
+        $rates = $this->rates($financial);
 
         return [
             'available' => true,
-            'active_subscribers' => $base,
-            'vip_subscribers' => $vip,
-            'disconnected' => $disconnected,
-            'new_in_range' => $newInRange,
-            'net_growth' => $newInRange - $disconnected,
-            'churn_rate_pct' => $churnBase > 0 ? round($disconnected / $churnBase * 100, 1) : null,
-            'billing_summary' => $subscribers['billing_summary'] ?? null,
-            'range_label' => $subscribers['range_label'] ?? '',
-        ];
+
+            'income' => $channels['total'],
+            'expenses' => $expenses,
+            'net' => round($channels['total'] - $expenses, 2),
+            'monthly_projected_sales' => $rates['projected_monthly'],
+
+            'office_collection' => $channels['cash'],
+            'pnb' => $channels['pnb'],
+            'xendit' => $channels['portal'],
+            'daily_sales_average' => $rates['daily_average'],
+
+            // Reported beside the total rather than inside it. Silent on screen
+            // until it is non-zero, which is the only time it is worth a line.
+            'unmatched' => $channels['unmatched'],
+            'opex' => $financial['opex_capex']['opex']['total'] ?? null,
+            'capex' => $financial['opex_capex']['capex']['total'] ?? null,
+        ] + $this->windowMeta($window);
     }
 
-    /**
-     * Billing status, network status, expiry runway, plan mix and geography.
-     *
-     * Network status is taken from the driver's `network` block, which counts
-     * online, offline, restricted and disconnected over one row set — see
-     * GowiserReportsDriver::networkStatus. The previous version of this method
-     * took online and offline from the RADIUS session table and restricted and
-     * disconnected from the billing status counts, which are two different
-     * populations: the four numbers did not add up to the subscriber base, and
-     * management was reading them as though they did.
-     *
-     * The session breakdown is still carried, as `sessions`, because "what does
-     * the network think" remains a fair question — it is just not the same
-     * question as "how many subscribers are cut off", and they no longer share a
-     * set of tiles.
-     */
-    private function subscriberOverview(?array $subscribers): array
-    {
-        if ($subscribers === null) {
-            return ['available' => false];
+    // ── 2. Monthly (and the yearly trio it carries) ───────────────────────
+
+    private function monthly(
+        ?array $financial,
+        ?array $yearly,
+        array $window,
+        array $yearWindow
+    ): array {
+        $year = $this->yearly($yearly, $yearWindow);
+
+        if ($financial === null) {
+            return ['available' => false, 'yearly' => $year] + $this->windowMeta($window);
         }
 
+        $channels = $this->channels($financial);
+        $expenses = $this->expenses($financial);
+        $rates = $this->rates($financial);
+
+        return [
+            'available' => true,
+
+            'total_income' => $channels['total'],
+            'total_expenses' => $expenses,
+            'net_income' => round($channels['total'] - $expenses, 2),
+            'weekly_sales_average' => $rates['weekly_average'],
+
+            'total_cash' => $channels['cash'],
+            'total_pnb' => $channels['pnb'],
+            'total_xendit' => $channels['portal'],
+
+            'yearly' => $year,
+
+            'unmatched' => $channels['unmatched'],
+            'opex' => $financial['opex_capex']['opex']['total'] ?? null,
+            'capex' => $financial['opex_capex']['capex']['total'] ?? null,
+        ] + $this->windowMeta($window);
+    }
+
+    private function yearly(?array $financial, array $window): array
+    {
+        if ($financial === null) {
+            return ['available' => false] + $this->windowMeta($window);
+        }
+
+        $channels = $this->channels($financial);
+        $expenses = $this->expenses($financial);
+
+        return [
+            'available' => true,
+            'income' => $channels['total'],
+            'expenses' => $expenses,
+            'net' => round($channels['total'] - $expenses, 2),
+        ] + $this->windowMeta($window);
+    }
+
+    // ── 3. Subscribers ────────────────────────────────────────────────────
+
+    /**
+     * The billing-status headcount, and the field force's day and month.
+     *
+     * `Schedule` and `Pending` are job-order states rather than volumes, taken
+     * over the month-to-date cadence: they answer "how much work is waiting", and
+     * a day's window would report a rescheduled queue as empty every morning
+     * before the first visit is moved. The rows around them are volumes and are
+     * scoped to their own labels — Daily to today, Monthly to the month.
+     *
+     * `work_available` is false rather than nine zeros when no monitored schema
+     * models these queues at all. NETMANAGER has one installations queue and no
+     * applications, and reporting zero applications for a system that has no
+     * concept of them is a claim rather than a measurement.
+     */
+    private function subscribers(?array $subscribers, ?array $operations): array
+    {
         $status = $subscribers['status'] ?? [];
-        $kpi = $subscribers['kpi'] ?? [];
-        $network = $subscribers['network'] ?? [];
+
+        // The driver's purpose-built block, not the generic cadence. The cadence
+        // dates every queue on one COALESCE'd "effective date" — right for "what
+        // moved recently", wrong for all six labels here. See
+        // GowiserReportsDriver::executiveWorkload for the three specific figures
+        // that were wrong and why.
+        $work = $operations['executive_workload'] ?? [];
+        $tracked = (bool) ($work['tracked'] ?? false);
+
+        // Null rather than zero when no monitored schema models these queues at
+        // all. NETMANAGER has one installations table and no applications, and
+        // five confident zeros for a system with no concept of them is a claim
+        // rather than a measurement.
+        $count = function (string $key) use ($work, $tracked): ?int {
+            if ($work === [] || !$tracked) {
+                return null;
+            }
+
+            return (int) ($work[$key] ?? 0);
+        };
 
         return [
-            'available' => true,
+            'available' => $subscribers !== null,
+            'work_available' => $tracked,
 
-            'billing' => [
-                'active' => (int) ($status['active'] ?? 0),
-                'inactive' => (int) ($status['inactive'] ?? 0),
-                'vip' => (int) ($status['vip'] ?? 0),
-                'pullout' => (int) ($status['pullout'] ?? 0),
-                'total' => (int) ($status['total'] ?? 0),
-            ],
+            'active' => $subscribers === null ? null : (int) ($status['active'] ?? 0),
+            'vip' => $subscribers === null ? null : (int) ($status['vip'] ?? 0),
+            'inactive' => $subscribers === null ? null : (int) ($status['inactive'] ?? 0),
+            'pullout' => $subscribers === null ? null : (int) ($status['pullout'] ?? 0),
 
-            // Null when no source could produce it, so the panel says so rather
-            // than drawing four confident zeros.
-            'network' => $network === [] ? null : [
-                'online' => (int) ($network['online'] ?? 0),
-                'offline' => (int) ($network['offline'] ?? 0),
-                'restricted' => (int) ($network['restricted'] ?? 0),
-                'disconnected' => (int) ($network['disconnected'] ?? 0),
-                'total' => (int) ($network['total'] ?? 0),
-            ],
-
-            // Prepaid accounts whose service period lapses inside the window.
-            // Null on a schema that stores no subscription end date — nothing
-            // expires there, which is not the same as nothing expiring soon.
-            'expiring' => [
-                'in_3_days' => $kpi['expiring_3day'] ?? null,
-                'in_7_days' => $kpi['expiring_7day'] ?? null,
-            ],
-
-            'plan_distribution' => $subscribers['plan_distribution'] ?? [],
-            'barangays' => $subscribers['barangays'] ?? [],
-            'sessions' => $subscribers['sessions'] ?? [],
-
-            // Subscribers who are not billed. See freeConnections.
-            'free_connections' => $this->freeConnections($subscribers),
-
-            // Who the VIP counter above is counting, by name. Passed straight
-            // through from the section payload — this view composes section
-            // output rather than issuing SQL of its own, so that the list and the
-            // counter beside it can never be taken over different populations.
-            //
-            // Absent on a source with no VIP concept, which the panel reports as
-            // "not tracked" rather than as an empty list: no rows and no such
-            // thing are different claims.
-            'vip_accounts' => $subscribers['vip_accounts'] ?? null,
+            // All five follow the global date toolbar, and each is counted on the
+            // status and target-date column its label means — see
+            // GowiserReportsDriver::WORK_METRICS.
+            'application' => $count('application'),
+            'installed' => $count('installed'),
+            'repair' => $count('repair'),
+            // Renamed from "Schedule": it counts job orders whose onsite status
+            // is Reschedule, and calling that "Schedule" read as the opposite —
+            // work that had been booked in rather than work that had slipped.
+            'reschedule' => $count('reschedule'),
+            'pending' => $count('pending'),
         ];
     }
 
+    // ── 4. Subscriber plans ───────────────────────────────────────────────
+
     /**
-     * Subscribers on a free connection: VIP status, and VIP/free-named plans.
+     * Active subscribers per plan.
      *
-     * Two different populations, reported apart and then together, because they
-     * are recorded in two different places and neither alone is the answer:
+     * Taken from the section's `plans` block, which counts accounts on an Active
+     * billing status only — a plan's headline number on this screen is how many
+     * people are paying for it today, not how many rows ever pointed at it.
      *
-     *   - a billing *status* of VIP, which is how an account is exempted after
-     *     the fact;
-     *   - a *plan* named for it — "VIP FREE" and its spelling variants — which is
-     *     how an account is set up exempt from the start.
-     *
-     * They overlap, and the overlap cannot be measured from these two aggregates
-     * without a row-level join this view deliberately does not do. So the total
-     * is reported as the larger of the two rather than their sum: a sum would
-     * double-count every account that is both, and that error runs in the
-     * direction of overstating how much revenue is being given away.
-     *
-     * Plan matching is by pattern against the reconciled plan names (see
-     * PlanReconciler), so a plan renamed in the app is picked up without a
-     * deploy. The patterns are config — reporting.free_connection_plans.
+     * Plans carrying nobody are dropped rather than rendered as zero cards. A
+     * retired plan with no subscribers is not a fact worth a tile on a flash
+     * screen, and a row of zeros pushes the plans that do matter off the fold.
      */
-    private function freeConnections(array $subscribers): array
+    private function plans(?array $subscribers): array
     {
-        $patterns = config('reporting.free_connection_plans');
-        $patterns = is_array($patterns) && $patterns !== [] ? $patterns : ['vip', 'free'];
+        if ($subscribers === null) {
+            return ['available' => false, 'rows' => [], 'total' => 0];
+        }
 
-        $vipStatus = (int) ($subscribers['status']['vip'] ?? $subscribers['kpi']['vip'] ?? 0);
+        $rows = [];
 
-        $plans = [];
-        $planTotal = 0;
+        foreach ($subscribers['plans'] ?? [] as $row) {
+            $label = trim((string) ($row['label'] ?? ''));
+            $count = (int) ($row['count'] ?? 0);
 
-        foreach ($subscribers['plan_distribution'] ?? [] as $row) {
-            $label = (string) ($row['label'] ?? '');
-
-            if ($label === '') {
+            if ($label === '' || $count <= 0) {
                 continue;
             }
 
-            $haystack = strtolower($label);
-
-            foreach ($patterns as $pattern) {
-                $needle = strtolower(trim((string) $pattern));
-
-                if ($needle !== '' && str_contains($haystack, $needle)) {
-                    $count = (int) ($row['count'] ?? 0);
-
-                    $plans[] = ['label' => $label, 'count' => $count];
-                    $planTotal += $count;
-
-                    // One match is enough. A plan called "VIP FREE" matches both
-                    // patterns and must still be counted once.
-                    break;
-                }
-            }
+            $rows[] = ['label' => $label, 'count' => $count];
         }
 
-        usort($plans, fn ($a, $b) => $b['count'] <=> $a['count']);
-
-        return [
-            'vip_status_accounts' => $vipStatus,
-            'free_plan_accounts' => $planTotal,
-            'plans' => $plans,
-            'total' => max($vipStatus, $planTotal),
-            'overlaps' => $vipStatus > 0 && $planTotal > 0,
-        ];
-    }
-
-    /**
-     * The three work streams, reported separately.
-     *
-     * Applications, job orders and service orders are different work done by
-     * different queues, and the blended "JO/SO" counter this replaced could not
-     * distinguish a month where installations doubled and repairs halved from a
-     * flat one.
-     *
-     * `available` is false rather than three zeros when no monitored schema
-     * models these tables — NETMANAGER has one installations queue and no
-     * applications at all, and reporting zero applications for a system that has
-     * no concept of them is a claim rather than a measurement.
-     */
-    private function workStreams(?array $operations, array $params): array
-    {
-        $range = ['from' => $params['date_from'] ?? null, 'to' => $params['date_to'] ?? null];
-
-        if ($operations === null) {
-            return ['available' => false, 'range' => $range];
-        }
-
-        $streams = $operations['work_streams'] ?? [];
-        $cadence = $operations['work_cadence'] ?? [];
-
-        // The two halves are reported independently. `work_streams` is the
-        // range-scoped view and NETMANAGER produces none of it — it models one
-        // installations queue and no applications at all — but it *does* produce
-        // a cadence for that queue. Returning early on an empty `work_streams`
-        // used to throw the cadence away with it, so a NETMANAGER-only fleet saw
-        // three cards reporting "not tracked" over data that had been fetched.
-        if ($streams === [] && $cadence === []) {
-            return ['available' => false, 'range' => $range];
-        }
-
-        $applications = $streams['applications'] ?? [];
-        $buckets = $applications['buckets'] ?? [];
+        usort($rows, fn ($a, $b) => $b['count'] <=> $a['count']);
 
         return [
             'available' => true,
-            'range' => $range,
-            'range_label' => $operations['range_label'] ?? '',
-
-            'applications' => [
-                // The brief's formula, and the raw count beside it. Both are
-                // reported because they answer different questions, and labelling
-                // either as the other is how two people quote different numbers
-                // off the same screen.
-                'total' => (int) ($applications['total'] ?? StatusBuckets::applicationTotal($buckets)),
-                'count' => (int) ($applications['count'] ?? 0),
-                'rescheduled' => (int) ($buckets['rescheduled'] ?? 0),
-                'in_progress' => (int) ($buckets['in_progress'] ?? 0),
-                'new_apply' => (int) ($buckets['new_apply'] ?? 0),
-                'failed' => (int) ($buckets['failed'] ?? 0),
-                'other' => (int) ($buckets['other'] ?? 0),
-                'statuses' => $applications['statuses'] ?? [],
-                'formula' => '(rescheduled + in progress + new apply) − failed',
-            ],
-
-            'job_orders' => $this->workOrderStream($streams['job_orders'] ?? [], 'Job Orders'),
-            'service_orders' => $this->workOrderStream($streams['service_orders'] ?? [], 'Service Orders'),
-
-            'timeline' => $operations['work_timeline'] ?? [],
-
-            // Today / this week / this month, on the same three queues but
-            // independent of the range above. This is what the cards actually
-            // render; the range-scoped figures beside it feed the timeline and
-            // the pipeline table.
-            'cadence' => $cadence,
-
-            'resolution' => $this->resolution($operations),
+            'rows' => $rows,
+            'total' => array_sum(array_column($rows, 'count')),
         ];
     }
+
+    // ── Shared arithmetic ─────────────────────────────────────────────────
 
     /**
-     * Resolution speed: what got closed, and what is still waiting.
+     * The three reconciled channels and their sum, from one section payload.
      *
-     * "Completed & Closed" is composed from the cadence the drivers already
-     * returned rather than queried again. Two figures on one screen that are
-     * supposed to be the same figure must come from the same rows, or a slow
-     * afternoon is enough to make them disagree and the screen stops being
-     * trusted.
+     * `total` is Cash + PNB + Portal, not the headline KPI. A source that reports
+     * collections but no methods at all has no channel breakdown to sum, and
+     * falls back to the KPI rather than reporting three zeros and a zero total.
      *
-     * Installations and repairs are added together here — the question is how
-     * much work the field force finished, and both kinds count — but each is
-     * also reported on its own, because "we closed 40" hides which 40.
+     * @return array{cash:float,pnb:float,portal:float,total:float,unmatched:float}
      */
-    private function resolution(array $operations): array
+    private function channels(array $financial): array
     {
-        $cadence = $operations['work_cadence'] ?? [];
-        $completed = [];
-
-        foreach (WorkCadence::WINDOWS as $window) {
-            $installed = (int) ($cadence['job_orders'][$window]['done'] ?? 0);
-            $repaired = (int) ($cadence['service_orders'][$window]['done'] ?? 0);
-
-            $completed[$window] = [
-                'installations' => $installed,
-                'repairs' => $repaired,
-                'total' => $installed + $repaired,
-            ];
-        }
-
-        return [
-            // False when no monitored schema models these queues at all, so the
-            // panel can say "not tracked" instead of reporting a confident zero.
-            'available' => $cadence !== [],
-            'completed' => $completed,
-            'longest_outstanding' => $operations['resolution']['longest_outstanding'] ?? null,
-        ];
-    }
-
-    /** One work-order stream, flattened for the widget that draws it. */
-    private function workOrderStream(array $stream, string $label): array
-    {
-        $buckets = $stream['buckets'] ?? [];
-
-        return [
-            'label' => $stream['label'] ?? $label,
-            'count' => (int) ($stream['count'] ?? 0),
-            'done' => (int) ($buckets['done'] ?? 0),
-            'reschedule' => (int) ($buckets['reschedule'] ?? 0),
-            'failed' => (int) ($buckets['failed'] ?? 0),
-            'in_progress' => (int) ($buckets['in_progress'] ?? 0),
-            'other' => (int) ($buckets['other'] ?? 0),
-            'statuses' => $stream['statuses'] ?? [],
-        ];
-    }
-
-    /**
-     * Income by channel, OpEx against CapEx, the SYNC platform fee, and net.
-     *
-     * Total income is the sum of the three channels finance reconciles against —
-     * Cash, PNB and Payment Portal — rather than the headline `kpi.income`. The
-     * two differ by the "Other" residue: collections whose payment method matched
-     * none of the configured channel patterns. That residue is reported beside
-     * the total rather than folded into it, because it is the signal that a new
-     * payment method appeared, and a headline that quietly absorbs it hides
-     * exactly the thing finance needs to see. `income_all_channels` carries the
-     * unreduced figure so the two can be reconciled on screen.
-     */
-    private function financialSummary(?array $financial, ?array $subscribers): array
-    {
-        if ($financial === null) {
-            return ['available' => false];
-        }
-
-        $channels = [];
-        $headlineIncome = 0.0;
-        $allChannels = 0.0;
+        $totals = ['cash' => 0.0, 'pnb' => 0.0, 'portal' => 0.0];
+        $all = 0.0;
+        $seen = false;
 
         foreach ($financial['income_channels'] ?? [] as $channel) {
             $key = (string) ($channel['key'] ?? '');
             $total = (float) ($channel['total'] ?? 0);
 
-            $channels[$key] = [
-                'label' => $channel['label'] ?? $key,
-                'total' => $total,
-                'count' => (int) ($channel['count'] ?? 0),
-                'share_pct' => (float) ($channel['share_pct'] ?? 0),
-            ];
+            $all += $total;
+            $seen = true;
 
-            $allChannels += $total;
-
-            if (in_array($key, ['cash', 'pnb', 'portal'], true)) {
-                $headlineIncome += $total;
+            if (array_key_exists($key, $totals)) {
+                $totals[$key] = $total;
             }
         }
 
-        // No channel breakdown at all — a source that reports collections but not
-        // methods — falls back to the headline KPI rather than reporting nothing.
-        if ($channels === []) {
-            $headlineIncome = (float) ($financial['kpi']['income'] ?? 0);
-            $allChannels = $headlineIncome;
+        $reconciled = $totals['cash'] + $totals['pnb'] + $totals['portal'];
+
+        if (!$seen) {
+            $reconciled = (float) ($financial['kpi']['income'] ?? 0);
+            $all = $reconciled;
         }
 
-        $opex = (float) ($financial['opex_capex']['opex']['total'] ?? 0);
-        $capex = (float) ($financial['opex_capex']['capex']['total'] ?? 0);
+        return [
+            'cash' => round($totals['cash'], 2),
+            'pnb' => round($totals['pnb'], 2),
+            'portal' => round($totals['portal'], 2),
+            'total' => round($reconciled, 2),
+            'unmatched' => round($all - $reconciled, 2),
+        ];
+    }
 
-        // The SYNC platform fee is an expense that exists in no ledger: it is a
-        // per-subscriber licence, so it is a headcount times a rate.
-        //
-        // Both it and the hosting fee are MONTHLY charges, and the page range is
-        // not: it can be a day, a week, a month or a year. That makes them the
-        // only figures on the page whose period is fixed while everything around
-        // them moves, so they are reported as monthly amounts, labelled as such,
-        // and deliberately kept out of every derived total:
-        //
-        //  - not added into Total Expenses, which must stay reconcilable against
-        //    the Financial module, and which no expenses ledger has heard of;
-        //  - not netted off Net Income, and no "net after platform costs" figure
-        //    is produced at all. Subtracting a month's cost from a day's income
-        //    is not a smaller number, it is a wrong one — and on a yearly range
-        //    it understates the cost twelvefold in the other direction. There is
-        //    no range-independent way to net a monthly charge against a
-        //    range-scoped income, so the honest thing is to report the charge and
-        //    let the reader do the comparison they actually mean.
-        $syncPrice = SyncPricing::build(
-            isset($subscribers['sync_billable_accounts'])
-                ? (int) $subscribers['sync_billable_accounts']
-                : null
+    /**
+     * OpEx plus CapEx for the window.
+     *
+     * Neither the SYNC platform fee nor the hosting fee is in here. Both are
+     * fixed monthly charges that exist in no ledger, and there is no
+     * range-independent way to net a monthly charge against a day's or a year's
+     * income — so they stay out of every derived total on this screen, and Total
+     * Expenses stays reconcilable against the Financial module.
+     */
+    private function expenses(array $financial): float
+    {
+        return round(
+            (float) ($financial['opex_capex']['opex']['total'] ?? 0)
+            + (float) ($financial['opex_capex']['capex']['total'] ?? 0),
+            2
         );
+    }
 
-        $hostingFee = HostingFee::build();
-
-        $totalExpenses = $opex + $capex;
-        $net = $headlineIncome - $totalExpenses;
-
+    /**
+     * The three rate figures, all anchored on today rather than on the window.
+     *
+     * Identical in every one of the three financial payloads, because the driver
+     * computes them from the anchor — see GowiserReportsDriver::rollingIncome.
+     * Read from whichever payload is in hand:
+     *
+     *   projected_monthly  (month-to-date ÷ days elapsed) × days in month
+     *   daily_average      the last seven days ÷ 7
+     *   weekly_average     the last seven days, which is the daily rate × 7
+     *
+     * The last pair is the one the old dashboard got backwards: it labelled the
+     * daily rate "Weekly Sales Average", which understated the figure sevenfold
+     * to anyone reading the label. The driver's key names are kept as they are —
+     * the Financial module reads the same fields — and mapped to the right tiles
+     * here.
+     *
+     * @return array{projected_monthly:?float,daily_average:?float,weekly_average:?float}
+     */
+    private function rates(array $financial): array
+    {
         $rolling = $financial['rolling'] ?? [];
 
         return [
-            'available' => true,
-
-            'total_income' => round($headlineIncome, 2),
-            // Everything collected, including methods no channel claimed. Equal
-            // to total_income whenever the residue is empty, which is the normal
-            // case — a difference is the thing worth noticing.
-            'income_all_channels' => round($allChannels, 2),
-            'unmatched_income' => round($allChannels - $headlineIncome, 2),
-            'channels' => $channels,
-
-            'opex' => round($opex, 2),
-            'capex' => round($capex, 2),
-            // Monthly charges, whatever the page range is. Reported beside Total
-            // Expenses rather than inside it, and netted off nothing — see the
-            // note above the SyncPricing::build() call.
-            'sync_price' => $syncPrice,
-            'hosting_fee' => $hostingFee,
-            // OpEx + CapEx, as before. Neither the SYNC fee nor the hosting fee
-            // is in here — they are reported beside Total Expenses rather than
-            // inside it, keeping the figure reconcilable against the Financial module.
-            'total_expenses' => round($totalExpenses, 2),
-
-            'gross' => round($headlineIncome, 2),
-            'net' => round($net, 2),
-            'margin_pct' => $headlineIncome > 0
-                ? round($net / $headlineIncome * 100, 1)
-                : null,
-
-            // Anchored on the current month and the last seven days respectively,
-            // never on the widget's range — see GowiserReportsDriver::rollingIncome.
-            'month_income' => $rolling['month_income'] ?? null,
-            'days_elapsed' => $rolling['days_elapsed'] ?? null,
-            'days_in_month' => $rolling['days_in_month'] ?? null,
-            'daily_average' => $rolling['daily_average'] ?? null,
             'projected_monthly' => $rolling['projected_monthly'] ?? null,
-
-            // `weekly_average` is a *daily* rate — the last seven days' takings
-            // divided by seven — and the Executive Dashboard used to render it
-            // under the label "Weekly Sales Average", which overstated nothing
-            // but understated the figure sevenfold to anyone reading the label.
-            // The key keeps its meaning and its name, because the Financial
-            // module labels it correctly and reads the same field; the weekly
-            // figure it multiplies out to is carried beside it as `week_income`,
-            // and the dashboard now shows both with their divisors stated.
-            'weekly_average' => $rolling['weekly_average'] ?? null,
-            'week_income' => $rolling['week_income'] ?? null,
-            'week_days' => $rolling['week_days'] ?? 7,
-            'week_from' => $rolling['week_from'] ?? null,
-            'week_income' => $rolling['week_income'] ?? null,
-            'week_from' => $rolling['week_from'] ?? null,
-
-            'outstanding_payables' => (float) ($financial['payables']['outstanding'] ?? 0),
-            'payables_unpaid_count' => (int) ($financial['payables']['totals']['unpaid']['count'] ?? 0),
-            'metrics' => $financial['executive_metrics'] ?? null,
-            'range_label' => $financial['range_label'] ?? '',
-            'by_plan' => $financial['by_plan'] ?? [],
+            'daily_average' => $rolling['weekly_average'] ?? null,
+            'weekly_average' => $rolling['week_income'] ?? null,
         ];
     }
 
-    /**
-     * Field delivery: turnaround, concerns, repair categories and the leaderboard.
-     *
-     * The derived "system alarms" feed is gone. It was never a monitoring feed —
-     * neither source runs one — and a panel of conditions nobody could act on
-     * from this screen trained people to skim past it. The underlying figures it
-     * was derived from (open work, oldest backlog) are still reported directly,
-     * where they can be read as the measurements they are.
-     */
-    private function operationsTech(?array $operations, ?array $tech): array
+    /** @return array{range:array{from:string,to:string},range_label:string} */
+    private function windowMeta(array $window): array
     {
-        $openWork = 0;
-        $oldest = null;
-        $turnaround = null;
-        $turnaroundUnit = null;
-
-        $reliableFrom = $this->reliableFrom();
-        $bounded = false;
-
-        if ($operations !== null) {
-            foreach ($operations['queues'] ?? [] as $queue) {
-                $openWork += (int) ($queue['backlog']['open'] ?? 0);
-
-                $age = $this->measurableAge($queue['backlog'] ?? [], $reliableFrom, $bounded);
-
-                if ($age !== null) {
-                    $oldest = $oldest === null ? $age : max($oldest, $age);
-                }
-            }
-
-            // Weighted across the reported types, so a category that closed three
-            // jobs does not pull the headline as hard as one that closed three
-            // hundred.
-            [$turnaround, $turnaroundUnit] = $this->averageTurnaround($operations['turnaround_by_type'] ?? []);
-        }
-
-        $techniciansLive = null;
-        $techniciansTotal = null;
-        $topTech = [];
-
-        if ($tech !== null) {
-            $locations = $tech['locations'] ?? [];
-            $techniciansTotal = count($locations);
-            $techniciansLive = count(array_filter($locations, fn ($row) => (bool) ($row['is_live'] ?? false)));
-
-            $workload = $tech['workload'] ?? [];
-            usort($workload, fn ($a, $b) => (int) ($b['completed'] ?? 0) - (int) ($a['completed'] ?? 0));
-            $topTech = array_slice($workload, 0, 10);
-        }
-
         return [
-            'available' => $operations !== null || $tech !== null,
-            'open_work' => $operations !== null ? $openWork : null,
-            'oldest_open_days' => $oldest,
-            'average_turnaround' => $turnaround,
-            'turnaround_unit' => $turnaroundUnit,
-            'turnaround_by_type' => $operations['turnaround_by_type'] ?? [],
-            'technicians_live' => $techniciansLive,
-            'technicians_reporting' => $techniciansTotal,
-            // Surfaced so the panel can state the floor rather than leaving a
-            // reader to wonder why an obviously ancient job reports 40 days.
-            'reliable_from' => $reliableFrom?->toDateString(),
-            'age_bounded' => $bounded,
-            'concerns' => $operations['concerns'] ?? [],
-            'repair_categories' => $operations['repair_categories'] ?? [],
-            'top_tech' => $topTech,
+            'range' => ['from' => $window['from'], 'to' => $window['to']],
+            'range_label' => $window['label_long'],
         ];
-    }
-
-    /**
-     * The date before which operational timestamps mean nothing.
-     *
-     * Null disables the floor, which is what an installation with clean history
-     * should set. See config/reporting.php for why the default is not null.
-     */
-    private function reliableFrom(): ?Carbon
-    {
-        $configured = trim((string) config('reporting.reliable_from', ''));
-
-        return $configured === '' ? null : ReportPeriod::parse($configured);
-    }
-
-    /**
-     * How long the oldest open item has genuinely been waiting.
-     *
-     * A row opened before records became reliable is aged from the floor rather
-     * than from its own timestamp: the honest claim is "open for at least this
-     * long", not a four-figure day count computed against a date that was never
-     * real. `$bounded` is set by reference so the caller can say so on screen —
-     * silently clamping a number and presenting it as measured would be the same
-     * dishonesty in the other direction.
-     */
-    private function measurableAge(array $backlog, ?Carbon $reliableFrom, bool &$bounded): ?int
-    {
-        $age = $backlog['oldest_age_days'] ?? null;
-
-        if ($age === null) {
-            return null;
-        }
-
-        if ($reliableFrom === null) {
-            return (int) $age;
-        }
-
-        $openedAt = ReportPeriod::parse(substr((string) ($backlog['oldest_opened_at'] ?? ''), 0, 10));
-
-        // No parsable open date, or one at/after the floor: the reported age
-        // stands as measured.
-        if ($openedAt !== null && $openedAt->greaterThanOrEqualTo($reliableFrom)) {
-            return (int) $age;
-        }
-
-        $bounded = true;
-
-        return (int) $reliableFrom->diffInDays(Carbon::now()->startOfDay());
-    }
-
-    /**
-     * One blended turnaround from the per-type figures.
-     *
-     * Only types sharing the majority unit are blended. The two schemas measure
-     * different things — minutes on site against the age of a ticket in hours —
-     * and averaging across them would produce a number that is not a duration of
-     * anything.
-     *
-     * @return array{0:float|null,1:string|null}
-     */
-    private function averageTurnaround(array $byType): array
-    {
-        $units = [];
-
-        foreach ($byType as $row) {
-            $unit = (string) ($row['unit'] ?? 'minutes');
-            $units[$unit] = ($units[$unit] ?? 0) + (int) ($row['closed'] ?? 0);
-        }
-
-        if ($units === []) {
-            return [null, null];
-        }
-
-        arsort($units);
-        $unit = array_key_first($units);
-        $field = $unit === 'hours' ? 'average_hours' : 'average_minutes';
-
-        $weighted = 0.0;
-        $closed = 0;
-
-        foreach ($byType as $row) {
-            if ((string) ($row['unit'] ?? 'minutes') !== $unit) {
-                continue;
-            }
-
-            $average = $row[$field] ?? null;
-            $count = (int) ($row['closed'] ?? 0);
-
-            if ($average === null || $count === 0) {
-                continue;
-            }
-
-            $weighted += (float) $average * $count;
-            $closed += $count;
-        }
-
-        return [$closed > 0 ? round($weighted / $closed, 1) : null, $unit];
     }
 
     /**
      * Which databases answered, and which did not.
      *
-     * Taken from whichever section reported the most complete picture. A summary
+     * Taken from whichever payload reported the most complete picture. A summary
      * built on six of eight branches is not wrong, but it must not be read as
      * eight — so the shortfall travels with the figures.
+     *
+     * @param array<string,?array> $payloads
      */
-    private function databases(array $sections): array
+    private function databases(array $payloads): array
     {
         $best = null;
 
-        foreach ($sections as $payload) {
-            $aggregate = $payload['aggregate'] ?? null;
+        foreach ($payloads as $payload) {
+            $aggregate = is_array($payload) ? ($payload['aggregate'] ?? null) : null;
 
             if ($aggregate === null) {
                 continue;
