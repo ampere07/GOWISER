@@ -1100,8 +1100,12 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         case 'completed':
           textColor = 'text-green-400';
           break;
-        case 'scheduled':
+        // Split out of the blue group: sharing a colour with "In Progress"
+        // made the two indistinguishable in the table.
         case 'reschedule':
+          textColor = 'text-purple-400';
+          break;
+        case 'scheduled':
         case 'in progress':
           textColor = 'text-blue-400';
           break;

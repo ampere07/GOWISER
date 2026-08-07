@@ -685,7 +685,7 @@ const AddReportContent: React.FC<{
         ['Name', formData.report_name],
         ['Type', formData.report_type],
         ['Schedule', scheduleSummary],
-        ['Period', formData.date_from && formData.date_to ? `${formData.date_from} to ${formData.date_to}` : ''],
+        ['First period', formData.date_from && formData.date_to ? `${formData.date_from} to ${formData.date_to}` : ''],
         ['Recipients', recipients.join(', ')],
     ];
 
@@ -847,7 +847,7 @@ const AddReportContent: React.FC<{
                     maxLength={10}
                     autoCapitalize="none"
                     error={errors.date_to}
-                    hint="The window of data each generated report covers."
+                    hint="The first report covers these dates. Each scheduled send after it rolls forward to the next window of the same length, so no data is sent twice."
                 />
             </View>
 

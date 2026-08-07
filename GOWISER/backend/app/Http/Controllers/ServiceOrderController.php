@@ -1120,28 +1120,59 @@ class ServiceOrderController extends Controller
             // Trigger Reactivation if concern is 'Reactivate' — set the account back to Active
             // and re-apply the customer's plan in RADIUS (reuses the reconnection routine).
             $reactivateStatus = null;
-            $isAlreadyResolvedReactivate = ($originalConcern === 'Reactivate' && $originalSupportStatus === 'resolved');
-            if ($normalizedConcern === 'reactivate' && $supportStatus === 'resolved' && !$isAlreadyResolvedReactivate) {
-                $billingAccount = BillingAccount::where('account_no', $order->account_no)->first();
-                if ($billingAccount && (int) $billingAccount->billing_status_id !== 1) {
-                    \Log::info('Triggering reactivation for Service Order with Reactivate concern', [
-                        'account_no' => $order->account_no,
-                        'current_billing_status_id' => $billingAccount->billing_status_id
-                    ]);
-                    // attemptReconnection sets billing_status_id to 1 (Active) and re-applies the plan in RADIUS
-                    $reactivateStatus = $this->attemptReconnection($billingAccount, $id, $updatedByUser, $organizationId);
+            // Compared case-insensitively — the old `=== 'Reactivate'` check missed
+            // any other casing. 'reactivation' is accepted too because the
+            // repair-category lookup spells it that way and the two get mixed up.
+            $reactivateConcerns = ['reactivate', 'reactivation'];
+            $isAlreadyResolvedReactivate = in_array(strtolower(trim($originalConcern)), $reactivateConcerns, true)
+                && $originalSupportStatus === 'resolved';
 
-                    // Re-activate the customer's user account (counterpart to pullout, which sets active = 0)
-                    try {
-                        \App\Models\User::where('username', $order->account_no)->update(['active' => 1]);
-                        \Log::info('[SERVICE ORDER REACTIVATE DB] Updated user active status to 1 for Account: ' . $order->account_no);
-                    } catch (\Exception $e) {
-                        \Log::error('[SERVICE ORDER REACTIVATE DB USER EXCEPTION] ' . $e->getMessage());
+            if (in_array($normalizedConcern, $reactivateConcerns, true) && $supportStatus === 'resolved') {
+                // Forced, and deliberately outside the billing check below.
+                // Gating this on "billing is not already Active" is exactly what
+                // kept users.active at 0: four other paths restore
+                // billing_status_id without touching the portal login, so by the
+                // time the reactivation ticket was resolved the account usually
+                // looked Active already and the write was skipped. Re-running it
+                // is harmless and repairs any account left stuck that way.
+                try {
+                    $activated = \App\Models\User::where('username', $order->account_no)
+                        ->update(['active' => 1]);
+
+                    if ($activated === 0) {
+                        // Not the same as success: no portal login exists for this
+                        // account number. The previous version logged success either way.
+                        \Log::warning('[REACTIVATE] No users row with username = account_no; nothing to activate.', [
+                            'account_no' => $order->account_no
+                        ]);
+                    } else {
+                        \Log::info('[REACTIVATE] users.active set to 1', [
+                            'account_no' => $order->account_no,
+                            'rows' => $activated
+                        ]);
                     }
-                } else {
-                    \Log::info('Reactivate concern skipped — billing account already Active or not found', [
+                } catch (\Exception $e) {
+                    \Log::error('[REACTIVATE] Failed to set users.active = 1: ' . $e->getMessage(), [
                         'account_no' => $order->account_no
                     ]);
+                }
+
+                // The billing/RADIUS side stays gated — re-running it for an
+                // account that is already Active would be a no-op at best.
+                if (!$isAlreadyResolvedReactivate) {
+                    $billingAccount = BillingAccount::where('account_no', $order->account_no)->first();
+                    if ($billingAccount && (int) $billingAccount->billing_status_id !== 1) {
+                        \Log::info('Triggering reactivation for Service Order with Reactivate concern', [
+                            'account_no' => $order->account_no,
+                            'current_billing_status_id' => $billingAccount->billing_status_id
+                        ]);
+                        // attemptReconnection sets billing_status_id to 1 (Active) and re-applies the plan in RADIUS
+                        $reactivateStatus = $this->attemptReconnection($billingAccount, $id, $updatedByUser, $organizationId);
+                    } else {
+                        \Log::info('Reactivate: billing already Active or account not found; RADIUS step skipped', [
+                            'account_no' => $order->account_no
+                        ]);
+                    }
                 }
             }
 

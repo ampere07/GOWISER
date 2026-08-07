@@ -19,8 +19,11 @@ function isTechnician(user: any): boolean {
  * office user for their location would be both useless and alarming. Tracking stops on logout
  * (unmount).
  *
- * Mounted unconditionally by Dashboard, so the guards run in this order and all three must pass:
- * the feature flag, then the technician role check, then the OS permission.
+ * The prominent disclosure Google Play requires is shown by services/locationGateway, which every
+ * request below goes through — this hook never calls Location.request*PermissionsAsync() itself.
+ *
+ * Mounted unconditionally by Dashboard, so the guards run in this order and all four must pass:
+ * the feature flag, then the technician role check, then the disclosure, then the OS permission.
  */
 export function useLocationTracking() {
   useEffect(() => {
@@ -38,7 +41,11 @@ export function useLocationTracking() {
         // Permission prompt + tracking are strictly technician-only.
         if (!isTechnician(user)) return;
 
-        const status = await requestForegroundPermission('useLocationTracking');
+        // reAskIfDeclined: false — this runs automatically on every launch, so someone who has
+        // already turned the disclosure down is not asked again.
+        const status = await requestForegroundPermission('useLocationTracking', {
+          reAskIfDeclined: false,
+        });
         if (status !== 'granted') {
           console.warn('[location] foreground permission not granted:', status);
           return;

@@ -2,15 +2,19 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\EmailQueue;
 use App\Models\Report;
 use App\Models\ReportDispatch;
 use App\Services\GoogleDriveService;
 use App\Services\ReportDataset;
 use App\Services\ReportDispatchService;
 use App\Services\ReportPdfService;
+use App\Support\ReportSettings;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -95,6 +99,15 @@ class ReportController extends Controller
             ], 422);
         }
 
+        // A new date_range redefines the automatic cron's rolling baseline —
+        // without this, the checkpoint left over from the old period could
+        // land the next scheduled window on the wrong dates (e.g. a shorter
+        // period would compute a start date already past its own end).
+        if ($validated['date_range'] !== $report->date_range
+            && Schema::hasColumn('reports', 'last_period_end')) {
+            $report->last_period_end = null;
+        }
+
         $report->fill($validated)->save();
 
         return response()->json([
@@ -104,6 +117,54 @@ class ReportController extends Controller
         ]);
     }
 
+    /**
+     * Global reporting switches. Readable by anyone who can reach the reports
+     * page; only writable by an administrator (see routes/api.php).
+     */
+    public function settings()
+    {
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'auto_send_enabled' => ReportSettings::autoSendEnabled(),
+            ],
+        ]);
+    }
+
+    public function updateSettings(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'auto_send_enabled' => ['required', 'boolean'],
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please supply auto_send_enabled as a boolean.',
+                'errors'  => $e->errors(),
+            ], 422);
+        }
+
+        $enabled = (bool) $validated['auto_send_enabled'];
+
+        ReportSettings::setAutoSendEnabled($enabled, $this->actorName($request));
+
+        return response()->json([
+            'success' => true,
+            'message' => $enabled
+                ? 'Automatic report sending is now enabled.'
+                : 'Automatic report sending is now disabled. Scheduled reports will not be sent.',
+            'data'    => ['auto_send_enabled' => $enabled],
+        ]);
+    }
+
+    /**
+     * Delete a report and everything scheduled off the back of it.
+     *
+     * Restricted to Super Admin by the `role` middleware on the route — the
+     * check is not repeated here because the route is the single entry point,
+     * but note that removing that middleware silently un-protects this method.
+     */
     public function destroy(int $id)
     {
         $report = Report::find($id);
@@ -111,9 +172,45 @@ class ReportController extends Controller
             return response()->json(['success' => false, 'message' => 'Report not found.'], 404);
         }
 
-        $report->delete();
+        $name = $report->report_name;
 
-        return response()->json(['success' => true, 'message' => 'Report deleted.']);
+        try {
+            DB::transaction(function () use ($report) {
+                // Both of these are keyed to this report alone — dispatches by
+                // report_id, queued emails by the "REPORT-{id}" account
+                // reference ReportDispatchService stamps on them — so no other
+                // report's history or pending delivery is touched.
+                ReportDispatch::where('report_id', $report->id)->delete();
+
+                EmailQueue::where('account_no', 'REPORT-' . $report->id)
+                    ->whereIn('status', ['pending', 'failed'])
+                    ->delete();
+
+                $report->delete();
+            });
+        } catch (\Throwable $e) {
+            // Detail goes to the log, not to the response: the raw driver
+            // message can carry table and column names.
+            Log::error('Failed to delete report', [
+                'report_id' => $id,
+                'error'     => $e->getMessage(),
+                'file'      => $e->getFile() . ':' . $e->getLine(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not delete the report. Please try again, or contact your administrator if it keeps failing.',
+            ], 500);
+        }
+
+        // Attachment files for the deleted emails are left to the
+        // reports:queue stale-attachment sweep: unlinking here would not roll
+        // back with the transaction above.
+
+        return response()->json([
+            'success' => true,
+            'message' => "\"{$name}\" and its scheduled delivery history have been deleted.",
+        ]);
     }
 
     /** Re-render the PDF for an existing report and refresh its Drive link. */
@@ -213,6 +310,14 @@ class ReportController extends Controller
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
+
+    /** Who to attribute a settings change to. */
+    private function actorName(Request $request): string
+    {
+        $user = $request->user();
+
+        return (string) ($user->email_address ?? $user->username ?? 'system');
+    }
 
     /**
      * Validation that mirrors the form's dynamic rules.

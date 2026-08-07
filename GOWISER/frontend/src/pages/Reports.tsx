@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
     RefreshCw, Filter, ArrowUp, ArrowDown, ExternalLink,
-    ChevronLeft, ChevronRight, X, Settings2, FileText, Plus, DownloadCloud
+    ChevronLeft, ChevronRight, X, Settings2, FileText, Plus, DownloadCloud,
+    ToggleLeft, ToggleRight, Trash2, Loader2, AlertTriangle
 } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
@@ -30,6 +31,16 @@ interface ReportData {
     file_url?: string;
     is_active?: boolean | number | null;
     last_dispatched_at?: string | null;
+}
+
+interface ModalConfig {
+    isOpen: boolean;
+    type: 'success' | 'error' | 'confirm';
+    title: string;
+    message: string;
+    /** Label for the primary button on a confirm dialog. */
+    confirmLabel?: string;
+    onConfirm?: () => void;
 }
 
 const ALL_COLUMNS = [
@@ -188,6 +199,36 @@ const hasReportsAccess = (): boolean => {
     }
 };
 
+/**
+ * Deleting a report is Super Admin only.
+ *
+ * The role name is compared lower-cased because the login endpoint sends it
+ * that way ("superadmin"); comparing against 'SuperAdmin' elsewhere in the app
+ * silently never matches and leaves only the role_id branch working.
+ *
+ * This hides the control. The route is separately gated server-side, so a user
+ * who forges authData still gets a 403.
+ */
+const isSuperAdmin = (): boolean => {
+    try {
+        const authData = localStorage.getItem('authData');
+        if (!authData) return false;
+        const user = JSON.parse(authData);
+        return String(user.role_id ?? '') === '7'
+            || (user.role ?? '').toLowerCase().trim() === 'superadmin';
+    } catch {
+        return false;
+    }
+};
+
+const errorMessage = (err: any): string => {
+    const status = err?.response?.status;
+    if (status === 401) return 'Your session has expired. Please sign in again.';
+    return err?.response?.data?.message
+        || err?.message
+        || 'An unexpected error occurred. Please try again.';
+};
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 const Reports: React.FC = () => {
@@ -195,12 +236,26 @@ const Reports: React.FC = () => {
     const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [accessDenied] = useState<boolean>(!hasReportsAccess());
+    const [canDelete] = useState<boolean>(isSuperAdmin());
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
     // Data
     const [rows, setRows] = useState<ReportData[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
+
+    // Auto Send Report master switch. null until the setting has loaded, so the
+    // control is never rendered showing a state that may not be the real one.
+    const [autoSend, setAutoSend] = useState<boolean | null>(null);
+    const [isSavingAutoSend, setIsSavingAutoSend] = useState(false);
+    const [deletingId, setDeletingId] = useState<number | null>(null);
+
+    const [modal, setModal] = useState<ModalConfig>({
+        isOpen: false,
+        type: 'success',
+        title: '',
+        message: '',
+    });
 
     // UI state
     const [searchQuery, setSearchQuery] = useState('');
@@ -270,9 +325,121 @@ const Reports: React.FC = () => {
         }
     };
 
+    const fetchSettings = useCallback(async () => {
+        try {
+            const res = await apiClient.get<{
+                success: boolean;
+                data: { auto_send_enabled: boolean };
+            }>('/reports/settings');
+
+            if (res.data?.success) {
+                setAutoSend(Boolean(res.data.data?.auto_send_enabled));
+            }
+        } catch (err) {
+            // Leaving this null hides the toggle rather than showing a state we
+            // cannot vouch for.
+            console.error('Failed to load report settings:', err);
+            setAutoSend(null);
+        }
+    }, []);
+
     useEffect(() => {
-        if (!accessDenied) fetchReports();
-    }, [accessDenied]);
+        if (!accessDenied) {
+            fetchReports();
+            fetchSettings();
+        }
+    }, [accessDenied, fetchSettings]);
+
+    // ── Auto Send Report ───────────────────────────────────────────────────────
+
+    const handleToggleAutoSend = async () => {
+        if (autoSend === null || isSavingAutoSend) return;
+
+        const next = !autoSend;
+        setIsSavingAutoSend(true);
+
+        try {
+            const res = await apiClient.put<{
+                success: boolean;
+                message?: string;
+                data: { auto_send_enabled: boolean };
+            }>('/reports/settings', { auto_send_enabled: next });
+
+            if (!res.data?.success) {
+                throw new Error(res.data?.message || 'Failed to update the setting.');
+            }
+
+            setAutoSend(Boolean(res.data.data?.auto_send_enabled));
+            await fetchReports(true);
+
+            setModal({
+                isOpen: true,
+                type: 'success',
+                title: next ? 'Auto Send Enabled' : 'Auto Send Disabled',
+                message: res.data.message
+                    || (next
+                        ? 'Scheduled reports will be sent automatically.'
+                        : 'Scheduled reports will no longer be sent automatically.'),
+            });
+        } catch (err: any) {
+            setModal({
+                isOpen: true,
+                type: 'error',
+                title: 'Could Not Update Auto Send',
+                message: errorMessage(err),
+            });
+        } finally {
+            setIsSavingAutoSend(false);
+        }
+    };
+
+    // ── Delete (Super Admin only) ──────────────────────────────────────────────
+
+    const performDelete = async (row: ReportData) => {
+        setDeletingId(row.id);
+
+        try {
+            const res = await apiClient.delete<{ success: boolean; message?: string }>(
+                `/reports/${row.id}`
+            );
+
+            if (!res.data?.success) {
+                throw new Error(res.data?.message || 'Failed to delete the report.');
+            }
+
+            await fetchReports(true);
+
+            setModal({
+                isOpen: true,
+                type: 'success',
+                title: 'Report Deleted',
+                message: res.data.message || `"${row.report_name}" has been deleted.`,
+            });
+        } catch (err: any) {
+            setModal({
+                isOpen: true,
+                type: 'error',
+                title: 'Delete Failed',
+                message: errorMessage(err),
+            });
+        } finally {
+            setDeletingId(null);
+        }
+    };
+
+    const requestDelete = (row: ReportData) => {
+        setModal({
+            isOpen: true,
+            type: 'confirm',
+            title: 'Delete this report?',
+            message: `"${row.report_name}" will be removed, along with its delivery history and any emails still waiting to go out.\n\nThis cannot be undone.`,
+            confirmLabel: 'Delete Report',
+            onConfirm: () => {
+                setModal(prev => ({ ...prev, isOpen: false }));
+                void performDelete(row);
+            },
+        });
+    };
 
     // ── Toggle columns ─────────────────────────────────────────────────────────
 
@@ -509,6 +676,33 @@ const Reports: React.FC = () => {
                             )}
                         </div>
 
+                        {/* Auto Send Report master switch */}
+                        {autoSend !== null && (
+                            <button
+                                onClick={handleToggleAutoSend}
+                                disabled={isSavingAutoSend}
+                                title={autoSend
+                                    ? 'Scheduled reports are being emailed automatically. Click to turn this off.'
+                                    : 'Scheduled reports are NOT being emailed. Click to turn automatic sending back on.'}
+                                className={`flex items-center gap-1.5 px-3 py-2 text-sm border rounded-md transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${autoSend
+                                    ? 'text-white'
+                                    : isDarkMode
+                                        ? 'text-amber-300 border-amber-700/60 bg-amber-500/10 hover:bg-amber-500/20'
+                                        : 'text-amber-700 border-amber-300 bg-amber-50 hover:bg-amber-100'
+                                    }`}
+                                style={autoSend ? { backgroundColor: primary, borderColor: primary } : undefined}
+                            >
+                                {isSavingAutoSend
+                                    ? <Loader2 size={14} className="animate-spin" />
+                                    : autoSend
+                                        ? <ToggleRight size={14} />
+                                        : <ToggleLeft size={14} />}
+                                <span className="whitespace-nowrap">
+                                    Auto Send: {autoSend ? 'On' : 'Off'}
+                                </span>
+                            </button>
+                        )}
+
                         {/* Refresh */}
                         <button
                             onClick={() => fetchReports(true)}
@@ -521,6 +715,22 @@ const Reports: React.FC = () => {
                         </button>
                     </div>
                 </div>
+
+                {/* A disabled master switch is easy to forget about, so it is
+                    stated on the page rather than only in the toolbar pill. */}
+                {autoSend === false && (
+                    <div className={`flex items-start gap-2 px-5 py-2.5 border-b text-xs flex-shrink-0 ${isDarkMode
+                        ? 'bg-amber-500/10 border-amber-800/50 text-amber-200'
+                        : 'bg-amber-50 border-amber-200 text-amber-800'}`}
+                    >
+                        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                        <span>
+                            <strong className="font-semibold">Automatic sending is off.</strong>{' '}
+                            The schedules below are saved but no reports are being emailed. Turn
+                            "Auto Send" back on to resume.
+                        </span>
+                    </div>
+                )}
 
                 {/* ── Table area ──────────────────────────────────────────────────────── */}
                 <div className="flex-1 min-h-0 overflow-auto" ref={scrollRef}>
@@ -574,9 +784,9 @@ const Reports: React.FC = () => {
                                             </div>
                                         </th>
                                     ))}
-                                    {/* Action column (Download) */}
+                                    {/* Action column: Download, plus Delete for Super Admin */}
                                     <th className={`sticky top-0 z-20 px-3 py-2.5 text-center font-semibold border-b text-xs ${thCls} whitespace-nowrap`}>
-                                        Download
+                                        {canDelete ? 'Actions' : 'Download'}
                                     </th>
                                 </tr>
                             </thead>
@@ -606,7 +816,7 @@ const Reports: React.FC = () => {
                                                 </td>
                                             ))}
                                             <td className={`px-3 py-2 border-b text-center ${tdCls}`}>
-                                                <div className="flex justify-center">
+                                                <div className="flex justify-center items-center gap-2">
                                                     {row.file_url ? (
                                                         <a
                                                             href={row.file_url}
@@ -623,6 +833,24 @@ const Reports: React.FC = () => {
                                                         </a>
                                                     ) : (
                                                         <span className="text-gray-400 italic text-[11px]">No file</span>
+                                                    )}
+
+                                                    {canDelete && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => requestDelete(row)}
+                                                            disabled={deletingId !== null}
+                                                            title="Delete this report"
+                                                            aria-label={`Delete ${row.report_name}`}
+                                                            className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isDarkMode
+                                                                ? 'border-gray-700 text-red-400 hover:bg-red-500/10 hover:border-red-800'
+                                                                : 'border-gray-300 text-red-500 hover:bg-red-50 hover:border-red-300'
+                                                                }`}
+                                                        >
+                                                            {deletingId === row.id
+                                                                ? <Loader2 size={14} className="animate-spin" />
+                                                                : <Trash2 size={14} />}
+                                                        </button>
                                                     )}
                                                 </div>
                                             </td>
@@ -734,6 +962,56 @@ const Reports: React.FC = () => {
                 title="Report Filters"
                 subtitle="Refine your scheduled report results"
             />
+
+            {/* ── Confirmation / result dialog ─────────────────────────── */}
+            {modal.isOpen && (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[10000] p-4">
+                    <div className={`border rounded-lg p-6 max-w-md w-full ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
+                        <div className="flex items-start gap-3 mb-4">
+                            {modal.type !== 'success' && (
+                                <div
+                                    className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+                                    style={{ backgroundColor: '#ef444420' }}
+                                >
+                                    <AlertTriangle size={18} stroke="#ef4444" />
+                                </div>
+                            )}
+                            <h3 className={`text-lg font-semibold ${text} ${modal.type !== 'success' ? 'mt-1' : ''}`}>
+                                {modal.title}
+                            </h3>
+                        </div>
+
+                        <p className={`mb-6 text-sm whitespace-pre-line ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            {modal.message}
+                        </p>
+
+                        <div className="flex items-center justify-end gap-3">
+                            {modal.type === 'confirm' && (
+                                <button
+                                    type="button"
+                                    onClick={() => setModal(prev => ({ ...prev, isOpen: false }))}
+                                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${isDarkMode
+                                        ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (modal.onConfirm) modal.onConfirm();
+                                    else setModal(prev => ({ ...prev, isOpen: false }));
+                                }}
+                                className="px-4 py-2 text-white rounded text-sm font-medium transition-opacity hover:opacity-90"
+                                style={{ backgroundColor: modal.type === 'confirm' ? '#dc2626' : primary }}
+                            >
+                                {modal.type === 'confirm' ? (modal.confirmLabel ?? 'Confirm') : 'OK'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 };

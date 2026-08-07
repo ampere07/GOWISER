@@ -204,6 +204,17 @@ const parseRecipients = (raw: string): { valid: string[]; invalid: string[] } =>
 const getSchedule = (value: string): ScheduleOption | undefined =>
     REPORT_SCHEDULES.find(s => s.value === value);
 
+/** Inclusive day count between two YYYY-MM-DD dates, or null if either is unset/invalid. */
+const periodLengthInDays = (from: string, to: string): number | null => {
+    if (!from || !to) return null;
+
+    const start = Date.parse(`${from}T00:00:00`);
+    const end = Date.parse(`${to}T00:00:00`);
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+
+    return Math.round((end - start) / 86_400_000) + 1;
+};
+
 /** Days in a month, ignoring leap years for February (28 is the safe floor). */
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
@@ -413,6 +424,11 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
         clearError('date_from');
         clearError('date_to');
     };
+
+    const periodDays = useMemo(
+        () => periodLengthInDays(formData.date_from, formData.date_to),
+        [formData.date_from, formData.date_to]
+    );
 
     const activeQuickRange = useMemo(() => {
         if (!formData.date_from || !formData.date_to) return null;
@@ -644,8 +660,9 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
         ['Name', formData.report_name],
         ['Type', formData.report_type],
         ['Schedule', scheduleSummary],
-        ['Period', formData.date_from && formData.date_to
+        ['First period', formData.date_from && formData.date_to
             ? `${formatDisplayDate(formData.date_from)} – ${formatDisplayDate(formData.date_to)}`
+                + (periodDays ? `, then rolling ${periodDays} days` : '')
             : ''],
         ['Recipients', recipients.valid.join(', ')],
     ];
@@ -961,7 +978,9 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
                             </div>
 
                             <p className={hintCls}>
-                                The window of data each generated report covers.
+                                {periodDays
+                                    ? `The first report covers these dates. Each scheduled send after it rolls forward to the next ${periodDays}-day window, so no data is sent twice.`
+                                    : 'The first report covers these dates. Each scheduled send after it rolls forward to the next window of the same length, so no data is sent twice.'}
                             </p>
                         </div>
 

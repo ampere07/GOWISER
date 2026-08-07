@@ -64,12 +64,21 @@ Route::get('/commissions/bonus-history', [CommissionController::class, 'getBonus
 Route::post('/commissions/bonus-history', [CommissionController::class, 'storeBonusHistory']);
 Route::post('/reports', [ReportController::class , 'store']);
 Route::get('/reports/options', [ReportController::class , 'options']);
-Route::put('/reports/{id}', [ReportController::class , 'update']);
-Route::delete('/reports/{id}', [ReportController::class , 'destroy']);
-Route::get('/reports/{id}/preview', [ReportController::class , 'preview']);
-Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate']);
-Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow']);
-Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches']);
+// Registered before the /reports/{id} routes below, which have no numeric
+// constraint and would otherwise match "settings" as an id.
+Route::get('/reports/settings', [ReportController::class , 'settings']);
+Route::put('/reports/settings', [ReportController::class , 'updateSettings'])
+    ->middleware('role:administrator,super_admin');
+Route::put('/reports/{id}', [ReportController::class , 'update'])->whereNumber('id');
+// Deleting a report also drops its dispatch ledger and unsent emails, so it is
+// Super Admin only — enforced here, not just hidden in the UI.
+Route::delete('/reports/{id}', [ReportController::class , 'destroy'])
+    ->whereNumber('id')
+    ->middleware('role:super_admin');
+Route::get('/reports/{id}/preview', [ReportController::class , 'preview'])->whereNumber('id');
+Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate'])->whereNumber('id');
+Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow'])->whereNumber('id');
+Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches'])->whereNumber('id');
 Route::get('/reports-migrate-pdf', function () {
     $reports = \App\Models\Report::all();
     $pdfService = new \App\Services\ReportPdfService();

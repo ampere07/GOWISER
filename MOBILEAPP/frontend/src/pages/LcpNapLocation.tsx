@@ -237,9 +237,11 @@ const LcpNapLocation: React.FC = () => {
       }
     };
     initData();
-    // No-op while location services are disabled for the Play Store build — the gateway never
-    // reaches a native prompt, so the map simply opens without a "you are here" marker.
-    requestForegroundPermission('LcpNapLocation').catch(() => { });
+    // Warms the permission so the map can open with a "you are here" marker. reAskIfDeclined:
+    // false because the user did not ask for this — it fires on mount — and re-showing the
+    // disclosure to someone who already declined would be nagging. The explicit "locate me"
+    // button below still re-asks.
+    requestForegroundPermission('LcpNapLocation', { reAskIfDeclined: false }).catch(() => { });
   }, []);
 
   // Combined search using local markers + Nominatim (free OSM geocoding)

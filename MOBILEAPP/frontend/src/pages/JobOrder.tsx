@@ -25,8 +25,10 @@ const StatusText = React.memo(({ status, type }: { status?: string | null, type:
       case 'completed':
         textColor = '#4ade80';
         break;
+      // Purple (purple-400), not blue: sharing blue with "In Progress" made
+      // the two indistinguishable in the list.
       case 'reschedule':
-        textColor = '#60a5fa';
+        textColor = '#c084fc';
         break;
       case 'inprogress':
       case 'in progress':

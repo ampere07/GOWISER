@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Report;
 use App\Services\ReportDispatchService;
+use App\Support\ReportSettings;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -14,7 +15,7 @@ class QueueScheduledReports extends Command
                             {--report= : Dispatch only this report ID}
                             {--now= : Evaluate as if it were this time, e.g. "2026-07-30 17:40" (dry-run aid)}
                             {--dry-run : Report what would be dispatched without queueing anything}
-                            {--force : Ignore the duplicate ledger and dispatch anyway (manual occurrence)}
+                            {--force : Ignore the duplicate ledger and the Auto Send Report switch, and dispatch anyway (manual occurrence)}
                             {--no-cleanup : Skip the stale-attachment sweep}
                             {--no-lock : Run even if another instance holds the lock (diagnostics only)}';
 
@@ -79,6 +80,18 @@ class QueueScheduledReports extends Command
             'dry_run'  => $dryRun,
             'force'    => $force,
         ]);
+
+        // Master switch, toggled from the Reports page. --force is the operator
+        // override: it already means "this is a deliberate manual send".
+        if (!$force && !ReportSettings::autoSendEnabled()) {
+            $logger->info('Automatic report sending is disabled; no reports processed.');
+            $this->info('Auto Send Report is disabled. Skipping all scheduled reports.');
+
+            // Housekeeping still runs: orphaned attachments are not "sending".
+            $this->sweep($dispatcher);
+
+            return Command::SUCCESS;
+        }
 
         $due = $dispatcher->dueReports($now);
 
@@ -161,6 +174,13 @@ class QueueScheduledReports extends Command
                     $this->line("  {$label} → already dispatched for this occurrence, skipped.");
                     break;
 
+                // Nothing new to report yet — the rolling window has caught up
+                // to today. Not a failure.
+                case 'skipped':
+                    $stats['skipped']++;
+                    $this->line("  {$label} → {$result['message']}");
+                    break;
+
                 default:
                     $stats['failed']++;
                     $this->error("  {$label} → {$result['message']}");
@@ -171,8 +191,8 @@ class QueueScheduledReports extends Command
         $this->sweep($dispatcher);
 
         $summary = sprintf(
-            'Dispatched %d report(s) as %d email(s). Duplicates skipped: %d. Failed: %d.',
-            $stats['queued'], $stats['emails'], $stats['duplicate'], $stats['failed']
+            'Dispatched %d report(s) as %d email(s). Duplicates skipped: %d. Skipped: %d. Failed: %d.',
+            $stats['queued'], $stats['emails'], $stats['duplicate'], $stats['skipped'], $stats['failed']
         );
 
         $logger->info('--- reports:queue run finished ---', $stats);

@@ -10,10 +10,16 @@
  * `getCurrentPosition()` resolves to null. A caller that forgets to check the flag — or hits a
  * denied permission, a switched-off GPS radio, or a fix that never arrives — lands in the same
  * "location unavailable" branch it already has, instead of crashing a screen.
+ *
+ * It is also where Google Play's prominent-disclosure requirement is met. Because every screen
+ * already comes through here, the disclosure is shown from the two request functions below rather
+ * than from each caller — so there is no way to reach a native location prompt without it, and no
+ * screen has to remember the rule. See services/locationConsent.
  */
 
 import * as Location from 'expo-location';
 import { LOCATION_SERVICES_ENABLED } from '../config/featureFlags';
+import { requireDisclosure } from './locationConsent';
 
 export interface Coordinates {
     latitude: number;
@@ -44,14 +50,26 @@ const warnDisabledOnce = (caller: string): void => {
     );
 };
 
+export interface PermissionRequestOptions {
+    /**
+     * Show the disclosure again to someone who declined it before. Leave it true for anything the
+     * user explicitly initiated — pressing "use my current location" is a clear request, so
+     * re-asking is appropriate. Pass false from automatic flows, which must not nag.
+     */
+    reAskIfDeclined?: boolean;
+}
+
 /**
- * Request foreground ("while using the app") location permission.
+ * Request foreground ("while using the app") location permission, showing the prominent disclosure
+ * first whenever the OS is actually going to prompt.
  *
- * Safe to call repeatedly: once the OS has recorded a decision it returns the stored answer
- * without showing the dialog again, so screens may call this on every mount.
+ * Safe to call repeatedly: an already-granted permission short-circuits before the disclosure, and
+ * once the OS has recorded a decision it returns the stored answer without showing its dialog
+ * again — so screens may still call this on every mount.
  */
 export async function requestForegroundPermission(
-    caller = 'requestForegroundPermission'
+    caller = 'requestForegroundPermission',
+    options: PermissionRequestOptions = {}
 ): Promise<LocationPermissionStatus> {
     if (!LOCATION_SERVICES_ENABLED) {
         warnDisabledOnce(caller);
@@ -59,6 +77,20 @@ export async function requestForegroundPermission(
     }
 
     try {
+        const current = await Location.getForegroundPermissionsAsync();
+
+        // Already granted: the disclosure was shown before this was granted, so there is nothing
+        // left to disclose and no prompt to precede.
+        if (current.status === Location.PermissionStatus.GRANTED) return 'granted';
+
+        // Permanently denied at OS level. Asking again does nothing and shows no prompt, so there
+        // is no request for a disclosure to precede — and no reason to interrupt the user with one.
+        if (!current.canAskAgain) return 'denied';
+
+        const disclosed = await requireDisclosure('disclosure', options);
+        if (!disclosed) return 'denied';
+
+        // Consent given — now, and only now, ask the OS.
         const { status } = await Location.requestForegroundPermissionsAsync();
         return status === Location.PermissionStatus.GRANTED ? 'granted' : 'denied';
     } catch (error) {
@@ -71,12 +103,15 @@ export async function requestForegroundPermission(
 }
 
 /**
- * Request background ("always") location permission.
+ * Request background ("always") location permission, explaining the OS settings screen first.
  *
  * Separate from the foreground request because Android grants the two separately and only offers
  * this one after foreground has been granted — so callers must request foreground FIRST. Only the
  * technician tracking path needs it; a denial there is not fatal, it just confines tracking to
  * while the app is open.
+ *
+ * Android 11+ shows no in-place prompt for this — it sends the user to a system settings page — so
+ * without the lead-in stage of the disclosure most people never find "Allow all the time".
  */
 export async function requestBackgroundPermission(
     caller = 'requestBackgroundPermission'
@@ -87,6 +122,14 @@ export async function requestBackgroundPermission(
     }
 
     try {
+        const current = await Location.getBackgroundPermissionsAsync();
+        if (current.status === Location.PermissionStatus.GRANTED) return 'granted';
+        if (!current.canAskAgain) return 'denied';
+
+        // Declining this stage refuses background only; the foreground grant already given stands.
+        const disclosed = await requireDisclosure('background');
+        if (!disclosed) return 'denied';
+
         const { status } = await Location.requestBackgroundPermissionsAsync();
         return status === Location.PermissionStatus.GRANTED ? 'granted' : 'denied';
     } catch (error) {

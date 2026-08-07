@@ -33,6 +33,12 @@ use Psr\Log\LoggerInterface;
  *
  *  4. CSV INSTEAD OF PDF. Non-summary reports attached a CSV even though the
  *     stored report artifact is a PDF. The PDF is now attached for every type.
+ *
+ *  5. STATIC REPORTING WINDOW. Every scheduled occurrence re-read the report's
+ *     stored date_range verbatim, so a report created for "Jan 1-30" mailed
+ *     that same fixed month forever instead of advancing. Schedule-triggered
+ *     dispatches now roll the window forward by its original length via
+ *     Report::nextAutomaticWindow(); manual sends are unaffected.
  */
 class ReportDispatchService
 {
@@ -178,6 +184,47 @@ class ReportDispatchService
             ];
         }
 
+        // ── Rolling window (schedule-triggered dispatches only) ──────────────
+        //
+        // A manual send (sendNow / --force) mails exactly the stored
+        // date_range, unchanged. A scheduled occurrence instead advances
+        // through consecutive periods of the same length so it never resends
+        // data already mailed. $reportForPdf carries the recomputed window
+        // in memory only — $report itself, and its stored date_range, are
+        // never overwritten, so the next occurrence still has the original
+        // period length to work from.
+        $reportForPdf = $report;
+        $periodEnd    = null;
+
+        if ($trigger === 'schedule') {
+            $window = $report->nextAutomaticWindow($occurrence);
+
+            if ($window === null) {
+                $message = 'No new reporting period is due yet for this occurrence; skipped.';
+
+                $this->skip($claim, $message);
+                $this->logger()->info('Skipped: rolling window not yet due', [
+                    'report_id'   => $report->id,
+                    'report_name' => $report->report_name,
+                ]);
+
+                return [
+                    'status'      => 'skipped',
+                    'message'     => $message,
+                    'dispatch_id' => $claim->id,
+                    'queued'      => 0,
+                    'attachment'  => null,
+                ];
+            }
+
+            [$windowStart, $windowEnd] = $window;
+            $periodEnd = $windowEnd;
+
+            $reportForPdf = (clone $report)->forceFill([
+                'date_range' => "{$windowStart} to {$windowEnd}",
+            ]);
+        }
+
         $recipients = $report->recipients();
         $invalid    = $report->invalidRecipients();
 
@@ -205,7 +252,7 @@ class ReportDispatchService
 
         // ── Generate the attachment ──────────────────────────────────────────
         try {
-            $attachmentPath = $this->pdfService->generate($report);
+            $attachmentPath = $this->pdfService->generate($reportForPdf);
         } catch (\Throwable $e) {
             $message = 'PDF generation failed: ' . $e->getMessage();
 
@@ -247,8 +294,8 @@ class ReportDispatchService
                 $email = EmailQueue::create([
                     'account_no'      => $this->accountReference($report),
                     'recipient_email' => $recipient,
-                    'subject'         => $this->subject($report, $occurrence),
-                    'body_html'       => $this->body($report, $occurrence, basename($attachmentPath)),
+                    'subject'         => $this->subject($reportForPdf, $occurrence),
+                    'body_html'       => $this->body($reportForPdf, $occurrence, basename($attachmentPath)),
                     'attachment_path' => $recipientPath,
                     'email_sender'    => config('reports.mail.from', 'billing@gowiser.ph'),
                     'reply_to'        => config('reports.mail.reply_to', 'billing@gowiser.ph'),
@@ -292,8 +339,19 @@ class ReportDispatchService
             'error_message'    => $errors === [] ? null : implode(' | ', $errors),
         ])->save();
 
-        if (Schema::hasColumn('reports', 'last_dispatched_at') && !$allFailed) {
-            $report->forceFill(['last_dispatched_at' => now()])->saveQuietly();
+        if (!$allFailed) {
+            $updates = [];
+            if (Schema::hasColumn('reports', 'last_dispatched_at')) {
+                $updates['last_dispatched_at'] = now();
+            }
+            // Only advance the checkpoint once the period's emails are actually
+            // queued — a failed dispatch must retry the same window, not skip it.
+            if ($periodEnd !== null && Schema::hasColumn('reports', 'last_period_end')) {
+                $updates['last_period_end'] = $periodEnd;
+            }
+            if ($updates !== []) {
+                $report->forceFill($updates)->saveQuietly();
+            }
         }
 
         return [
@@ -357,6 +415,19 @@ class ReportDispatchService
             'dispatch_id' => $dispatch->id,
             'error'       => $message,
         ]);
+    }
+
+    /**
+     * Records that an occurrence was evaluated but had nothing new to send —
+     * distinct from `fail()`, which means sending was attempted and failed.
+     */
+    private function skip(ReportDispatch $dispatch, string $message): void
+    {
+        $dispatch->fill([
+            'status'        => ReportDispatch::STATUS_SKIPPED,
+            'dispatched_at' => now(),
+            'error_message' => $message,
+        ])->save();
     }
 
     /**

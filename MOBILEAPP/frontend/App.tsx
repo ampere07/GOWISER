@@ -23,6 +23,7 @@ import { version as currentVersion } from './package.json';
 import ForceUpdateModal from './src/modals/ForceUpdateModal';
 import { StatusBar } from 'expo-status-bar';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import LocationDisclosureHost from './src/components/LocationDisclosureHost';
 
 const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours in ms
 const WARNING_TIMEOUT = 1.5 * 60 * 60 * 1000; // 1.5 hours in ms
@@ -344,6 +345,11 @@ function App() {
       ) : (
         <Login onLogin={handleLogin} />
       )}
+
+      {/* Google Play requires a prominent disclosure immediately before any location permission
+          request. Mounted here, outside the logged-in branch, so services/locationGateway can show
+          it from any screen and for any role. */}
+      <LocationDisclosureHost />
 
       {versionConfig && (
         <ForceUpdateModal

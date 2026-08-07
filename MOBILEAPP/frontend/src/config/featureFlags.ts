@@ -9,6 +9,10 @@
  * `location` foreground-service type. If a submission is ever rejected on those grounds, this file
  * is how the capability comes back out without unpicking call sites.
  *
+ * Play also requires an in-app prominent disclosure immediately before each location permission
+ * request. That is not a flag — it is enforced in services/locationGateway, which shows
+ * modals/LocationDisclosureModal before it reaches any native prompt.
+ *
  * These flags govern the JAVASCRIPT only. The permissions are in the manifest because
  * `expo-location` (whose own AndroidManifest declares both location permissions and a
  * `foregroundServiceType="location"` service) is installed and configured through the app.json

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ReportDataset;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -85,6 +86,7 @@ class Report extends Model
         'is_active'          => 'boolean',
         'report_month'       => 'integer',
         'last_dispatched_at' => 'datetime',
+        'last_period_end'    => 'date',
         'created_at'         => 'datetime',
     ];
 
@@ -236,6 +238,79 @@ class Report extends Model
         }
 
         return $this->created_at ? Carbon::parse($this->created_at)->month : 1;
+    }
+
+    // ── Rolling reporting window ──────────────────────────────────────────────
+
+    /** The originally configured [start, end] window, chronological. */
+    public function originalPeriodBounds(): array
+    {
+        return ReportDataset::parseDateRange($this->date_range);
+    }
+
+    /** Length in days of the originally configured window, or null if unset. */
+    public function periodLengthInDays(): ?int
+    {
+        [$start, $end] = $this->originalPeriodBounds();
+        if ($start === null || $end === null) {
+            return null;
+        }
+
+        return (int) Carbon::parse($start)->diffInDays(Carbon::parse($end)) + 1;
+    }
+
+    /**
+     * The [start, end] window the NEXT automatic (schedule-triggered) dispatch
+     * should cover.
+     *
+     * date_range is captured once, at creation/edit time. Before this method
+     * existed, every scheduled occurrence re-read that same literal string
+     * forever, so a report created for "Jan 1-30" kept mailing that exact
+     * month no matter how many times it fired. What should repeat is the
+     * window's LENGTH, not its dates: each automatic send now picks up the
+     * day after the previous one left off (`last_period_end`), so consecutive
+     * periods neither overlap (no duplicate records) nor skip a day.
+     *
+     * Manual sends (sendNow / --force) deliberately do not call this and keep
+     * using date_range verbatim — this only changes the cron path.
+     *
+     * Returns null when there is nothing new to send yet, e.g. a schedule
+     * that fires more often than its configured period is long will
+     * occasionally catch up to "today" and have to wait for the next
+     * calendar day before a further period exists at all. Callers should
+     * skip (not send an empty/duplicate report) when this returns null.
+     *
+     * @return array{0: string, 1: string}|null
+     */
+    public function nextAutomaticWindow(Carbon $occurrence): ?array
+    {
+        [$origStart, $origEnd] = $this->originalPeriodBounds();
+        $periodDays = $this->periodLengthInDays();
+        if ($origStart === null || $origEnd === null || $periodDays === null) {
+            return null;
+        }
+
+        // These are calendar dates, not instants. $occurrence arrives in the
+        // reports timezone while a bare "YYYY-MM-DD" parses in the app default,
+        // so every boundary is rebuilt in the occurrence's zone — otherwise the
+        // offset between the two makes the comparisons below a day out.
+        $timezone = $occurrence->getTimezone();
+        $today    = $occurrence->copy()->startOfDay();
+
+        $lastEnd = $this->last_period_end;
+
+        $start = $lastEnd
+            ? Carbon::parse($lastEnd->format('Y-m-d'), $timezone)->addDay()
+            : Carbon::parse($origStart, $timezone);
+
+        if ($start->greaterThan($today)) {
+            return null;
+        }
+
+        $naturalEnd = $start->copy()->addDays($periodDays - 1);
+        $end        = $naturalEnd->greaterThan($today) ? $today->copy() : $naturalEnd;
+
+        return [$start->format('Y-m-d'), $end->format('Y-m-d')];
     }
 
     /** Scheduled send time as H:i, or null when not set. */

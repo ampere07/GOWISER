@@ -1173,8 +1173,11 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
         case 'completed':
           textColor = 'text-green-400';
           break;
+        // Purple, not blue: sharing blue with "In Progress" made the two
+        // indistinguishable in the table. Matches the sidebar status tree,
+        // which already renders reschedule in purple.
         case 'reschedule':
-          textColor = 'text-blue-400';
+          textColor = 'text-purple-400';
           break;
         case 'inprogress':
         case 'in progress':
