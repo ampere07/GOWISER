@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  CalendarClock,
   CalendarDays,
   CalendarRange,
   Check,
+  Columns2,
   GripVertical,
   Layers,
   Lock,
@@ -16,6 +18,9 @@ import {
   Maximize2,
   Minimize2,
   Receipt,
+  Rows2,
+  SlidersHorizontal,
+  Sun,
   TrendingUp,
   UserMinus,
   UserX,
@@ -28,12 +33,12 @@ import {
   Users,
 } from 'lucide-react';
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
-import Card, { CardHeader, CardBody } from '../components/reporting/Card';
+import Card from '../components/reporting/Card';
 import { Button, ErrorBanner, Pill, useControlClass } from '../components/reporting/primitives';
 import MetricDetailModal, { DetailColumn } from '../components/reporting/MetricDetailModal';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
-import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { useSuspendRefresh } from '../hooks/useAutoRefresh';
 import { reportingService } from '../services/reportingService';
 import {
   ExecutiveMetricKey,
@@ -53,18 +58,81 @@ type SectionKey = 'range' | 'monthly' | 'subscribers' | 'plans';
 
 const DEFAULT_ORDER: SectionKey[] = ['range', 'monthly', 'subscribers', 'plans'];
 
-const LAYOUT_KEY = 'executive_overview_layout';
+/**
+ * How wide a block is, in columns of the two-column page grid.
+ *
+ * Two is the full page width and the default for every block. One puts two
+ * blocks side by side, which is what a wall display with room to spare wants and
+ * what a laptop does not — so it is opt-in per block rather than a breakpoint.
+ */
+type SectionSpan = 1 | 2;
 
-const TIMEFRAMES: { key: ExecutiveTimeframe; label: string }[] = [
-  { key: 'daily', label: 'Daily' },
-  { key: 'weekly', label: 'Weekly' },
-  { key: 'monthly', label: 'Monthly' },
-  { key: 'yearly', label: 'Yearly' },
+const DEFAULT_SPANS: Record<SectionKey, SectionSpan> = {
+  range: 2,
+  monthly: 2,
+  subscribers: 2,
+  plans: 2,
+};
+
+interface Layout {
+  order: SectionKey[];
+  spans: Record<SectionKey, SectionSpan>;
+}
+
+const DEFAULT_LAYOUT: Layout = { order: DEFAULT_ORDER, spans: DEFAULT_SPANS };
+
+/**
+ * Version suffix on the storage key.
+ *
+ * The saved value used to be a bare array of section keys and is now an object
+ * carrying widths as well. Reading the old shape through the new parser would
+ * fall back to the default anyway, but a fresh key means a browser that has been
+ * through both builds cannot end up with half of each.
+ */
+const LAYOUT_KEY = 'executive_overview_layout_v2';
+
+/**
+ * Tells the tiles inside a block how much room they have.
+ *
+ * A block set to half width still contains rows written as "four across", and
+ * four tiles in half a page is four unreadable columns. Passed by context rather
+ * than as a prop because the rows are declared several levels down inside a
+ * section's own JSX, and threading a width through every one of them would mean
+ * remembering to do so on each new row.
+ */
+const SectionWidth = React.createContext<SectionSpan>(2);
+
+/**
+ * The four presets, each with the icon it compresses to.
+ *
+ * The icons are for the sticky bar, where the labels are dropped to buy back
+ * vertical room — so they have to be distinguishable at a glance rather than
+ * merely thematic: a single day, a week's span, a month grid, a year.
+ */
+const TIMEFRAMES: { key: ExecutiveTimeframe; label: string; icon: React.ElementType }[] = [
+  { key: 'daily', label: 'Daily', icon: Sun },
+  { key: 'weekly', label: 'Weekly', icon: CalendarRange },
+  { key: 'monthly', label: 'Monthly', icon: CalendarDays },
+  { key: 'yearly', label: 'Yearly', icon: CalendarClock },
 ];
 
-/** Which drill-down is open, if any. */
+/**
+ * Which drill-down is open, if any.
+ *
+ * A metric drill carries its own window rather than reading the toolbar. The
+ * Monthly block is a fixed comparative and deliberately does not move with the
+ * period control, so a modal opened from it that used the selected range would
+ * list a different population from the tile that opened it — which is the one
+ * thing a drill-down must never do.
+ */
 type DrillDown =
-  | { kind: 'metric'; metric: ExecutiveMetricKey; label: string }
+  | {
+      kind: 'metric';
+      metric: ExecutiveMetricKey;
+      label: string;
+      /** Omitted for the all-time state metrics — see ALL_TIME_METRICS. */
+      window?: { from?: string; to?: string };
+    }
   | { kind: 'status'; status: string; label: string; plan?: string }
   | null;
 
@@ -123,8 +191,34 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   const container = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [order, setOrder] = useState<SectionKey[]>(() => readLayout());
+  const [layout, setLayout] = useState<Layout>(() => readLayout());
   const [dragging, setDragging] = useState<SectionKey | null>(null);
+
+  const { order, spans } = layout;
+
+  // ── Sticky period bar ──────────────────────────────────────────────
+  // A sentinel above the bar rather than a scroll listener: IntersectionObserver
+  // fires only when the boundary is actually crossed, where a scroll handler
+  // runs on every frame of every scroll to answer the same yes/no question.
+  const sentinel = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+
+  useEffect(() => {
+    const element = sentinel.current;
+
+    if (!element || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setStuck(!entry.isIntersecting),
+      // Nothing clever: the sentinel sits immediately above the bar, so it
+      // leaves the viewport at exactly the moment the bar reaches the top.
+      { threshold: 0 }
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, []);
 
   const [drill, setDrill] = useState<DrillDown>(null);
 
@@ -172,13 +266,32 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
 
   useEffect(() => load(), [load, refreshToken, reloads]);
 
-  // Paused while a drill-down is open: a table reloading underneath somebody who
-  // is reading row forty is worse than a stale one.
-  const { seconds, lastRun } = useAutoRefresh(
-    'overview_refresh',
-    () => setReloads((n) => n + 1),
-    drill !== null || editing
-  );
+  /**
+   * Held while a drill-down or the layout editor is open.
+   *
+   * This page used to own a second timer of its own, on the same
+   * `overview_refresh` interval that Dashboard's poll now runs on — so once both
+   * were configured from the same setting they fired together and every cycle
+   * cost two full fan-outs across every monitored database for one visible
+   * update. The poll above is the single timer now; this only asks it to wait.
+   *
+   * A table reloading underneath somebody who is reading row forty is worse than
+   * a stale one, and a saved layout being reset mid-drag is worse still.
+   */
+  useSuspendRefresh(drill !== null || editing);
+
+  const seconds = Number(user?.preferences?.overview_refresh ?? 0);
+
+  // Stamped from the refresh that actually happened rather than from a timer of
+  // our own, so the "updated" line cannot claim a reload the page did not do —
+  // the manual button and the poll both arrive here, and both are real.
+  const [lastRun, setLastRun] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (refreshToken > 0 || reloads > 0) {
+      setLastRun(new Date());
+    }
+  }, [refreshToken, reloads]);
 
   // ── Fullscreen ─────────────────────────────────────────────────────
   const toggleFullscreen = () => {
@@ -203,8 +316,8 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   }, []);
 
   // ── Layout editing ─────────────────────────────────────────────────
-  const persist = (next: SectionKey[]) => {
-    setOrder(next);
+  const persist = (next: Layout) => {
+    setLayout(next);
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
   };
 
@@ -214,9 +327,12 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
     const next = order.filter((key) => key !== dragging);
     next.splice(next.indexOf(target), 0, dragging);
 
-    persist(next);
+    persist({ ...layout, order: next });
     setDragging(null);
   };
+
+  const resize = (key: SectionKey, span: SectionSpan) =>
+    persist({ ...layout, spans: { ...spans, [key]: span } });
 
   if (forbidden) {
     return (
@@ -249,6 +365,16 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   const plans = data?.plans;
   const selected = data?.windows.selected;
 
+  // The two windows the money tiles drill into. `selected` follows the period
+  // toolbar; `monthly` is the fixed month-to-date comparative and deliberately
+  // does not. Each tile passes the one it was computed over, so the modal lists
+  // the rows that made the number rather than a different month's.
+  const selectedWindow = { from: selected?.from, to: selected?.to };
+  const monthlyWindow = { from: data?.windows.monthly.from, to: data?.windows.monthly.to };
+
+  /** The selected period's short name, for a modal title. */
+  const rangeLabel = selected?.label ?? 'Selected';
+
   const money = (value: number | null | undefined): string =>
     first || value === null || value === undefined ? '—' : formatAmount(value);
 
@@ -271,15 +397,23 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           <Unavailable label="Collections for this period could not be read." />
         ) : (
           <>
+            {/* Income and Expenses are totals of rows that exist — payments and
+                expense records — so they open the list they added up. Net and
+                the two projections below are arithmetic *over* those totals:
+                there is no such thing as a "net income record", and a modal
+                behind one would have to invent a population to show. Those are
+                declared with `formula`, which states the arithmetic and drops
+                the click target and the pointer cursor with it. */}
             <Row>
-              <Tile icon={<Banknote size={20} />} label="Income" value={money(daily?.income)} caption="cash + PNB + Xendit" tone="success" />
-              <Tile icon={<Receipt size={20} />} label="Expenses" value={money(daily?.expenses)} caption="OPEX + CAPEX" tone="warning" />
+              <Tile icon={<Banknote size={20} />} label="Income" value={money(daily?.income)} caption="cash + PNB + Xendit" tone="success" onOpen={() => setDrill({ kind: 'metric', metric: 'income', label: `${rangeLabel} Income`, window: selectedWindow })} />
+              <Tile icon={<Receipt size={20} />} label="Expenses" value={money(daily?.expenses)} caption="OPEX + CAPEX" tone="warning" onOpen={() => setDrill({ kind: 'metric', metric: 'expenses', label: `${rangeLabel} Expenses`, window: selectedWindow })} />
               <Tile
                 label="Net"
                 icon={<Wallet size={20} />}
                 value={money(daily?.net)}
                 caption="income − expenses"
                 tone={(daily?.net ?? 0) >= 0 ? 'success' : 'danger'}
+                formula="Income − Expenses"
               />
               <Tile
                 label="Monthly Projected Sales"
@@ -287,18 +421,20 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 value={money(daily?.monthly_projected_sales)}
                 caption="month-to-date ÷ days elapsed × days in month"
                 tone="info"
+                formula="(Month-to-date income ÷ days elapsed) × days in month"
               />
             </Row>
 
             <Row>
-              <Tile label="Office Collection" value={money(daily?.office_collection)} caption="over the counter" />
-              <Tile label="PNB" value={money(daily?.pnb)} caption="bank collections" />
-              <Tile label="Xendit" value={money(daily?.xendit)} caption="payment portal" />
+              <Tile label="Office Collection" value={money(daily?.office_collection)} caption="over the counter" onOpen={() => setDrill({ kind: 'metric', metric: 'office', label: `${rangeLabel} Office Collections`, window: selectedWindow })} />
+              <Tile label="PNB" value={money(daily?.pnb)} caption="bank collections" onOpen={() => setDrill({ kind: 'metric', metric: 'pnb', label: `${rangeLabel} PNB Collections`, window: selectedWindow })} />
+              <Tile label="Xendit" value={money(daily?.xendit)} caption="payment portal" onOpen={() => setDrill({ kind: 'metric', metric: 'portal', label: `${rangeLabel} Portal Payments`, window: selectedWindow })} />
               <Tile
                 label="Daily Sales Average"
                 value={money(daily?.daily_sales_average)}
                 caption="last 7 days ÷ 7"
                 tone="info"
+                formula="Last 7 days' income ÷ 7"
               />
             </Row>
 
@@ -329,14 +465,15 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
         ) : (
           <>
             <Row>
-              <Tile icon={<Banknote size={20} />} label="Total Income" value={money(monthly?.total_income)} caption="cash + PNB + Xendit" tone="success" />
-              <Tile icon={<Receipt size={20} />} label="Total Expenses" value={money(monthly?.total_expenses)} caption="OPEX + CAPEX" tone="warning" />
+              <Tile icon={<Banknote size={20} />} label="Total Income" value={money(monthly?.total_income)} caption="cash + PNB + Xendit" tone="success" onOpen={() => setDrill({ kind: 'metric', metric: 'income', label: 'Monthly Total Income', window: monthlyWindow })} />
+              <Tile icon={<Receipt size={20} />} label="Total Expenses" value={money(monthly?.total_expenses)} caption="OPEX + CAPEX" tone="warning" onOpen={() => setDrill({ kind: 'metric', metric: 'expenses', label: 'Monthly Total Expenses', window: monthlyWindow })} />
               <Tile
                 label="Net Income"
                 icon={<Wallet size={20} />}
                 value={money(monthly?.net_income)}
                 caption="income − expenses"
                 tone={(monthly?.net_income ?? 0) >= 0 ? 'success' : 'danger'}
+                formula="Total Income − Total Expenses"
               />
               <Tile
                 label="Weekly Sales Average"
@@ -344,13 +481,14 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 value={money(monthly?.weekly_sales_average)}
                 caption="last 7 days in full"
                 tone="info"
+                formula="Last 7 days' income ÷ 7"
               />
             </Row>
 
             <Row>
-              <Tile label="Total Cash" value={money(monthly?.total_cash)} caption="over the counter" />
-              <Tile label="Total PNB" value={money(monthly?.total_pnb)} caption="bank collections" />
-              <Tile label="Total Xendit" value={money(monthly?.total_xendit)} caption="payment portal" />
+              <Tile label="Total Cash" value={money(monthly?.total_cash)} caption="over the counter" onOpen={() => setDrill({ kind: 'metric', metric: 'office', label: 'Monthly Total Cash', window: monthlyWindow })} />
+              <Tile label="Total PNB" value={money(monthly?.total_pnb)} caption="bank collections" onOpen={() => setDrill({ kind: 'metric', metric: 'pnb', label: 'Monthly Total PNB', window: monthlyWindow })} />
+              <Tile label="Total Xendit" value={money(monthly?.total_xendit)} caption="payment portal" onOpen={() => setDrill({ kind: 'metric', metric: 'portal', label: 'Monthly Total Xendit', window: monthlyWindow })} />
 
               <NestedTile label="Yearly" caption={yearly?.range_label}>
                 <NestedFigure label="Income" value={money(yearly?.income)} tone="success" />
@@ -426,7 +564,14 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 icon={<ClipboardList size={20} />}
                 value={count(subs?.application)}
                 caption="filed in range · any status"
-                onOpen={() => setDrill({ kind: 'metric', metric: 'application', label: 'Applications' })}
+                onOpen={() =>
+                  setDrill({
+                    kind: 'metric',
+                    metric: 'application',
+                    label: 'Applications',
+                    window: selectedWindow,
+                  })
+                }
               />
               <Tile
                 label="Installed"
@@ -434,7 +579,14 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 value={count(subs?.installed)}
                 caption="onsite Done · by install date"
                 tone="success"
-                onOpen={() => setDrill({ kind: 'metric', metric: 'installed', label: 'Installed' })}
+                onOpen={() =>
+                  setDrill({
+                    kind: 'metric',
+                    metric: 'installed',
+                    label: 'Installed',
+                    window: selectedWindow,
+                  })
+                }
               />
               <Tile
                 label="Repair"
@@ -442,19 +594,36 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 value={count(subs?.repair)}
                 caption="visit Done · by modified date"
                 tone="success"
-                onOpen={() => setDrill({ kind: 'metric', metric: 'repair', label: 'Repairs' })}
+                onOpen={() =>
+                  setDrill({
+                    kind: 'metric',
+                    metric: 'repair',
+                    label: 'Repairs',
+                    window: selectedWindow,
+                  })
+                }
               />
-              {/* Renamed from "Reschedule" and "Pending". Both were ambiguous
-                  on a screen that also counts repairs: "Pending" read as any
-                  outstanding work rather than specifically an install visit in
-                  progress. The backend filters are unchanged — onsite_status =
-                  Reschedule and visit_status = In Progress, both on the modified
-                  date — only the labels moved. */}
+              {/* These two are counted all-time, unlike the three beside them,
+                  and their captions say so because they sit under the same
+                  period control as everything else on the page.
+
+                  Both name a state a job is *in* rather than something that
+                  happened on a day. Windowed to the selected range they answered
+                  "how many were rescheduled today", which on Daily is usually a
+                  handful and hides every install that has been stuck since
+                  March — the exact rows somebody opens this tile to find.
+
+                  Both now read job_orders, so they are the two halves of one
+                  question — of the installations not yet done, which were put
+                  off and which are part way through — and they can be compared
+                  and added. Pending Install counted half-finished *repairs*
+                  until this build, which is a different queue entirely from the
+                  one its label named. */}
               <Tile
                 label="Rescheduled Install"
                 icon={<Ban size={20} />}
                 value={count(subs?.reschedule)}
-                caption="onsite Reschedule · by modified date"
+                caption="onsite Reschedule · overall"
                 tone="warning"
                 onOpen={() =>
                   setDrill({ kind: 'metric', metric: 'reschedule', label: 'Rescheduled Install' })
@@ -464,7 +633,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 label="Pending Install"
                 icon={<LockIcon size={20} />}
                 value={count(subs?.pending)}
-                caption="visit In Progress · by modified date"
+                caption="onsite In Progress · overall"
                 tone="warning"
                 onOpen={() => setDrill({ kind: 'metric', metric: 'pending', label: 'Pending Install' })}
               />
@@ -594,19 +763,41 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           }
         />
 
+        {/* Zero-height marker immediately above the bar. Its leaving the
+            viewport is what "the bar has reached the top" means, measured
+            rather than inferred from a scroll offset that would have to know
+            the header's height. */}
+        <div ref={sentinel} aria-hidden className="h-px -mb-px" />
+
         {/* ── Global date toolbar ──────────────────────────────────────
             Sits with the view controls because it governs the whole screen
             rather than any one panel — a per-card range control is how two
-            people end up quoting different periods off the same page. */}
+            people end up quoting different periods off the same page.
+
+            Sticky, because it governs everything below it: on a screen four
+            blocks deep, scrolling to the plan mix used to mean scrolling back up
+            to find out which period you were looking at, and the commonest way
+            to misread this page is to read a figure without its window.
+
+            Compressed to icons once it sticks. Pinned at full height the bar
+            costs a fifth of a laptop viewport permanently — on a screen whose
+            whole argument is that the figures are large and read at a distance,
+            that is the wrong thing to spend the room on. The labels return the
+            moment it unsticks, and each icon keeps its name as a tooltip and as
+            its accessible label, so nothing is only a picture. */}
         <div
-          className={`flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 ${
-            isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200'
+          className={`sticky top-0 z-30 flex flex-wrap items-center gap-2 rounded-xl border transition-all duration-200 ${
+            stuck ? 'px-2 py-1.5 shadow-md backdrop-blur' : 'px-3 py-2.5'
+          } ${
+            isDarkMode
+              ? `border-gray-800 ${stuck ? 'bg-gray-900/95' : 'bg-gray-900'}`
+              : `border-gray-200 ${stuck ? 'bg-white/95' : 'bg-white'}`
           }`}
         >
           <span
             className={`text-xs font-bold uppercase tracking-wider mr-1 ${
-              isDarkMode ? 'text-gray-500' : 'text-gray-400'
-            }`}
+              stuck ? 'sr-only' : ''
+            } ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}
           >
             Period
           </span>
@@ -618,6 +809,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           >
             {TIMEFRAMES.map((option) => {
               const active = timeframe === option.key;
+              const Icon = option.icon;
 
               return (
                 <button
@@ -625,8 +817,12 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                   type="button"
                   role="radio"
                   aria-checked={active}
+                  aria-label={option.label}
+                  title={option.label}
                   onClick={() => setTimeframe(option.key)}
-                  className={`rounded-md px-3.5 py-1.5 text-sm font-bold transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-md text-sm font-bold transition-all ${
+                    stuck ? 'px-2 py-1' : 'px-3.5 py-1.5'
+                  } ${
                     active
                       ? isDarkMode
                         ? 'bg-blue-500/20 text-blue-300'
@@ -636,7 +832,11 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
-                  {option.label}
+                  <Icon size={15} className={stuck ? '' : 'hidden'} />
+                  {/* Hidden rather than unmounted: the label stays in the
+                      accessibility tree at every width, so the control does not
+                      become an unnamed button when the bar compresses. */}
+                  <span className={stuck ? 'sr-only' : ''}>{option.label}</span>
                 </button>
               );
             })}
@@ -646,8 +846,12 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
             type="button"
             role="radio"
             aria-checked={timeframe === 'custom'}
+            aria-label="Custom Range"
+            title="Custom Range"
             onClick={() => setTimeframe('custom')}
-            className={`rounded-lg border px-3.5 py-1.5 text-sm font-bold transition-colors ${
+            className={`flex items-center gap-1.5 rounded-lg border text-sm font-bold transition-all ${
+              stuck ? 'px-2 py-1' : 'px-3.5 py-1.5'
+            } ${
               timeframe === 'custom'
                 ? 'border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300'
                 : isDarkMode
@@ -655,9 +859,13 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
                 : 'border-gray-300 text-gray-700 hover:border-gray-400'
             }`}
           >
-            Custom Range
+            <SlidersHorizontal size={15} className={stuck ? '' : 'hidden'} />
+            <span className={stuck ? 'sr-only' : ''}>Custom Range</span>
           </button>
 
+          {/* The date inputs survive compression: they are the only controls
+              here that hold a value rather than a choice, and hiding them would
+              take a custom range off the screen the moment somebody scrolled. */}
           {timeframe === 'custom' && (
             <span className="flex items-center gap-1.5">
               <input
@@ -680,9 +888,12 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
             </span>
           )}
 
+          {/* The window itself is the one thing that must never compress away —
+              a pinned bar that no longer says which period is worse than no bar,
+              because it looks authoritative. */}
           {selected && (
             <Pill tone="info" className="ml-auto">
-              {selected.label_long}
+              {stuck ? selected.label : selected.label_long}
             </Pill>
           )}
         </div>
@@ -695,9 +906,10 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           >
             <span className="flex items-center gap-2">
               <GripVertical size={15} />
-              Drag a section by its handle to reorder. Saved to this browser.
+              Drag a section by its handle to reorder, and set its width with the
+              buttons beside it. Saved to this browser.
             </span>
-            <Button icon={<RotateCcw size={13} />} onClick={() => persist(DEFAULT_ORDER)}>
+            <Button icon={<RotateCcw size={13} />} onClick={() => persist(DEFAULT_LAYOUT)}>
               Reset
             </Button>
           </div>
@@ -723,34 +935,74 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           </div>
         )}
 
-        {order.map((key) => (
-          <div
-            key={key}
-            draggable={editing}
-            onDragStart={() => setDragging(key)}
-            onDragEnd={() => setDragging(null)}
-            onDragOver={(event) => editing && event.preventDefault()}
-            onDrop={() => drop(key)}
-            className={
-              editing
-                ? `relative rounded-xl transition-opacity ${
-                    dragging === key ? 'opacity-40' : ''
-                  } ring-2 ring-dashed ${isDarkMode ? 'ring-blue-800' : 'ring-blue-300'}`
-                : ''
-            }
-          >
-            {editing && (
-              <span
-                className={`absolute -top-3 left-4 z-10 flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold cursor-grab active:cursor-grabbing ${
-                  isDarkMode ? 'bg-blue-500/20 text-blue-200' : 'bg-blue-600 text-white'
+        {/* Two columns from `xl` up, one below it. A block set to half width is
+            still full width on anything narrower than a desktop — a preference
+            about how to use spare room cannot be honoured on a screen that has
+            none, and forcing it would make the phone layout unreadable to
+            satisfy a setting made on a wall display. */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+          {order.map((key) => {
+            const span = spans[key];
+
+            return (
+              <div
+                key={key}
+                draggable={editing}
+                onDragStart={() => setDragging(key)}
+                onDragEnd={() => setDragging(null)}
+                onDragOver={(event) => editing && event.preventDefault()}
+                onDrop={() => drop(key)}
+                className={`${span === 2 ? 'xl:col-span-2' : 'xl:col-span-1'} ${
+                  editing
+                    ? `relative rounded-xl transition-opacity ${
+                        dragging === key ? 'opacity-40' : ''
+                      } ring-2 ring-dashed ${isDarkMode ? 'ring-blue-800' : 'ring-blue-300'}`
+                    : ''
                 }`}
               >
-                <GripVertical size={12} /> drag
-              </span>
-            )}
-            {sections[key]}
-          </div>
-        ))}
+                {editing && (
+                  <div className="absolute -top-3 left-4 right-4 z-10 flex items-center justify-between gap-2">
+                    <span
+                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold cursor-grab active:cursor-grabbing ${
+                        isDarkMode ? 'bg-blue-500/20 text-blue-200' : 'bg-blue-600 text-white'
+                      }`}
+                    >
+                      <GripVertical size={12} /> drag
+                    </span>
+
+                    {/* Two widths rather than a drag handle on the edge. The
+                        page is a two-column grid, so "half" and "full" are the
+                        only widths that produce a layout rather than a ragged
+                        one — and a resize handle that can only stop at two
+                        places is a worse control than two buttons. */}
+                    <span
+                      className={`flex items-center gap-0.5 rounded-md p-0.5 ${
+                        isDarkMode ? 'bg-blue-500/20' : 'bg-blue-600'
+                      }`}
+                      role="radiogroup"
+                      aria-label="Section width"
+                    >
+                      <WidthButton
+                        active={span === 1}
+                        label="Half width"
+                        icon={<Columns2 size={12} />}
+                        onClick={() => resize(key, 1)}
+                      />
+                      <WidthButton
+                        active={span === 2}
+                        label="Full width"
+                        icon={<Rows2 size={12} />}
+                        onClick={() => resize(key, 2)}
+                      />
+                    </span>
+                  </div>
+                )}
+
+                <SectionWidth.Provider value={span}>{sections[key]}</SectionWidth.Provider>
+              </div>
+            );
+          })}
+        </div>
 
         <p className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
           Composed from the reporting modules, so every figure here is the one that module shows.
@@ -762,21 +1014,34 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
       {drill?.kind === 'metric' && (
         <MetricDetailModal<MetricRecord>
           title={drill.label}
-          subtitle={selected ? `${selected.label_long} · click a column to sort` : undefined}
-          columns={METRIC_COLUMNS}
+          subtitle={
+            ALL_TIME_METRICS.includes(drill.metric)
+              ? 'Everything currently in this state · click a column to sort'
+              : 'Click a column to sort'
+          }
+          columns={metricColumns(drill.metric)}
           filters={[]}
           defaultSort="occurred_at"
           fetchPage={(query) =>
             reportingService.getMetricRecords({
               metric: drill.metric,
-              dateFrom: selected?.from,
-              dateTo: selected?.to,
+              // The window the tile was computed over, carried on the drill
+              // rather than read from the toolbar — the Monthly block does not
+              // follow the toolbar, and a modal that did would list a different
+              // month from the tile that opened it.
+              //
+              // Rescheduled and Pending carry no window at all: the backend
+              // counts them all-time, and sending one would misdescribe the
+              // request even though it is ignored.
+              dateFrom: ALL_TIME_METRICS.includes(drill.metric) ? undefined : drill.window?.from,
+              dateTo: ALL_TIME_METRICS.includes(drill.metric) ? undefined : drill.window?.to,
               search: query.search,
               plan: query.filters.plan,
               area: query.filters.area,
               sort: query.sort,
               direction: query.direction,
               page: query.page,
+              perPage: query.perPage,
             })
           }
           onClose={() => setDrill(null)}
@@ -800,6 +1065,7 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               plan: drill.plan,
               search: query.search,
               page: query.page,
+              perPage: query.perPage,
             })
           }
           onClose={() => setDrill(null)}
@@ -809,22 +1075,41 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   );
 };
 
-/** The saved section order, falling back to the default on anything unexpected. */
-const readLayout = (): SectionKey[] => {
+/**
+ * The saved layout, falling back to the default on anything unexpected.
+ *
+ * Every field is reconciled against the current section list rather than
+ * trusted. A build that adds or removes a section must not leave a saved layout
+ * hiding the new one or rendering a key that no longer exists — and a hand-
+ * edited localStorage entry is a thing that happens.
+ */
+const readLayout = (): Layout => {
   try {
     const stored = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
 
-    if (!Array.isArray(stored)) return DEFAULT_ORDER;
+    if (!stored || typeof stored !== 'object' || !Array.isArray(stored.order)) {
+      return DEFAULT_LAYOUT;
+    }
 
-    // Reconciled against the current section list rather than trusted: a build
-    // that adds or removes a section must not leave a saved layout hiding the
-    // new one or rendering a key that no longer exists.
-    const kept = stored.filter((key: SectionKey) => DEFAULT_ORDER.includes(key));
+    const kept: SectionKey[] = stored.order.filter((key: SectionKey) =>
+      DEFAULT_ORDER.includes(key)
+    );
     const missing = DEFAULT_ORDER.filter((key) => !kept.includes(key));
 
-    return [...kept, ...missing];
+    const spans = { ...DEFAULT_SPANS };
+
+    DEFAULT_ORDER.forEach((key) => {
+      // Anything that is not literally 1 falls back to full width. A block
+      // rendered at some third width the grid has no column count for is worse
+      // than one that ignored a saved preference.
+      if (stored.spans?.[key] === 1) {
+        spans[key] = 1;
+      }
+    });
+
+    return { order: [...kept, ...missing], spans };
   } catch {
-    return DEFAULT_ORDER;
+    return DEFAULT_LAYOUT;
   }
 };
 
@@ -855,54 +1140,266 @@ const cellText = (row: Record<string, unknown>, ...keys: string[]): string => {
   return '—';
 };
 
-const METRIC_COLUMNS: DetailColumn<MetricRecord>[] = [
-  {
-    key: 'subscriber',
-    header: 'Name',
-    cell: (row) => (
-      <span className="font-semibold">{cellText(row as any, 'subscriber', 'customer_name')}</span>
-    ),
-  },
-  {
-    key: 'account_number',
-    header: 'Account No.',
-    cell: (row) => (
-      <span className="tabular-nums">{cellText(row as any, 'account_number', 'account_no')}</span>
-    ),
-  },
-  {
-    key: 'plan',
-    header: 'Plan',
-    secondary: true,
-    cell: (row) => cellText(row as any, 'plan', 'plan_name'),
-  },
-  {
-    key: 'location',
-    header: 'Area',
-    secondary: true,
-    cell: (row) => cellText(row as any, 'location', 'area'),
-  },
-  {
-    key: 'status',
-    header: 'Status',
-    cell: (row) => {
-      const status = cellText(row as any, 'status', 'raw_status');
+/**
+ * Metrics the backend counts all-time rather than over the selected window.
+ *
+ * Mirrors the `all_time` flag on GowiserReportsDriver::WORK_METRICS. Duplicated
+ * across the wire because the modal has to say which it is showing, and a
+ * subtitle claiming "1–7 August" over an all-time list is a worse error than no
+ * subtitle: it is a specific false claim about the population on screen.
+ */
+const ALL_TIME_METRICS: ExecutiveMetricKey[] = ['reschedule', 'pending'];
 
-      return status === '—' ? '—' : <Pill tone="neutral">{status}</Pill>;
-    },
+// ── Shared columns ────────────────────────────────────────────────────
+
+const NAME_COLUMN: DetailColumn<MetricRecord> = {
+  key: 'subscriber',
+  header: 'Name',
+  cell: (row) => (
+    <span className="font-semibold">{cellText(row as any, 'subscriber', 'customer_name')}</span>
+  ),
+};
+
+const ACCOUNT_COLUMN: DetailColumn<MetricRecord> = {
+  key: 'account_number',
+  header: 'Account No.',
+  cell: (row) => (
+    <span className="tabular-nums">{cellText(row as any, 'account_number', 'account_no')}</span>
+  ),
+};
+
+const AREA_COLUMN: DetailColumn<MetricRecord> = {
+  key: 'location',
+  header: 'Area',
+  secondary: true,
+  cell: (row) => cellText(row as any, 'location', 'area'),
+};
+
+const STATUS_COLUMN: DetailColumn<MetricRecord> = {
+  key: 'status',
+  header: 'Status',
+  cell: (row) => {
+    const status = cellText(row as any, 'status', 'raw_status');
+
+    return status === '—' ? '—' : <Pill tone="neutral">{status}</Pill>;
   },
-  {
-    header: 'Technician',
-    secondary: true,
-    cell: (row) => cellText(row as any, 'technician'),
+};
+
+const DATE_COLUMN: DetailColumn<MetricRecord> = {
+  key: 'occurred_at',
+  header: 'Date',
+  align: 'right',
+  cell: (row) => <span className="tabular-nums">{formatDate(row.occurred_at) || '—'}</span>,
+};
+
+/**
+ * The peso figure on a money drill-down.
+ *
+ * Right-aligned and in tabular figures, so a column of them aligns on the
+ * decimal point and can be added up by eye against the tile that opened the
+ * modal — which is the single thing anybody does with this table.
+ */
+const AMOUNT_COLUMN: DetailColumn<MetricRecord> = {
+  header: 'Amount',
+  align: 'right',
+  cell: (row) => (
+    <span className="tabular-nums font-semibold">
+      {row.amount === null || row.amount === undefined ? '—' : formatAmount(row.amount)}
+    </span>
+  ),
+};
+
+/** When the row last changed state — distinct from the metric's own date. */
+const MODIFIED_COLUMN: DetailColumn<MetricRecord> = {
+  header: 'Modified',
+  align: 'right',
+  cell: (row) => (
+    <span className="tabular-nums">{formatDate((row as any).modified_date) || '—'}</span>
+  ),
+};
+
+/** The engineer's note from the visit. Truncated, with the whole of it on hover. */
+const REMARKS_COLUMN: DetailColumn<MetricRecord> = {
+  header: 'Remarks',
+  secondary: true,
+  cell: (row) => {
+    const text = cellText(row as any, 'remarks', 'onsite_remarks', 'visit_remarks');
+
+    return (
+      <span className="block max-w-[280px] truncate" title={text === '—' ? undefined : text}>
+        {text}
+      </span>
+    );
   },
-  {
-    key: 'occurred_at',
-    header: 'Date',
-    align: 'right',
-    cell: (row) => <span className="tabular-nums">{formatDate(row.occurred_at) || '—'}</span>,
-  },
-];
+};
+
+/**
+ * The columns each metric's drill-down carries.
+ *
+ * Per metric rather than one shared list, because the shared list was mostly
+ * blank on three of the five. An application has no billed plan and no
+ * technician — it has the plan the applicant asked for and the agent who
+ * referred them — and rendering the columns anyway produced a table of em
+ * dashes that read as broken rather than as inapplicable.
+ *
+ * Two further decisions worth stating:
+ *
+ *  - Rescheduled and Pending drop the account number. Both are installations
+ *    that have not completed, so a large share of them have no billing account
+ *    yet; the column was empty precisely on the rows somebody opened the modal
+ *    to chase. They gain Remarks and Modified instead, which is what actually
+ *    tells you why a job is stuck and how long it has been. Identical column
+ *    sets because they are now the two halves of one queue — see the tiles.
+ *  - A repair is classified by what was wrong, not by what the subscriber pays,
+ *    so Plan gives way to Repair Category.
+ */
+const metricColumns = (metric: ExecutiveMetricKey): DetailColumn<MetricRecord>[] => {
+  switch (metric) {
+    // ── Money ────────────────────────────────────────────────────────
+    // A ledger, not a subscriber list: the amount is the point and it is the
+    // only right-aligned figure, so a column of them can be scanned and added
+    // up against the tile that opened it.
+    case 'expenses':
+      return [
+        {
+          key: 'subscriber',
+          header: 'Payee',
+          cell: (row) => (
+            <span className="font-semibold">{cellText(row as any, 'subscriber')}</span>
+          ),
+        },
+        {
+          key: 'plan',
+          header: 'Category',
+          cell: (row) => cellText(row as any, 'plan', 'plan_name'),
+        },
+        {
+          key: 'status',
+          header: 'Booked as',
+          secondary: true,
+          cell: (row) => {
+            const period = cellText(row as any, 'method');
+
+            return period === '—' ? '—' : <Pill tone="neutral">{period}</Pill>;
+          },
+        },
+        REMARKS_COLUMN,
+        { header: 'Recorded by', secondary: true, cell: (row) => cellText(row as any, 'technician') },
+        AMOUNT_COLUMN,
+        DATE_COLUMN,
+      ];
+
+    case 'income':
+    case 'office':
+    case 'pnb':
+    case 'portal':
+      return [
+        NAME_COLUMN,
+        ACCOUNT_COLUMN,
+        {
+          key: 'plan',
+          header: 'Type',
+          secondary: true,
+          cell: (row) => cellText(row as any, 'plan', 'plan_name'),
+        },
+        {
+          key: 'status',
+          header: 'Method',
+          cell: (row) => {
+            const method = cellText(row as any, 'method', 'status');
+
+            return method === '—' ? '—' : <Pill tone="neutral">{method}</Pill>;
+          },
+        },
+        {
+          // OR number on a counter payment, gateway reference on a portal one.
+          // Named for what it is rather than for either, because the same
+          // column carries both and neither name is true of the other.
+          header: 'Reference',
+          secondary: true,
+          cell: (row) => (
+            <span className="tabular-nums">{cellText(row as any, 'reference')}</span>
+          ),
+        },
+        { header: 'Cashier', secondary: true, cell: (row) => cellText(row as any, 'technician') },
+        AMOUNT_COLUMN,
+        DATE_COLUMN,
+      ];
+
+    case 'application':
+      return [
+        NAME_COLUMN,
+        ACCOUNT_COLUMN,
+        {
+          header: 'Desired Plan',
+          secondary: true,
+          // The applicant's own words. `plan` is the *billed* plan, which an
+          // application does not have — that column was blank on every row.
+          cell: (row) => cellText(row as any, 'desired_plan', 'plan', 'plan_name'),
+        },
+        AREA_COLUMN,
+        STATUS_COLUMN,
+        {
+          header: 'Referred By',
+          secondary: true,
+          // Nobody has been to site yet, so there is no technician. Who brought
+          // the application in is the attribution that matters at this stage.
+          cell: (row) => cellText(row as any, 'referred_by'),
+        },
+        DATE_COLUMN,
+      ];
+
+    case 'repair':
+      return [
+        NAME_COLUMN,
+        ACCOUNT_COLUMN,
+        {
+          header: 'Repair Category',
+          secondary: true,
+          cell: (row) => cellText(row as any, 'repair_category'),
+        },
+        AREA_COLUMN,
+        STATUS_COLUMN,
+        { header: 'Technician', secondary: true, cell: (row) => cellText(row as any, 'technician') },
+        DATE_COLUMN,
+      ];
+
+    // Deliberately identical: they are the two "not finished yet" queues and
+    // they are read side by side, so the same question is in the same column.
+    case 'reschedule':
+    case 'pending':
+      return [
+        NAME_COLUMN,
+        {
+          key: 'plan',
+          header: 'Plan',
+          secondary: true,
+          cell: (row) => cellText(row as any, 'plan', 'plan_name'),
+        },
+        AREA_COLUMN,
+        STATUS_COLUMN,
+        { header: 'Technician', secondary: true, cell: (row) => cellText(row as any, 'technician') },
+        REMARKS_COLUMN,
+        MODIFIED_COLUMN,
+      ];
+
+    default:
+      return [
+        NAME_COLUMN,
+        ACCOUNT_COLUMN,
+        {
+          key: 'plan',
+          header: 'Plan',
+          secondary: true,
+          cell: (row) => cellText(row as any, 'plan', 'plan_name'),
+        },
+        AREA_COLUMN,
+        STATUS_COLUMN,
+        { header: 'Technician', secondary: true, cell: (row) => cellText(row as any, 'technician') },
+        DATE_COLUMN,
+      ];
+  }
+};
 
 const SUBSCRIBER_COLUMNS: DetailColumn<SubscriberRecord>[] = [
   {
@@ -1018,15 +1515,49 @@ const Section: React.FC<{
  * by side at this type size; the fifth column is only used where the alternative
  * is orphaning one metric onto a row of its own.
  */
-const Row: React.FC<{ children: React.ReactNode; wide?: boolean }> = ({ children, wide }) => (
-  <div
-    className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${
-      wide ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
-    }`}
-  >
-    {children}
-  </div>
-);
+/** One of the two width choices in the layout editor's per-section control. */
+const WidthButton: React.FC<{
+  active: boolean;
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}> = ({ active, label, icon, onClick }) => {
+  const isDarkMode = useTheme();
+
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={`rounded p-1 transition-colors ${
+        active
+          ? isDarkMode
+            ? 'bg-blue-400/30 text-blue-100'
+            : 'bg-white text-blue-700'
+          : isDarkMode
+          ? 'text-blue-200/70 hover:text-blue-100'
+          : 'text-white/70 hover:text-white'
+      }`}
+    >
+      {icon}
+    </button>
+  );
+};
+
+const Row: React.FC<{ children: React.ReactNode; wide?: boolean }> = ({ children, wide }) => {
+  const span = React.useContext(SectionWidth);
+
+  // A block the user has narrowed to half the page cannot hold four or five
+  // tiles across — the labels truncate to nothing and the numbers stop being
+  // readable at a distance, which is the whole point of this screen. Two across
+  // is the widest a half-width block stays legible at.
+  const columns = span === 1 ? 'xl:grid-cols-2' : wide ? 'xl:grid-cols-5' : 'xl:grid-cols-4';
+
+  return <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${columns}`}>{children}</div>;
+};
 
 type Tone = 'success' | 'danger' | 'warning' | 'neutral' | 'info';
 
@@ -1070,6 +1601,25 @@ const TONE_ICON: Record<Tone, string> = {
  * A tile with `onOpen` is a button, not a div with a click handler: it has to be
  * reachable by keyboard and announce itself, because it is the only route to the
  * records behind the number.
+ *
+ * ── Formula tiles ─────────────────────────────────────────────────────
+ *
+ * `formula` marks a value that is arithmetic over other tiles rather than a
+ * total of rows — Net, the projections, the averages. Those are not clickable,
+ * and the distinction is not pedantry: a drill-down exists to answer "which
+ * ones", and there is no set of records whose members are net income. Every one
+ * of these previously opened a modal that showed *something* — usually the
+ * financial record list, which is the population behind Income, not behind Net —
+ * so the modal quietly answered a different question from the one the tile
+ * asked, and its total did not match the tile that opened it.
+ *
+ * Passing both `formula` and `onOpen` is a contradiction, and `formula` wins:
+ * the click is dropped rather than silently rendering a lying modal.
+ *
+ * A formula tile therefore renders as a div with no pointer cursor, no hover
+ * lift and no focus ring — nothing that suggests it does anything — and puts the
+ * arithmetic in its tooltip instead, which is the answer somebody clicking it
+ * was actually after.
  */
 const Tile: React.FC<{
   label: string;
@@ -1078,7 +1628,9 @@ const Tile: React.FC<{
   tone?: Tone;
   icon?: React.ReactNode;
   onOpen?: () => void;
-}> = ({ label, value, caption, tone = 'neutral', icon, onOpen }) => {
+  /** The arithmetic behind a derived value. Makes the tile non-interactive. */
+  formula?: string;
+}> = ({ label, value, caption, tone = 'neutral', icon, onOpen, formula }) => {
   const isDarkMode = useTheme();
 
   const body = (
@@ -1127,8 +1679,15 @@ const Tile: React.FC<{
     isDarkMode ? 'bg-gray-950/40 border-gray-800' : 'bg-white border-gray-200'
   }`;
 
-  if (!onOpen) {
-    return <div className={shell}>{body}</div>;
+  // `formula` wins over `onOpen` — see the docblock. Deliberately not an error:
+  // a tile that renders inert is a visible, correctable mistake, where a modal
+  // showing the wrong population is an invisible one.
+  if (formula || !onOpen) {
+    return (
+      <div className={shell} title={formula ? `Calculated: ${formula}` : undefined}>
+        {body}
+      </div>
+    );
   }
 
   return (

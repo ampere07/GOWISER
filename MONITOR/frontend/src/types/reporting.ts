@@ -1153,14 +1153,31 @@ export interface ExecutiveSubscribers {
   installed: number | null;
   /** visit_status Done, on updated_at. */
   repair: number | null;
-  /** onsite_status Reschedule, on updated_at. Was called "Schedule". */
+  // The two below are counted all-time rather than over the selected range:
+  // both name a state a job order is in, not something that happened on a day.
+  /** job_orders.onsite_status Reschedule. Was called "Schedule". */
   reschedule: number | null;
-  /** visit_status In Progress, on updated_at. */
+  /** job_orders.onsite_status In Progress. Read service_orders until 2026-08. */
   pending: number | null;
 }
 
-/** The metric keys a card can drill into. */
-export type ExecutiveMetricKey = 'application' | 'installed' | 'repair' | 'reschedule' | 'pending';
+/**
+ * The metric keys a card can drill into.
+ *
+ * Two families, mirroring GowiserReportsDriver: the five field metrics list job
+ * records, the five money metrics list transactions. They share one endpoint
+ * because they share one modal.
+ */
+export type ExecutiveWorkMetricKey =
+  | 'application'
+  | 'installed'
+  | 'repair'
+  | 'reschedule'
+  | 'pending';
+
+export type ExecutiveMoneyMetricKey = 'income' | 'expenses' | 'office' | 'pnb' | 'portal';
+
+export type ExecutiveMetricKey = ExecutiveWorkMetricKey | ExecutiveMoneyMetricKey;
 
 /**
  * One record behind a metric tile.
@@ -1187,8 +1204,29 @@ export interface MetricRecord {
   plan_name?: string;
   technician: string;
   occurred_at: string | null;
+  /** When the row last changed state. Distinct from the metric's own date. */
+  modified_date?: string | null;
   source?: string;
   source_label?: string;
+
+  // ── Field-work metrics ───────────────────────────────────────────────
+  /** Applications: the plan the applicant asked for. There is no billed one. */
+  desired_plan?: string;
+  /** Applications: the agent who brought it in. There is no technician yet. */
+  referred_by?: string;
+  /** Repairs: what was wrong, which is how a repair is classified. */
+  repair_category?: string;
+  /** The engineer's note. Spelled both ways by the two queues. */
+  remarks?: string;
+  onsite_remarks?: string;
+  visit_remarks?: string;
+
+  // ── Money metrics ────────────────────────────────────────────────────
+  amount?: number;
+  /** How it was paid, or the expense's period type. */
+  method?: string;
+  /** OR number, gateway reference — whatever the source records. */
+  reference?: string;
 }
 
 /** One subscriber behind a billing-status counter. Dual-aliased, as above. */

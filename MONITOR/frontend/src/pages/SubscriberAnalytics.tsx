@@ -27,7 +27,7 @@ import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
 import { SubscriberAnalyticsData } from '../types/reporting';
 import { WIDGET } from '../types/rbac';
-import { formatMoney, formatNumber, pluralise } from '../utils/format';
+import { formatNumber, pluralise } from '../utils/format';
 
 interface SubscriberAnalyticsProps {
   refreshToken: number;
@@ -99,10 +99,9 @@ const statusIcon = (label: string): React.ReactNode =>
  * Subscriber Analytics — who the subscribers are, and which of them are a
  * problem.
  *
- * Deliberately not a money page: it counts people and accounts. The one currency
- * figure is expected MRC, which is here because it is a property of the base
- * rather than of a period's collections — and which follows the revenue
- * permission rather than this module's, for the same reason.
+ * Not a money page at all: it counts people and accounts, and every figure on it
+ * is a headcount. Expected MRC was the one exception and has been withdrawn —
+ * see the note above the growth cards.
  *
  * Three things this page no longer does, all of them deliberate: it does not
  * count pending applications as subscribers, it does not cap the barangay table
@@ -120,7 +119,13 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
   // status and plan charts and the barangay table are all statements of the base
   // *as it stands* — filtering a headcount to a date window does not narrow it,
   // it just makes the number wrong — so they carry no range control at all.
-  const growthRange = useWidgetRange('monthly');
+  //
+  // Opens on Daily rather than month-to-date. "How many joined today" is the
+  // question this page is opened for; month-to-date is the one asked afterwards,
+  // and it is one click away. On the first of the month the old default also
+  // showed a single day's growth under a label reading "monthly", which reads as
+  // a collapse rather than as an empty month.
+  const growthRange = useWidgetRange('daily');
 
   const { data, loading, error, sourceLabel, substituted } =
     useReportingSection<SubscriberAnalyticsData>(
@@ -225,7 +230,14 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
           <WidgetRange state={growthRange} />
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Three cards, not four. "Expected MRC" stood in the last slot and has
+            been removed: it is what the active base *should* bill at plan price,
+            which is a projection against a target rather than a measurement, and
+            on a page that otherwise counts people it was the one figure nobody
+            could reconcile against anything else on screen. The same number, on
+            the same basis, is still on the Financial module where the rest of
+            the money lives. */}
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Counted from the prepaid service window, so the caption says
               prepaid: postpaid accounts have no expiry to run out and are
               excluded. Still null-guarded for any schema that tracks no expiry,
@@ -251,33 +263,18 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
               kpi?.expiring_7day === null ? 'no expiry date in this system' : 'active prepaid accounts'
             }
           />
+          {/* "New in range" named the mechanism — that a range control exists
+              and this figure follows it — rather than the thing counted. The
+              range is already stated in the caption underneath and on the
+              control beside the heading, so the label says what these are. */}
           <StatCard
-            label="New in range"
+            label="New Subscribers"
             value={formatNumber(data?.growth.new_in_range)}
             tone="info"
             icon={<UserPlus size={18} />}
             loading={first}
             caption={data?.range_label}
           />
-          {/* A revenue figure on a counting page, so it follows the revenue
-              permission rather than this module's. */}
-          <Restricted
-            require={WIDGET.financialRevenue}
-            fallback={<RestrictedPanel title="Expected MRC" height={110} />}
-          >
-            <StatCard
-              label="Expected MRC"
-              value={
-                data?.growth.expected_mrc === null
-                  ? 'Not available'
-                  : formatMoney(data?.growth.expected_mrc)
-              }
-              tone="success"
-              icon={<UserCheck size={18} />}
-              loading={first}
-              caption="active base, at plan price"
-            />
-          </Restricted>
         </div>
       </Card>
 

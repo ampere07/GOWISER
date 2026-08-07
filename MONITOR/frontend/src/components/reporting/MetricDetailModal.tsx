@@ -5,6 +5,7 @@ import {
   ArrowUp,
   ChevronLeft,
   ChevronRight,
+  Download,
   Loader2,
   Search,
   X,
@@ -39,7 +40,33 @@ export interface MetricDetailQuery {
   direction: 'asc' | 'desc';
   page: number;
   filters: Record<string, string>;
+  /**
+   * Rows per page. Omitted for the table itself, which takes the server's
+   * default; set only by the CSV export, which walks the whole result set in
+   * large pages. See EXPORT_PAGE_SIZE.
+   */
+  perPage?: number;
 }
+
+/**
+ * Rows the export asks for per request.
+ *
+ * Matches ReportingService::MAX_PER_PAGE on the backend, which is the largest
+ * page it will serve. Anything smaller only means more round trips over the same
+ * rows; anything larger is rejected by the validator.
+ */
+const EXPORT_PAGE_SIZE = 500;
+
+/**
+ * Requests the export will make before it stops and says so.
+ *
+ * Ten thousand rows. The ceiling is not arbitrary — the backend widens each
+ * database's fetch by the page number and stops widening at page twenty, so
+ * asking beyond this would silently return rows that are no longer correctly
+ * ordered across the fleet. A truncated file that says it is truncated is
+ * recoverable; one that quietly loses the tail is not.
+ */
+const EXPORT_MAX_PAGES = 20;
 
 interface MetricDetailModalProps<T> {
   title: string;
@@ -105,6 +132,8 @@ export function MetricDetailModal<T>({
   const [data, setData] = useState<DrillDownPage<T> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Set while the CSV export is walking the result set. */
+  const [exporting, setExporting] = useState(false);
 
   // Escape closes, as it does everywhere else in the portal. Registered on the
   // document because focus may be inside the search field.
@@ -171,6 +200,78 @@ export function MetricDetailModal<T>({
 
     return `${formatNumber(first)}–${formatNumber(first + rows.length - 1)}`;
   }, [page, rows.length, total, data?.per_page]);
+
+  /**
+   * The whole matching set as CSV, not the page on screen.
+   *
+   * ── Why it re-fetches instead of exporting `rows` ─────────────────
+   *
+   * `rows` is one page — twenty-five of however many matched. Writing those to
+   * a file produces something that opens, sorts and totals perfectly and is
+   * wrong, with nothing in it to say so; somebody reconciling a month of
+   * installations against a twenty-five-row export finds out at the end. So the
+   * export walks the server-side query it is looking at, in the same order and
+   * under the same filters, and asks for every page of it.
+   *
+   * The search, sort, direction and filters come from the modal's current
+   * state, so the file matches what is on screen. That is the whole contract:
+   * *these rows, all of them* — not "everything in the table".
+   *
+   * Pages are fetched in sequence rather than in parallel. Each one fans out
+   * across every monitored database, and firing twenty of those at once at a
+   * production box to save a second on a download is the wrong trade.
+   */
+  const exportCsv = useCallback(async () => {
+    if (total === 0 || exporting) return;
+
+    setExporting(true);
+    setError(null);
+
+    try {
+      const collected: T[] = [];
+      let truncated = false;
+
+      for (let current = 1; current <= EXPORT_MAX_PAGES; current += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await fetchPage({
+          search: debounced,
+          sort,
+          direction,
+          page: current,
+          filters: selected,
+          perPage: EXPORT_PAGE_SIZE,
+        });
+
+        collected.push(...(result.rows ?? []));
+
+        if (collected.length >= (result.total ?? 0) || (result.rows ?? []).length === 0) {
+          break;
+        }
+
+        if (current === EXPORT_MAX_PAGES) {
+          truncated = true;
+        }
+      }
+
+      if (collected.length === 0) return;
+
+      download(collected, columns, title);
+
+      if (truncated) {
+        setError(
+          `Exported the first ${formatNumber(collected.length)} of ${formatNumber(
+            total
+          )} records. Narrow the search or the filters to export the rest.`
+        );
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?.message ?? 'Those records could not be exported.');
+    } finally {
+      setExporting(false);
+    }
+    // `selected` is compared by its serialised form, as in `load` above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, exporting, debounced, sort, direction, filterKey, columns, title]);
 
   const toggleSort = (key?: string) => {
     if (!key) return;
@@ -276,6 +377,19 @@ export function MetricDetailModal<T>({
             </select>
           ))}
 
+          <Button
+            icon={exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            onClick={exportCsv}
+            disabled={total === 0 || exporting}
+            title={
+              total === 0
+                ? 'Nothing to export'
+                : `Download all ${formatNumber(total)} matching records as CSV`
+            }
+          >
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </Button>
+
           {(debounced || Object.values(selected).some(Boolean)) && (
             <Button
               onClick={() => {
@@ -319,6 +433,18 @@ export function MetricDetailModal<T>({
                   return (
                     <th
                       key={column.header}
+                      // aria-sort belongs on the header cell, not on the button
+                      // inside it: the sort state is a property of the column,
+                      // and `columnheader` is the only role that carries it. On
+                      // the button it was silently ignored, so the table
+                      // announced no sort order at all.
+                      aria-sort={
+                        column.key && active
+                          ? direction === 'asc'
+                            ? 'ascending'
+                            : 'descending'
+                          : undefined
+                      }
                       className={`px-4 py-3 font-semibold whitespace-nowrap ${
                         column.align === 'right' ? 'text-right' : 'text-left'
                       } ${column.secondary ? 'hidden md:table-cell' : ''} ${
@@ -332,9 +458,6 @@ export function MetricDetailModal<T>({
                           className={`inline-flex items-center gap-1 hover:underline ${
                             active ? (isDarkMode ? 'text-blue-300' : 'text-blue-700') : ''
                           }`}
-                          aria-sort={
-                            active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'
-                          }
                         >
                           {column.header}
                           {active &&
@@ -449,5 +572,73 @@ export function MetricDetailModal<T>({
     </div>
   );
 }
+
+/**
+ * The value one column would print for one row, as text.
+ *
+ * Prefers the raw field over the rendered cell, because the cell is JSX built
+ * for a screen: a status is a `<Pill>`, a date is formatted for reading, a name
+ * is wrapped in a span. Falling back to it when the raw field is absent or empty
+ * is what keeps the columns that have no `key` at all — Technician, Contact,
+ * Remarks — from exporting as a column of blanks.
+ *
+ * The fallback only recovers a cell that renders to a bare string or number. A
+ * cell that renders an element is deliberately left empty rather than
+ * stringified into "[object Object]", which looks like data and is not.
+ */
+const cellToText = <T,>(row: T, column: DetailColumn<T>): string => {
+  const raw = column.key ? (row as any)[column.key] : undefined;
+
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    return String(raw);
+  }
+
+  const rendered = column.cell(row);
+
+  if (typeof rendered === 'string' || typeof rendered === 'number') {
+    return String(rendered);
+  }
+
+  return '';
+};
+
+/**
+ * Writes the collected rows out as a CSV download.
+ *
+ * Every field is quoted rather than only the ones that need it: these tables
+ * carry addresses, plan names and free-text remarks, and any of them can contain
+ * a comma, a quote or a newline. Quoting selectively means auditing that
+ * judgement on every new column, and getting it wrong shifts every field after
+ * it by one — silently, in a file somebody then reconciles against.
+ *
+ * A BOM leads the file because the audience opens these in Excel, which reads a
+ * UTF-8 CSV as the system codepage without one and turns every ₱ and every
+ * ñ in a barangay name into mojibake.
+ */
+const download = <T,>(rows: T[], columns: DetailColumn<T>[], title: string): void => {
+  const quote = (value: string) => `"${value.replace(/"/g, '""')}"`;
+
+  const csv = [
+    columns.map((column) => quote(column.header)).join(','),
+    ...rows.map((row) => columns.map((column) => quote(cellToText(row, column))).join(',')),
+  ].join('\r\n');
+
+  const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  link.href = url;
+  link.setAttribute(
+    'download',
+    `${title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}_${stamp}.csv`
+  );
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
 
 export default MetricDetailModal;

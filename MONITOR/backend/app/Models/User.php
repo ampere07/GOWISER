@@ -70,44 +70,36 @@ class User extends Authenticatable
     public const REFRESH_CHOICES = [0, 10, 30, 60, 300];
 
     /**
-     * This user's refresh intervals, with the defaults filled in.
+     * The refresh intervals this session runs on, with the defaults filled in.
      *
-     * Always complete, so no caller has to know what the fallback is — one place
-     * that knows is what stops the dashboard and the settings form disagreeing
-     * about what "default" means.
+     * ── Why these are portal-wide and no longer per-user ──────────────
+     *
+     * They used to live in this row's `preferences` column, on the argument that
+     * a NOC operator watching a wall display and an executive who opens the page
+     * twice a day want opposite things. In practice the number decides how often
+     * MONITOR fans out across every monitored database, and on the MikroTik
+     * screen how often it reaches routers that are simultaneously serving live
+     * authentication — so it is a statement about production load, and the total
+     * was the sum of a dozen private choices nobody could see in one place.
+     *
+     * Read through AppSetting so one value governs every account. The signature
+     * is unchanged, which is why every caller of this still reads correctly; the
+     * per-user column is simply no longer consulted. Rows that still hold one
+     * are harmless and are left alone rather than migrated away — the column may
+     * carry another screen's preference later.
      *
      * ── Why it is not called preferences() ────────────────────────────
      *
      * A method named for a column is a trap in Eloquent: on a database where the
      * column does not exist yet, `$this->preferences` misses the attribute bag,
      * falls through to the relation resolver, finds this method and dies with
-     * "must return a relationship instance". That is exactly the state a box is
-     * in between deploying this code and running the migration, so the name is
-     * kept distinct and the attribute is read out of the raw bag below.
+     * "must return a relationship instance".
      *
      * @return array<string,int>
      */
     public function refreshPreferences(): array
     {
-        // getAttributes() rather than the magic property: it never consults the
-        // relation resolver, so this is safe before the migration has run.
-        $raw = $this->getAttributes()['preferences'] ?? null;
-
-        $stored = is_string($raw) ? json_decode($raw, true) : $raw;
-        $stored = is_array($stored) ? $stored : [];
-
-        $out = [];
-
-        foreach (self::REFRESH_DEFAULTS as $key => $default) {
-            $value = $stored[$key] ?? null;
-
-            // An unrecognised interval falls back rather than being honoured. A
-            // stale value from an older build — or a hand-edited row — must not
-            // put a two-second poll on eight databases.
-            $out[$key] = in_array($value, self::REFRESH_CHOICES, true) ? (int) $value : $default;
-        }
-
-        return $out;
+        return AppSetting::refreshIntervals();
     }
 
     protected $appends = [
@@ -143,9 +135,25 @@ class User extends Authenticatable
      */
     public function rolePermissions(): array
     {
+        // Super Admin and Executive hold everything this build knows about,
+        // whatever their stored map happens to say. See
+        // Permissions::FULL_ACCESS_ROLES for why this is a short-circuit rather
+        // than a seeded list — chiefly that a permission added in a later build
+        // would otherwise be missing from a role whose whole point is not to
+        // have gaps.
+        if (in_array($this->roleName(), Permissions::FULL_ACCESS_ROLES, true)) {
+            return Permissions::all();
+        }
+
         $permissions = $this->role?->permissions;
 
         return is_array($permissions) ? $permissions : [];
+    }
+
+    /** Whether this user's role bypasses the permission map entirely. */
+    public function hasFullAccess(): bool
+    {
+        return in_array($this->roleName(), Permissions::FULL_ACCESS_ROLES, true);
     }
 
     /**

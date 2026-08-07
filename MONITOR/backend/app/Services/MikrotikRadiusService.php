@@ -249,8 +249,24 @@ class MikrotikRadiusService
         $limitations = $this->client->list('limitations');
         $attributes = $this->client->list('attributes');
         $sessions = $this->client->list('sessions');
+        $users = $this->client->list('users');
 
-        $shaped = array_map(fn ($row) => $this->session($row), $sessions['rows']);
+        $userGroupMap = [];
+        foreach ($users['rows'] as $uRow) {
+            $uName = (string) ($uRow['name'] ?? '');
+            $uGrp = (string) ($uRow['group'] ?? $uRow['user-group'] ?? '');
+            if ($uName !== '' && $uGrp !== '') {
+                $userGroupMap[$uName] = $uGrp;
+            }
+        }
+
+        $shaped = array_map(function ($row) use ($userGroupMap) {
+            $sess = $this->session($row);
+            if (empty($sess['group']) && !empty($sess['user']) && isset($userGroupMap[$sess['user']])) {
+                $sess['group'] = $userGroupMap[$sess['user']];
+            }
+            return $sess;
+        }, $sessions['rows']);
 
         return [
             'configured' => true,

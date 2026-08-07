@@ -19,6 +19,14 @@ export interface UserData {
    */
   is_executive_role?: boolean;
   /**
+   * Whether the role bypasses the permission map outright — Super Admin and
+   * Executive. `permissions` above already lists everything for such a role, so
+   * this is not what the UI normally gates on; it covers a control keyed on an
+   * id that exists only in this codebase and so can never appear in a list the
+   * server assembled.
+   */
+  is_full_access?: boolean;
+  /**
    * This user's own refresh intervals, in seconds. Zero means off.
    *
    * Sent with the session rather than fetched separately, so a dashboard never

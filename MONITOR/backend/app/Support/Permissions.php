@@ -221,25 +221,22 @@ class Permissions
             'permissions' => null, // null = everything; expanded by all()
         ],
         'Executive' => [
-            'description' => 'Full read across the business, plus export and RADIUS control. No user or database administration.',
-            'permissions' => [
-                self::MODULE_EXECUTIVE, self::MODULE_SUBSCRIBERS, self::MODULE_FINANCIAL,
-                self::MODULE_OPERATIONS, self::MODULE_TECH, self::MODULE_EMPLOYEE,
-                // MikroTik RADIUS is executive-only — the middleware pins it to
-                // the role list below, and this is the only shipped preset that
-                // holds it. Auditor is an executive *role* for reading purposes
-                // and deliberately does not get it: an auditor may read every
-                // figure in the business and may not change anyone's bandwidth.
-                self::MODULE_MIKROTIK,
-                self::WIDGET_FINANCIAL_REVENUE, self::WIDGET_FINANCIAL_CHANNELS,
-                self::WIDGET_FINANCIAL_METRICS, self::WIDGET_FINANCIAL_OPEX,
-                self::WIDGET_FINANCIAL_PAYABLES, self::WIDGET_SUBSCRIBER_BILLING,
-                self::WIDGET_SUBSCRIBER_BARANGAY, self::WIDGET_OPERATIONS_SLA,
-                self::WIDGET_EXECUTIVE_FINANCE,
-                self::ACTION_FINANCIAL_EXPORT, self::ACTION_FILTERS_MODIFY,
-                self::ACTION_MIKROTIK_WRITE, self::ACTION_MIKROTIK_KICK,
-                self::ACTION_RADIUS_MANAGE,
-            ],
+            'description' => 'Unrestricted. Every module, every widget, every action.',
+            // null = everything, as Super Admin. Previously an enumerated list
+            // that deliberately withheld user, role and database administration.
+            //
+            // That distinction did not survive contact with how the portal is
+            // actually run: the executive is the person who adds a database when
+            // a new company is onboarded and who fixes a role map at the point
+            // somebody cannot see their own numbers, and routing both through a
+            // second account meant the second account was the one everybody
+            // used. A permission model nobody can work inside is not a control,
+            // it is a shared login waiting to happen.
+            //
+            // Enforced in User::permissionList rather than only here, so a
+            // deployment whose `roles` row still holds the old enumerated list
+            // gets the same answer without a migration — see FULL_ACCESS_ROLES.
+            'permissions' => null,
         ],
         'Finance Admin' => [
             'description' => 'Money and subscribers. Owns the payables ledger.',
@@ -295,6 +292,51 @@ class Permissions
      * granted a module id.
      */
     public const EXECUTIVE_ROLES = ['super admin', 'executive', 'auditor'];
+
+    /**
+     * Roles that hold every permission, whatever their stored map says.
+     *
+     * A short-circuit rather than a seeded list, for two reasons. A deployment
+     * that already has these roles keeps whatever narrower map was saved against
+     * them — the seeder only creates what is missing — so a preset change alone
+     * would not reach an existing installation. And a permission added in a
+     * later build would be absent from the stored map until somebody
+     * re-granted it, which is exactly the failure this is meant to prevent for
+     * these two roles.
+     *
+     * Deliberately not extended to Auditor, which sits in EXECUTIVE_ROLES above
+     * for reading purposes only: an auditor may read every figure in the
+     * business and may not change one of them.
+     *
+     * Per-user denials still apply on top — see User::permissionList. An
+     * override is how a named individual is held back from something their role
+     * otherwise carries, and a full-access role that ignored it would leave that
+     * restriction inexpressible.
+     */
+    public const FULL_ACCESS_ROLES = ['super admin', 'executive'];
+
+    /** Whether a role name is one of the two that hold everything. */
+    public static function isFullAccessRole(?string $name): bool
+    {
+        return in_array(strtolower(trim((string) $name)), self::FULL_ACCESS_ROLES, true);
+    }
+
+    /**
+     * What a role's permission map *effectively* is.
+     *
+     * Differs from the stored column for the full-access roles, whose saved map
+     * is ignored at enforcement time. The roles screen has to show this rather
+     * than the column, or it displays a narrower list than the middleware
+     * actually grants — an administrator reading "Executive: 6 of 12 modules"
+     * off a role that in fact opens all twelve is worse than showing nothing.
+     *
+     * @param  string[] $stored
+     * @return string[]
+     */
+    public static function effective(?string $roleName, array $stored): array
+    {
+        return self::isFullAccessRole($roleName) ? self::all() : self::sanitise($stored);
+    }
 
     /** @return string[] */
     public static function all(): array

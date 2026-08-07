@@ -215,17 +215,36 @@ export const TurnaroundPanel: React.FC<{
 
   const split = turnaround !== undefined && 'job_orders' in turnaround;
 
-  const entries: { label: string; value: Turnaround }[] = !turnaround
+  /**
+   * The three figures per queue, with the count named for what it counted.
+   *
+   * "Closed" was the same word over both columns, and it is the schema's word
+   * rather than the business's — a job order that closes has been *installed*
+   * and a service order that closes has been *repaired*, which is the outcome
+   * anybody reading an SLA panel is actually counting. Worse, "Closed" also
+   * covers Cancelled and Failed in the drivers' own vocabulary, so the shared
+   * label invited reading a cancelled job as a completed one.
+   *
+   * Carried per entry rather than derived from the label, so a source that adds
+   * a fourth queue has to say what its completions are called instead of
+   * inheriting a word that happens to fit the last one.
+   */
+  const entries: { label: string; closedLabel: string; value: Turnaround }[] = !turnaround
     ? []
     : split
     ? [
-        { label: 'Job Orders', value: (turnaround as { job_orders: Turnaround }).job_orders },
+        {
+          label: 'Job Orders',
+          closedLabel: 'Installed',
+          value: (turnaround as { job_orders: Turnaround }).job_orders,
+        },
         {
           label: 'Service Orders',
+          closedLabel: 'Repaired',
           value: (turnaround as { service_orders: Turnaround }).service_orders,
         },
       ]
-    : [{ label: 'Installations', value: turnaround as Turnaround }];
+    : [{ label: 'Installations', closedLabel: 'Installed', value: turnaround as Turnaround }];
 
   // Computed once for the whole table rather than inside the row loop, where it
   // was quadratic: the scale is a property of the table, not of a row, and a
@@ -271,7 +290,7 @@ export const TurnaroundPanel: React.FC<{
                       {entry.label}
                     </p>
                     <div className="mt-2 grid grid-cols-3 gap-3">
-                      <Measure label="Closed" value={formatNumber(entry.value.closed)} />
+                      <Measure label={entry.closedLabel} value={formatNumber(entry.value.closed)} />
                       <Measure
                         label="Average"
                         value={average === null || average === undefined ? '—' : `${average}${unit}`}
@@ -308,7 +327,11 @@ export const TurnaroundPanel: React.FC<{
                   <Table>
                     <Thead>
                       <Th>Work type</Th>
-                      <Th align="right">Closed</Th>
+                      {/* One column over both queues here, so it keeps the
+                          neutral word: this table mixes installations and
+                          repairs on the same axis and neither "Installed" nor
+                          "Repaired" would be true of every row. */}
+                      <Th align="right">Completed</Th>
                       <Th align="right">Average</Th>
                       <Th align="right">Longest</Th>
                       <Th width="110px" />

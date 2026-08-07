@@ -27,6 +27,7 @@ import {
   Tr,
   useControlClass,
 } from '../components/reporting/primitives';
+import Paginator, { usePagination } from '../components/reporting/Paginator';
 import { useTheme } from '../hooks/useTheme';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
@@ -219,6 +220,24 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
         .includes(needle)
     );
   }, [data, sessionSearch]);
+
+  /**
+   * Paging for the three tables.
+   *
+   * Client-side, over lists the overview call already returns in full — see
+   * Paginator for why that is the right side here and the wrong side in the
+   * drill-down modals. What it fixes is real: a fleet with a thousand live
+   * sessions rendered a thousand rows, each carrying two buttons, and re-laid
+   * every one of them out on each auto-refresh.
+   *
+   * Sessions page over the *filtered* list, so the pager counts what the search
+   * left rather than what the router returned — a pager reading "1–25 of 1,204"
+   * above four matching rows is describing a different list from the one on
+   * screen.
+   */
+  const groupPages = usePagination(data?.groups.rows ?? []);
+  const sessionPages = usePagination(visibleSessions);
+  const queuedPages = usePagination(data?.queued ?? []);
 
   const succeeded = (message: string) => {
     setNotice(message);
@@ -440,7 +459,7 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
                 }
               />
 
-              {data?.groups.rows.map((group) => {
+              {groupPages.rows.map((group) => {
                 const live = sessionsByGroup[group.name] ?? 0;
 
                 return (
@@ -485,6 +504,8 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
               })}
             </tbody>
           </Table>
+
+          <Paginator state={groupPages} noun="groups" />
         </Card>
       )}
 
@@ -500,6 +521,10 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
             )} live`}
             actions={<SearchBox value={sessionSearch} onChange={setSessionSearch} />}
           />
+          {/* The scroll cap stays, and now bounds one page rather than the whole
+              session list — the two solve different problems. Paging keeps the
+              DOM small; the cap keeps a 250-row page from pushing the pager
+              itself off the bottom of the screen. */}
           <div className="max-h-[560px] overflow-y-auto">
             <Table>
               <Thead>
@@ -525,7 +550,7 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
                       : 'Nobody is connected.'
                   }
                 />
-                {visibleSessions.map((session) => (
+                {sessionPages.rows.map((session) => (
                   <Tr key={session.id || `${session.user}-${session.address}`}>
                     <Td className={`font-medium ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
                       {session.user}
@@ -589,6 +614,8 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
               </tbody>
             </Table>
           </div>
+
+          <Paginator state={sessionPages} noun="sessions" />
         </Card>
       )}
 
@@ -624,7 +651,7 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
                 empty={(data?.queued.length ?? 0) === 0}
                 emptyMessage="Nothing is queued."
               />
-              {data?.queued.map((kick) => (
+              {queuedPages.rows.map((kick) => (
                 <Tr key={kick.id}>
                   <Td className={isDarkMode ? 'text-gray-100' : 'text-gray-900'}>
                     {kick.target}
@@ -686,6 +713,8 @@ const MikrotikRadius: React.FC<MikrotikRadiusProps> = ({ refreshToken }) => {
               ))}
             </tbody>
           </Table>
+
+          <Paginator state={queuedPages} noun="entries" />
         </Card>
       )}
 

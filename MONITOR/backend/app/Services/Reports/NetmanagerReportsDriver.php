@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
+use App\Services\ReportingService;
 use RuntimeException;
 
 /**
@@ -109,7 +110,7 @@ class NetmanagerReportsDriver implements ReportsDriver
         $status = strtolower(trim((string) ($params['status'] ?? 'active')));
         $search = trim((string) ($params['search'] ?? ''));
         $page = max(1, (int) ($params['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+        $perPage = min(ReportingService::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? 25)));
 
         $members = StatusMap::BILLING_BUCKETS[$status] ?? null;
 
@@ -246,7 +247,7 @@ class NetmanagerReportsDriver implements ReportsDriver
             'rows' => [],
             'total' => 0,
             'page' => 1,
-            'per_page' => min(100, max(1, (int) ($params['per_page'] ?? 25))),
+            'per_page' => min(ReportingService::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? 25))),
             'total_pages' => 0,
             'plans' => [],
             'areas' => [],

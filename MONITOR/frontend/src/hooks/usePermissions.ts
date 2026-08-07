@@ -6,6 +6,11 @@ interface PermissionContextValue {
   permissions: string[];
   /** Whether the role itself is one the consolidated executive view is for. */
   isExecutiveRole: boolean;
+  /**
+   * Whether the role bypasses the permission map outright — Super Admin and
+   * Executive. See Permissions::FULL_ACCESS_ROLES.
+   */
+  isFullAccess: boolean;
   user: UserData | null;
 }
 
@@ -26,6 +31,7 @@ interface PermissionContextValue {
 export const PermissionContext = createContext<PermissionContextValue>({
   permissions: [],
   isExecutiveRole: false,
+  isFullAccess: false,
   user: null,
 });
 
@@ -35,20 +41,31 @@ export interface PermissionApi {
   /** True when at least one is held. */
   canAny: (...permissions: string[]) => boolean;
   isExecutiveRole: boolean;
+  /** True for the roles that hold everything regardless of the map. */
+  isFullAccess: boolean;
   permissions: string[];
   user: UserData | null;
 }
 
 export const usePermissions = (): PermissionApi => {
-  const { permissions, isExecutiveRole, user } = useContext(PermissionContext);
+  const { permissions, isExecutiveRole, isFullAccess, user } = useContext(PermissionContext);
 
   return {
     // `can` requires all, `canAny` requires one. Two functions rather than one
     // with a mode flag, because at the call site `can(A, B)` reading as "and" is
     // the whole point of having it.
-    can: (...ids: string[]) => ids.every((id) => permissions.includes(id)),
-    canAny: (...ids: string[]) => ids.some((id) => permissions.includes(id)),
+    //
+    // A full-access role short-circuits both. The backend already sends such a
+    // role the complete list, so this is belt and braces rather than the
+    // mechanism — but it is the half that covers an id which exists only in this
+    // codebase and therefore could never appear in a list the server built.
+    // Failing *open* here is safe only because the server still enforces every
+    // route and masks every payload: this decides what is drawn, never what is
+    // served.
+    can: (...ids: string[]) => isFullAccess || ids.every((id) => permissions.includes(id)),
+    canAny: (...ids: string[]) => isFullAccess || ids.some((id) => permissions.includes(id)),
     isExecutiveRole,
+    isFullAccess,
     permissions,
     user,
   };

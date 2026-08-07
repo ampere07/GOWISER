@@ -376,18 +376,18 @@ interface SliceChartProps {
    */
   showValues?: boolean;
   /**
-   * Suppresses the fallback legend, for a chart that sits beside a table
-   * carrying the same rows.
+   * Draws the legend beneath the chart.
    *
-   * The legend is a fallback for a chart too narrow to label its own slices —
-   * which is every phone. On a panel whose table stacks underneath the chart at
-   * that same width, the fallback lands directly above a table listing the same
-   * names, counts and shares, so the reader scrolls past the figures twice
-   * before reaching anything new. The chart keeps its colours and its tooltip;
-   * the table beside it is the legend.
+   * On by default, and no longer conditional on the outside labels being
+   * absent. It used to render only when the chart was too narrow to label its
+   * own slices, which left every slice under the labelling threshold — and every
+   * slice the anti-overlap pass pushed off the canvas — with no name and no
+   * number anywhere on a wide screen. The chart was silently narrower than its
+   * own data.
    *
-   * Off by default: a chart with no table beside it still needs the fallback,
-   * and losing it silently would leave a phone reader with an unlabelled pie.
+   * Turn it off only where the panel already carries a table of the same rows,
+   * which is then the legend; leaving it on there makes the reader scroll past
+   * the same names, values and shares twice before reaching anything new.
    */
   legendFallback?: boolean;
 }
@@ -415,6 +415,23 @@ interface SliceChartProps {
  */
 const LABEL_LINE_HEIGHT = 13;
 const LABEL_GUTTER = 8;
+
+/**
+ * Smallest slice that gets its own outside label.
+ *
+ * There is genuinely no honest way to point a leader line at a wedge much
+ * narrower than this — the anchor and the elbow land on the same pixel and the
+ * line reads as pointing at whichever neighbour it happens to cross. One
+ * percent rather than the two it used to be: at 260px the arithmetic works down
+ * to roughly a degree and a half, and the slices this recovers — a payment
+ * method at 1.4%, a plan with a handful of subscribers — are exactly the ones
+ * somebody is looking for when they open the panel.
+ *
+ * Whatever falls below it is not lost: the legend beneath the chart lists every
+ * slice, which is why that legend is now always drawn rather than only when the
+ * outside labels do not fit.
+ */
+const MIN_LABELLED_SHARE = 0.01;
 
 /**
  * Minimum plot width before outside labels stop fitting and the legend returns.
@@ -451,7 +468,7 @@ const sliceLabelPlugin = (format: (value: number) => string, muted: string, stro
       const value = Number(values[index] || 0);
       const share = value / total;
 
-      if (value <= 0 || share < 0.02) return;
+      if (value <= 0 || share < MIN_LABELLED_SHARE) return;
 
       const angle = (arc.startAngle + arc.endAngle) / 2;
       const radius = arc.outerRadius ?? 0;
@@ -640,11 +657,20 @@ const SliceLegend: React.FC<{
 
   if (total <= 0) return null;
 
+  // Zero-value slices are dropped rather than listed. Chart.js draws nothing for
+  // them, so a legend row with a colour swatch pointing at no wedge is a false
+  // claim about the chart above it.
+
+  const rows = labels
+    .map((label, index) => ({ label, index, value: Number(values[index] || 0) }))
+    .filter((row) => row.value > 0);
+
+  if (rows.length === 0) return null;
+
   return (
     <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-3 list-none">
-      {labels.map((label, index) => {
-        const value = Number(values[index] || 0);
-        const share = total > 0 ? (value / total) * 100 : 0;
+      {rows.map(({ label, index, value }) => {
+        const share = (value / total) * 100;
 
         return (
           <li key={`${label}-${index}`} className="flex items-center gap-2 min-w-0 text-xs">
@@ -653,7 +679,10 @@ const SliceLegend: React.FC<{
               style={{ backgroundColor: colors[index % colors.length] }}
               aria-hidden
             />
-            <span className={`truncate ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+            <span
+              className={`truncate ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}
+              title={label}
+            >
               {label}
             </span>
             <span
@@ -709,7 +738,7 @@ export const DonutChart: React.FC<SliceChartProps> = ({
         />
       </div>
 
-      {!labelled && legendFallback && (
+      {legendFallback && (
         <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
       )}
     </div>
@@ -751,7 +780,7 @@ export const PieChart: React.FC<SliceChartProps> = ({
         />
       </div>
 
-      {!labelled && legendFallback && (
+      {legendFallback && (
         <SliceLegend labels={labels} values={values} colors={colors} unit={unit} />
       )}
     </div>

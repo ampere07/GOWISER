@@ -30,6 +30,30 @@ class ReportingService
      */
     public const ALL_SOURCES = 'all';
 
+    /**
+     * Largest page a drill-down will serve.
+     *
+     * The table itself asks for 25. The larger sizes exist for one caller: the
+     * modal's CSV export, which has to produce every matching record rather than
+     * the page on screen — an export that silently contains twenty-five of four
+     * hundred rows is worse than no export, because the file looks complete.
+     *
+     * Five hundred rather than "no limit" because this fans out across every
+     * monitored database and the widening below multiplies it by the page
+     * number. Four hundred rows of CSV is two requests; an unbounded per_page is
+     * a query-string parameter that pulls a production table into memory.
+     */
+    public const MAX_PER_PAGE = 500;
+
+    /**
+     * How many pages deep the fleet-widening argument is allowed to go.
+     *
+     * See the paging note on subscriberDirectory: serving fleet page P means
+     * asking each database for P × per_page rows. Capped so a hand-edited
+     * `?page=9999` cannot turn into an unbounded fetch per database.
+     */
+    private const MAX_WIDEN_PAGES = 20;
+
     /** Parameters that change a section's answer, and so its cache key. */
     private const CACHE_KEYS = [
         'date_from', 'date_to', 'branch', 'as_of', 'period', 'branch_period', 'branch_year',
@@ -241,7 +265,7 @@ class ReportingService
         }
 
         $page = max(1, (int) ($params['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+        $perPage = min(self::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? 25)));
 
         $rows = [];
         $total = 0;
@@ -260,7 +284,7 @@ class ReportingService
                     // The widening described above. Capped so a request for page
                     // 400 cannot be turned into a ten-thousand-row fetch per
                     // database by editing the query string.
-                    'per_page' => min(100, $perPage) * min($page, 20),
+                    'per_page' => $perPage * min($page, self::MAX_WIDEN_PAGES),
                 ]));
 
                 $total += (int) ($result['total'] ?? 0);
@@ -331,7 +355,7 @@ class ReportingService
         }
 
         $page = max(1, (int) ($params['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($params['per_page'] ?? 25)));
+        $perPage = min(self::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? 25)));
 
         $rows = [];
         $total = 0;
@@ -349,7 +373,7 @@ class ReportingService
 
                 $result = $driver->workRecords($db, array_merge($params, [
                     'page' => 1,
-                    'per_page' => min(100, $perPage) * min($page, 20),
+                    'per_page' => $perPage * min($page, self::MAX_WIDEN_PAGES),
                 ]));
 
                 $total += (int) ($result['total'] ?? 0);

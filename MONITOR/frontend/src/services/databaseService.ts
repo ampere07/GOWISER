@@ -8,6 +8,7 @@ import {
   DatabaseConnection,
   DatabaseListResponse,
   IntrospectResult,
+  SchemaMapping,
 } from '../types/databases';
 
 /**
@@ -91,6 +92,23 @@ export const databaseService = {
     const response = await api.get<{ status: string; data: IntrospectResult }>(
       `/databases/${id}/introspect`,
       { params: table ? { table } : undefined, timeout: 30000 }
+    );
+
+    return response.data.data;
+  },
+
+  /**
+   * What the reporting drivers expect from this database, against what is there.
+   *
+   * Uncached on both sides, like everything else on this page — the one moment
+   * anybody opens a schema map is straight after changing something, which is
+   * exactly when a cached copy is guaranteed wrong. The backend passes
+   * `fresh: true` through to SchemaMap for the same reason.
+   */
+  mapping: async (id: number): Promise<SchemaMapping> => {
+    const response = await api.get<{ status: string; data: SchemaMapping }>(
+      `/databases/${id}/mapping`,
+      { timeout: 30000 }
     );
 
     return response.data.data;

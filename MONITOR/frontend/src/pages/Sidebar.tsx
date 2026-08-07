@@ -82,7 +82,12 @@ export const MENU_ITEMS: MenuItem[] = [
   { id: 'financial', label: 'Financial', icon: Wallet, reportingSection: 'financial' },
   { id: 'field-operations', label: 'Operations', icon: Wrench, reportingSection: 'operations' },
   { id: 'tech', label: 'Tech', icon: HardHat, reportingSection: 'tech' },
-  { id: 'employee', label: 'Employee', icon: User, reportingSection: 'employee' },
+  // "Employee" stood here and has been withdrawn along with the page behind it.
+  // The `employee` permission id and the /reporting/employee endpoint are both
+  // still in the backend catalogue — a role map in the field may still carry
+  // the id, and stripping a permission out of the vocabulary turns a stale grant
+  // into a sanitiser error rather than a harmless no-op. Without a menu entry
+  // holding it, the id simply matches nothing.
 
   // Administration. Every one of these writes to MONITOR's own tables only —
   // the monitored databases stay read-only at the connection level regardless.

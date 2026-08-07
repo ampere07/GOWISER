@@ -145,19 +145,27 @@ const Roles: React.FC<RolesProps> = ({ refreshToken }) => {
           </p>
         ) : (
           <div>
-            {(payload?.roles ?? []).map((role, index) => (
+            {(payload?.roles ?? []).map((role, index) => {
+              // A full-access role's map is not consulted when access is
+              // decided, so there is nothing here to edit — the server refuses
+              // the save. Offering the editor anyway would be a form that
+              // accepts input and then rejects it, which is a worse way to say
+              // "this cannot be changed" than not opening.
+              const rowEditable = editable && !role.full_access;
+
+              return (
               <div
                 key={role.id}
-                role={editable ? 'button' : undefined}
-                tabIndex={editable ? 0 : undefined}
+                role={rowEditable ? 'button' : undefined}
+                tabIndex={rowEditable ? 0 : undefined}
                 onClick={() => {
-                  if (!editable) return;
+                  if (!rowEditable) return;
 
                   setEditing(role);
                   setSelected(role.permissions);
                 }}
                 onKeyDown={(event) => {
-                  if (!editable) return;
+                  if (!rowEditable) return;
 
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
@@ -166,14 +174,14 @@ const Roles: React.FC<RolesProps> = ({ refreshToken }) => {
                   }
                 }}
                 className={`flex items-center gap-4 px-4 sm:px-5 py-3.5 transition-colors ${
-                  editable ? 'cursor-pointer' : ''
+                  rowEditable ? 'cursor-pointer' : ''
                 } ${
                   index > 0
                     ? isDarkMode
                       ? 'border-t border-gray-800'
                       : 'border-t border-gray-100'
                     : ''
-                } ${editable ? (isDarkMode ? 'hover:bg-gray-800/60' : 'hover:bg-gray-50') : ''}`}
+                } ${rowEditable ? (isDarkMode ? 'hover:bg-gray-800/60' : 'hover:bg-gray-50') : ''}`}
               >
                 <span
                   className={`flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center ${
@@ -193,6 +201,16 @@ const Roles: React.FC<RolesProps> = ({ refreshToken }) => {
                     {role.is_system && (
                       <Pill tone="neutral" className="ml-2">
                         system
+                      </Pill>
+                    )}
+                    {/* Stated rather than left to be inferred from three full
+                        counters, which would read as a role somebody happened to
+                        tick every box on rather than one that holds everything by
+                        definition — including permissions this build has not
+                        shipped yet. */}
+                    {role.full_access && (
+                      <Pill tone="info" className="ml-2">
+                        full access
                       </Pill>
                     )}
                   </span>
@@ -235,15 +253,21 @@ const Roles: React.FC<RolesProps> = ({ refreshToken }) => {
                   </span>
 
                   <span
+                    title={
+                      role.full_access
+                        ? 'This role holds every permission by definition and cannot be narrowed.'
+                        : undefined
+                    }
                     className={`rounded-lg border p-1.5 ${
                       isDarkMode ? 'border-gray-700 text-gray-400' : 'border-gray-300 text-gray-500'
-                    } ${editable ? '' : 'opacity-40'}`}
+                    } ${rowEditable ? '' : 'opacity-40'}`}
                   >
-                    {editable ? <KeyRound size={14} /> : <Lock size={14} />}
+                    {rowEditable ? <KeyRound size={14} /> : <Lock size={14} />}
                   </span>
                 </span>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
@@ -252,7 +276,9 @@ const Roles: React.FC<RolesProps> = ({ refreshToken }) => {
         Permissions fail closed: an id a role does not hold is denied, and a permission added in a
         future release is invisible to every existing role until it is granted here. Where one person
         needs an exception, use a per-user override on the User Management screen rather than
-        creating a near-duplicate role.
+        creating a near-duplicate role. <strong>Super Admin</strong> and <strong>Executive</strong>{' '}
+        are the two exceptions — they hold everything, including permissions a later release adds, so
+        their maps are shown complete and are not editable.
       </p>
 
       {/* ── Permission map ────────────────────────────────────────────── */}

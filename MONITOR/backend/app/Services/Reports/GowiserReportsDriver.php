@@ -7,6 +7,7 @@ use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use App\Services\ReportingService;
 
 /**
  * The GOWISER schema: customers, billing_accounts, transactions, online_status,
@@ -59,6 +60,16 @@ class GowiserReportsDriver implements ReportsDriver
 
     /** Subscribers returned per page of the status drill-down. */
     private const DIRECTORY_PER_PAGE = 25;
+
+    /**
+     * Distinct status values a queue pipeline will render.
+     *
+     * Bounds the zero-filled status list in queueStatuses. Both systems write
+     * free text here, so a column that has collected hundreds of distinct values
+     * is a data-quality problem rather than a pipeline, and drawing all of them
+     * would bury the handful that are real workflow states.
+     */
+    private const QUEUE_STATUS_LIMIT = 40;
 
     /**
      * Job-order states meaning "installed", and service-visit states meaning
@@ -171,7 +182,7 @@ class GowiserReportsDriver implements ReportsDriver
         $search = trim((string) ($params['search'] ?? ''));
         $plan = trim((string) ($params['plan'] ?? ''));
         $page = max(1, (int) ($params['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
+        $perPage = min(ReportingService::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
 
         $members = StatusMap::BILLING_BUCKETS[$status] ?? null;
 
@@ -1200,7 +1211,8 @@ class GowiserReportsDriver implements ReportsDriver
 
         // Computed once and regrouped, rather than queried again per panel: two
         // queries over the same rows can disagree if one lands between them.
-        $byMethod = $this->revenueByMethod($db, $from, $to);
+        $portal = $this->portalStats($db, $from, $to);
+        $byMethod = $this->revenueByMethod($db, $from, $to, $portal);
         $byExpenseType = $this->expensesByCategory($db, $expensePeriod, $from, $to);
 
         $base = $this->subscriberBase($db);
@@ -1259,7 +1271,7 @@ class GowiserReportsDriver implements ReportsDriver
             // portalPayments for why it cannot be derived from `by_method`.
             'income_channels' => IncomeChannels::withPortal(
                 $byMethod,
-                $this->portalStats($db, $from, $to),
+                $portal,
                 $this->portalChannels($db, $from, $to)
             ),
 
@@ -1578,9 +1590,13 @@ class GowiserReportsDriver implements ReportsDriver
             ->all();
     }
 
-    private function revenueByMethod(ConnectionInterface $db, string $from, string $to): array
-    {
-        return $this->collectedTransactions($db)
+    private function revenueByMethod(
+        ConnectionInterface $db,
+        string $from,
+        string $to,
+        ?array $portal = null
+    ): array {
+        $rows = $this->collectedTransactions($db)
             ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to])
             ->selectRaw("COALESCE(NULLIF(t.payment_method, ''), 'Unspecified') AS label")
             ->selectRaw('COUNT(*) AS cnt')
@@ -1594,6 +1610,31 @@ class GowiserReportsDriver implements ReportsDriver
                 'total' => round((float) $row->total, 2),
             ])
             ->all();
+
+        // Payment Portal, appended rather than grouped.
+        //
+        // GOWISER settles online payments through `payment_portal_logs` and
+        // never writes them to `transactions`, so this breakdown was a list of
+        // counter methods presented under the heading "Revenue by Payment
+        // Method" — with the single largest method missing and no indication it
+        // was. The channel panel already stated it separately; the reader
+        // comparing the two panels was the one who found out.
+        //
+        // Named for what finance reconciles against rather than for the current
+        // gateway, matching IncomeChannels::CHANNELS.
+        $total = round((float) ($portal['total'] ?? 0), 2);
+
+        if ($total > 0 || (int) ($portal['count'] ?? 0) > 0) {
+            $rows[] = [
+                'label' => IncomeChannels::CHANNELS['portal'],
+                'count' => (int) ($portal['count'] ?? 0),
+                'total' => $total,
+            ];
+
+            usort($rows, fn (array $a, array $b) => $b['total'] <=> $a['total']);
+        }
+
+        return $rows;
     }
 
     /**
@@ -2446,16 +2487,35 @@ class GowiserReportsDriver implements ReportsDriver
      *                because the meaningful moment is when it was rescheduled,
      *                not when it was raised.
      *
-     *   pending      Service visits still in progress, on `updated_at`. Note this
-     *                is `service_orders.visit_status`, not a job-order state —
-     *                "pending" on this dashboard means a repair somebody is part
-     *                way through.
+     *   pending      Installations still in progress: `job_orders.onsite_status`
+     *                In Progress, on `updated_at`. This read
+     *                `service_orders.visit_status` until the card was renamed
+     *                "Pending Install", at which point the figure and its label
+     *                were about different queues — the card said installation
+     *                and the number counted half-finished repairs. It now counts
+     *                what it says, and sits directly beside Rescheduled Install
+     *                on the same table, which is the comparison anybody reads
+     *                those two tiles to make.
      *
      * The date columns are listed best-first and resolved against the live
      * schema; the first that exists wins. That is a whole-schema fallback, not a
      * per-row COALESCE — a source that does not stamp installations cannot answer
      * "installed on the 4th" any more precisely than "touched on the 4th", and
      * pretending otherwise per row is how the original bug happened.
+     *
+     * ── `all_time` ────────────────────────────────────────────────────
+     *
+     * Reschedule and Pending carry it. Both name a state a job is *in*, not
+     * something that happened on a day: an install rescheduled last month is
+     * still rescheduled this morning, and a visit that has been in progress
+     * since Tuesday is exactly the one worth chasing. Windowing them to the
+     * selected range answered "how many were rescheduled today", which is a
+     * different — and far less useful — question than the label promises, and it
+     * hid the oldest and worst cases every time somebody looked at Daily. The
+     * remaining three are genuine events and stay windowed.
+     *
+     * The flag is honoured in metricQuery, which is shared by the counter and by
+     * the drill-down, so the tile and the modal behind it move together.
      */
     private const WORK_METRICS = [
         'application' => [
@@ -2485,20 +2545,119 @@ class GowiserReportsDriver implements ReportsDriver
             'statuses' => ['reschedule', 'rescheduled'],
             'dates' => ['updated_at', 'timestamp'],
             'label' => 'Reschedule',
+            'all_time' => true,
         ],
         'pending' => [
-            'table' => 'service_orders',
-            'status_column' => 'visit_status',
+            'table' => 'job_orders',
+            'status_column' => 'onsite_status',
             'statuses' => ['in progress', 'in-progress', 'inprogress'],
             'dates' => ['updated_at', 'timestamp'],
             'label' => 'Pending',
+            'all_time' => true,
         ],
     ];
 
-    /** @return string[] */
+    /**
+     * The metrics that read `job_orders`.
+     *
+     * Named rather than listed at each branch, because they differ from the
+     * service-order metrics in three separate places — the account join, the
+     * technician column and the remark column — and the last time `pending`
+     * moved between the two queues, one of those three was missed. A metric
+     * changing table now changes this list and nothing else.
+     */
+    private const JOB_ORDER_METRICS = ['installed', 'reschedule', 'pending'];
+
+    /**
+     * Extra columns each metric's drill-down carries beyond the shared set.
+     *
+     * Per metric because the three tables answer different questions and a
+     * shared column list left half of them blank: an application has no
+     * technician and no billed plan — it has the plan the applicant *asked* for
+     * and the agent who referred them — while a repair's useful classifier is
+     * what was wrong, not what the subscriber pays for.
+     *
+     * Every entry is resolved against the live schema before it reaches the
+     * SELECT (see selectRecords), so a source at an older migration level loses
+     * the column rather than the whole table.
+     *
+     * @var array<string,array<string,string>>  metric => [alias => column]
+     */
+    private const RECORD_EXTRAS = [
+        'application' => [
+            'desired_plan' => 'desired_plan',
+            'referred_by' => 'referred_by',
+            'remarks' => 'remarks',
+        ],
+        'installed' => [
+            'remarks' => 'onsite_remarks',
+        ],
+        // Both read job_orders, so both take the onsite note. There is no
+        // repair category on an installation — what is holding it up is in the
+        // remark, which is why that column carries the weight on these two.
+        'reschedule' => [
+            'remarks' => 'onsite_remarks',
+        ],
+        'pending' => [
+            'remarks' => 'onsite_remarks',
+        ],
+        'repair' => [
+            'repair_category' => 'repair_category',
+            'remarks' => 'visit_remarks',
+        ],
+    ];
+
+    /**
+     * The money tiles' drill-downs.
+     *
+     * The five field metrics above count job records; these list transactions.
+     * They share one endpoint because they share one modal, and splitting them
+     * would mean two routes, two validators and two client methods to keep in
+     * step for what is, to the reader, the same gesture — click a number, see
+     * the rows.
+     *
+     * ── Why the channel keys are not one query with a parameter ────────
+     *
+     * Cash, PNB and Portal are not three values of a column. Neither monitored
+     * system stores a channel at all: SYNC records a free-text payment method
+     * that cashiers spell a dozen ways, and portal collections are not in
+     * `transactions` at all — they live in the payment-portal log and are never
+     * written across (see portalStats). So `portal` reads a different table
+     * from its two neighbours, and `office` and `pnb` are pattern matches over
+     * the method string, applied in the same precedence IncomeChannels uses so
+     * that the modal and the channel panel agree about what "PNB cash deposit"
+     * is.
+     *
+     * `source` is which table the rows come from, and it is what workRecords
+     * branches on.
+     */
+    private const MONEY_METRICS = [
+        'income' => ['source' => 'transactions', 'channel' => null, 'label' => 'Income'],
+        'office' => ['source' => 'transactions', 'channel' => 'cash', 'label' => 'Office Collection'],
+        'pnb' => ['source' => 'transactions', 'channel' => 'pnb', 'label' => 'PNB Collections'],
+        'portal' => ['source' => 'portal', 'channel' => null, 'label' => 'Payment Portal'],
+        'expenses' => ['source' => 'expenses', 'channel' => null, 'label' => 'Expenses'],
+    ];
+
+    /**
+     * Every metric key the drill-down endpoint accepts.
+     *
+     * Both families, because the controller validates one list and the client
+     * calls one method. A key absent from here is a 422 rather than an empty
+     * modal, which is the right way round: a card wired to a metric that does
+     * not exist is a bug to be seen, not a table to be believed.
+     *
+     * @return string[]
+     */
     public static function workMetrics(): array
     {
-        return array_keys(self::WORK_METRICS);
+        return array_merge(array_keys(self::WORK_METRICS), array_keys(self::MONEY_METRICS));
+    }
+
+    /** Whether a metric key lists transactions rather than job records. */
+    public static function isMoneyMetric(string $key): bool
+    {
+        return array_key_exists($key, self::MONEY_METRICS);
     }
 
     /**
@@ -2584,12 +2743,19 @@ class GowiserReportsDriver implements ReportsDriver
         $prefix = $alias === null ? '' : $alias . '.';
         $date = $prefix . $dates[0];
 
-        $query = $db->table($alias === null ? $table : "{$table} as {$alias}")
-            // Half-open upper bound: everything before the day after `to` at
-            // midnight. Catches every time on the last day of the range without
-            // wrapping the column in DATE(), which would make it unindexable.
-            ->where($date, '>=', $from->copy()->startOfDay()->toDateTimeString())
-            ->where($date, '<', $to->copy()->startOfDay()->addDay()->toDateTimeString());
+        $query = $db->table($alias === null ? $table : "{$table} as {$alias}");
+
+        // A state metric counts everything currently in that state, whenever it
+        // got there — see the `all_time` note in the WORK_METRICS docblock.
+        if (($metric['all_time'] ?? false) !== true) {
+            $query
+                // Half-open upper bound: everything before the day after `to` at
+                // midnight. Catches every time on the last day of the range
+                // without wrapping the column in DATE(), which would make it
+                // unindexable.
+                ->where($date, '>=', $from->copy()->startOfDay()->toDateTimeString())
+                ->where($date, '<', $to->copy()->startOfDay()->addDay()->toDateTimeString());
+        }
 
         // No status filter at all for applications, by instruction — see the
         // WORK_METRICS docblock.
@@ -2625,12 +2791,18 @@ class GowiserReportsDriver implements ReportsDriver
         $metric = self::WORK_METRICS[$key] ?? null;
 
         $page = max(1, (int) ($params['page'] ?? 1));
-        $perPage = min(100, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
+        $perPage = min(ReportingService::MAX_PER_PAGE, max(1, (int) ($params['per_page'] ?? self::DIRECTORY_PER_PAGE)));
 
         $empty = [
             'metric' => $key, 'rows' => [], 'total' => 0, 'page' => 1,
             'per_page' => $perPage, 'total_pages' => 0, 'plans' => [], 'areas' => [],
         ];
+
+        // The money tiles list transactions rather than job records — different
+        // tables, different columns, same modal. See MONEY_METRICS.
+        if (self::isMoneyMetric($key)) {
+            return $this->moneyRecords($db, $key, $params, $page, $perPage, $empty);
+        }
 
         if ($metric === null) {
             return $empty;
@@ -2660,7 +2832,7 @@ class GowiserReportsDriver implements ReportsDriver
             return array_merge($empty, ['plans' => [], 'areas' => []]);
         }
 
-        $rows = $this->selectRecords($build(), $key, $params)
+        $rows = $this->selectRecords($db, $build(), $key, $params)
             ->forPage($page, $perPage)
             ->get();
 
@@ -2699,6 +2871,22 @@ class GowiserReportsDriver implements ReportsDriver
 
                     'technician' => (string) ($row->technician ?? ''),
                     'occurred_at' => $row->occurred_at,
+
+                    // Per-metric columns. Always present as keys even where this
+                    // metric does not carry one, because the drill-down table is
+                    // built from a static column list and a missing key renders
+                    // as a silently empty cell rather than as an em dash.
+                    'modified_date' => $row->modified_date ?? null,
+                    'desired_plan' => (string) ($row->desired_plan ?? ''),
+                    'referred_by' => (string) ($row->referred_by ?? ''),
+                    'repair_category' => (string) ($row->repair_category ?? ''),
+                    // Both spellings, for the same reason the name fields carry
+                    // two: the column is `onsite_remarks` on a job order and
+                    // `visit_remarks` on a service order, and the table that
+                    // renders them should not have to know which queue it is on.
+                    'remarks' => (string) ($row->remarks ?? ''),
+                    'onsite_remarks' => (string) ($row->remarks ?? ''),
+                    'visit_remarks' => (string) ($row->remarks ?? ''),
                 ];
             })->all(),
             'total' => $total,
@@ -2708,9 +2896,381 @@ class GowiserReportsDriver implements ReportsDriver
             // The filter dropdowns are built from the rows actually in range, not
             // from every plan and barangay that has ever existed. A dropdown
             // offering forty options that all return nothing is worse than none.
-            'plans' => $this->recordFacet($build(), 'plan_name'),
-            'areas' => $this->recordFacet($build(), 'barangay'),
+            'plans' => $this->recordFacet($build(), $this->personColumns($key)['plan']),
+            'areas' => $this->recordFacet($build(), $this->personColumns($key)['barangay']),
         ];
+    }
+
+    /**
+     * The transactions behind one money tile, searched, sorted and paged.
+     *
+     * The counterpart to workRecords for the Income / Office / PNB / Portal /
+     * Expenses cards. Every one of those tiles is a total of rows that exist, so
+     * every one of them opens the rows it added up — which is the whole
+     * distinction the Group Overview now draws between a total and a formula.
+     *
+     * Rows are emitted in the same shape the field-work drill-down uses, plus
+     * `amount` and `method`. That is not laziness: the modal is one component
+     * with one column contract, and a second row shape would mean a second table
+     * with its own sorting and paging arithmetic to get subtly wrong.
+     *
+     * An expense has no subscriber, so `subscriber` carries the payee and
+     * `plan` the category. Both are labelled as such by the columns the modal
+     * uses for this metric, so nothing claims to be what it is not.
+     */
+    private function moneyRecords(
+        ConnectionInterface $db,
+        string $key,
+        array $params,
+        int $page,
+        int $perPage,
+        array $empty
+    ): array {
+        $metric = self::MONEY_METRICS[$key];
+
+        [$from, $to] = $this->range($params);
+        $search = trim((string) ($params['search'] ?? ''));
+
+        try {
+            $build = fn (): ?Builder => $this->moneyQuery($db, $metric, $from, $to, $search);
+
+            $counter = $build();
+
+            if ($counter === null) {
+                return $empty;
+            }
+
+            $total = (int) $counter->count();
+
+            if ($total === 0) {
+                return array_merge($empty, ['label' => $metric['label']]);
+            }
+
+            $rows = $this->moneySelect($db, $build(), $metric, $params)
+                ->forPage($page, $perPage)
+                ->get();
+
+            return [
+                'metric' => $key,
+                'label' => $metric['label'],
+                'range' => ['from' => $from, 'to' => $to],
+                'rows' => $rows->map(function ($row) {
+                    // Assembled here rather than in SQL, as everywhere else in
+                    // this driver. An expense and a portal payment have no
+                    // customer row at all, so their name comes through as a
+                    // single `subscriber` column — the payee, or nothing.
+                    $name = isset($row->subscriber)
+                        ? (string) $row->subscriber
+                        : $this->fullName($row->first_name ?? '', $row->last_name ?? '');
+
+                    $account = (string) ($row->account_no ?? '');
+
+                    return [
+                        'id' => (string) ($row->id ?? ''),
+
+                        'subscriber' => $name,
+                        'account_number' => $account,
+                        'contact_number' => '',
+                        'plan' => (string) ($row->category ?? ''),
+                        'location' => '',
+                        'status' => (string) ($row->method ?? ''),
+
+                        // Both vocabularies, as everywhere else in these
+                        // payloads — see the note on workRecords.
+                        'customer_name' => $name,
+                        'account_no' => $account,
+                        'contact' => '',
+                        'plan_name' => (string) ($row->category ?? ''),
+                        'area' => '',
+
+                        'technician' => (string) ($row->handled_by ?? ''),
+                        'occurred_at' => $row->occurred_at,
+                        'modified_date' => $row->occurred_at,
+
+                        'amount' => round((float) ($row->amount ?? 0), 2),
+                        'method' => (string) ($row->method ?? ''),
+                        'reference' => (string) ($row->reference ?? ''),
+
+                        // Present so the shared row shape stays complete; a
+                        // missing key renders as a silently empty cell rather
+                        // than an em dash.
+                        'desired_plan' => '',
+                        'referred_by' => '',
+                        'repair_category' => '',
+                        'remarks' => (string) ($row->remarks ?? ''),
+                        'onsite_remarks' => (string) ($row->remarks ?? ''),
+                        'visit_remarks' => (string) ($row->remarks ?? ''),
+                    ];
+                })->all(),
+                'total' => $total,
+                'page' => $page,
+                'per_page' => $perPage,
+                'total_pages' => (int) ceil($total / $perPage),
+                // No plan or area facets on a ledger — the filters those feed
+                // are not offered for these metrics.
+                'plans' => [],
+                'areas' => [],
+            ];
+        } catch (\Throwable $e) {
+            // A schema without the portal log, or without `expenses_logs`,
+            // returns nothing rather than failing the modal. The tile it opened
+            // reads zero from the same absence, so the two still agree.
+            report($e);
+
+            return $empty;
+        }
+    }
+
+    /**
+     * The base query for one money metric: its table, its window, its channel.
+     *
+     * Channel matching mirrors IncomeChannels::classify, including its
+     * precedence — a method recorded as "PNB cash deposit" is a bank collection
+     * and must not also appear under Office. Getting that order wrong here would
+     * make the modal disagree with the channel panel about the same peso.
+     */
+    private function moneyQuery(
+        ConnectionInterface $db,
+        array $metric,
+        string $from,
+        string $to,
+        string $search
+    ): ?Builder {
+        $like = $search === ''
+            ? null
+            : '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+
+        if ($metric['source'] === 'expenses') {
+            $query = $this->expenseRows($db, ReportPeriod::fromDateRange($from, $to), $from, $to)
+                ->leftJoin('expenses_category as ec', 'ec.id', '=', 'e.category_id');
+
+            if ($like !== null) {
+                $query->where(function ($group) use ($like) {
+                    $group->where('e.payee', 'like', $like)
+                        ->orWhere('e.supplier', 'like', $like)
+                        ->orWhere('e.provider', 'like', $like)
+                        ->orWhere('e.description', 'like', $like)
+                        ->orWhere('ec.category_name', 'like', $like);
+                });
+            }
+
+            return $query;
+        }
+
+        if ($metric['source'] === 'portal') {
+            $table = $this->resolvePortalTable($db);
+
+            if (!$table) {
+                return null;
+            }
+
+            $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+
+            $query = $this->portalPayments($db)
+                ->whereBetween(DB::raw("DATE(ppl.{$dateCol})"), [$from, $to]);
+
+            // The portal log holds `account_id`, an integer key into
+            // billing_accounts — not the account *number*, which is what an
+            // operator searches by and what every other money metric shows. This
+            // modal returned nothing at all until the join was added: it was
+            // selecting and filtering on `ppl.account_no`, a column
+            // payment_portal_logs does not have, so every query threw and was
+            // swallowed into an empty table.
+            //
+            // Joined rather than assumed present, because the column has been
+            // spelled both ways across SYNC releases.
+            if ($this->hasColumn($db, $table, 'account_id')) {
+                $query->leftJoin('billing_accounts as ba', 'ba.id', '=', 'ppl.account_id')
+                    ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id');
+            } elseif ($this->hasColumn($db, $table, 'account_no')) {
+                $query->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 'ppl.account_no')
+                    ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id');
+            }
+
+            if ($like !== null) {
+                $query->where(function ($group) use ($like) {
+                    $group->where('ba.account_no', 'like', $like)
+                        ->orWhere('c.first_name', 'like', $like)
+                        ->orWhere('c.last_name', 'like', $like);
+                });
+            }
+
+            return $query;
+        }
+
+        $query = $this->collectedTransactions($db)
+            ->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 't.account_no')
+            ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->whereBetween(DB::raw('DATE(t.date_processed)'), [$from, $to]);
+
+        if ($metric['channel'] !== null) {
+            $this->constrainToChannel($query, $metric['channel']);
+        }
+
+        if ($like !== null) {
+            $query->where(function ($group) use ($like) {
+                $group->where('t.account_no', 'like', $like)
+                    ->orWhere('t.or_no', 'like', $like)
+                    ->orWhere('t.payment_method', 'like', $like)
+                    ->orWhere('c.first_name', 'like', $like)
+                    ->orWhere('c.last_name', 'like', $like);
+            });
+        }
+
+        return $query;
+    }
+
+    /**
+     * Narrows a transaction query to one collection channel.
+     *
+     * The channel a payment belongs to is decided by first match in
+     * IncomeChannels::patterns() order, so a channel's own patterns are not
+     * enough — Office must additionally exclude everything the earlier channels
+     * would have claimed. Expressed here as (mine) AND NOT (theirs), which is
+     * the same rule the PHP classifier applies row by row.
+     */
+    private function constrainToChannel(Builder $query, string $channel): void
+    {
+        $patterns = IncomeChannels::patterns();
+        $method = "LOWER(COALESCE(t.payment_method, ''))";
+
+        $matches = function ($group, array $needles) use ($method) {
+            foreach ($needles as $index => $needle) {
+                $binding = ['%' . strtolower($needle) . '%'];
+
+                $index === 0
+                    ? $group->whereRaw("{$method} LIKE ?", $binding)
+                    : $group->orWhereRaw("{$method} LIKE ?", $binding);
+            }
+        };
+
+        $query->where(fn ($group) => $matches($group, $patterns[$channel] ?? []));
+
+        // Everything listed before this channel wins over it, so exclude it.
+        foreach ($patterns as $earlier => $needles) {
+            if ($earlier === $channel) {
+                break;
+            }
+
+            $query->whereNot(fn ($group) => $matches($group, $needles));
+        }
+    }
+
+    /** The SELECT list and ordering for a money query. */
+    private function moneySelect(
+        ConnectionInterface $db,
+        ?Builder $query,
+        array $metric,
+        array $params
+    ): Builder {
+        if ($metric['source'] === 'expenses') {
+            $query
+                ->select('e.id')
+                ->selectRaw("COALESCE(NULLIF(e.payee, ''), NULLIF(e.supplier, ''), e.provider, '') AS subscriber")
+                ->selectRaw("'' AS account_no")
+                ->selectRaw("COALESCE(NULLIF(ec.category_name, ''), NULLIF(e.category, ''), '(Uncategorised)') AS category")
+                ->selectRaw("COALESCE(e.expense_type, 'daily') AS method")
+                ->selectRaw('e.amount AS amount')
+                ->selectRaw('e.date AS occurred_at')
+                ->selectRaw('e.processed_by AS handled_by')
+                ->selectRaw('e.description AS remarks')
+                ->selectRaw("'' AS reference");
+
+            $sortable = [
+                'subscriber' => 'e.payee',
+                'occurred_at' => 'e.date',
+                'status' => 'e.expense_type',
+                'plan' => 'e.category',
+            ];
+        } elseif ($metric['source'] === 'portal') {
+            // Resolved against the live schema for the same reason every other
+            // portal read is: SYNC has shipped this table under three names with
+            // three different date and amount columns, and a hard-coded one
+            // turns a working deployment into a failed modal.
+            $table = (string) $this->resolvePortalTable($db);
+            $dateCol = $this->resolvePortalColumn($db, $table, ['date_time', 'created_at', 'payment_date', 'date']);
+            $amountCol = $this->resolvePortalColumn($db, $table, ['total_amount', 'amount', 'received_payment']);
+            // These two go through presentColumns rather than
+            // resolvePortalColumn: that helper falls back to its *first*
+            // candidate when none is present, which is right for a column the
+            // query cannot do without and wrong for one it can — here it would
+            // put a non-existent `reference_number` into the SELECT and fail the
+            // whole modal to render a column nobody asked for.
+            $optional = fn (array $candidates): ?string =>
+                $this->presentColumns($db, $table, $candidates)[0] ?? null;
+
+            // `reference_no` first: that is the column SYNC actually ships (see
+            // its payment_portal_logs migration) and the one carrying the
+            // gateway's own reference, which is the only field that lets a
+            // portal payment be traced outside this portal.
+            $refCol = $optional(['reference_no', 'reference_number', 'reference', 'checkout_id']);
+            $channelCol = $optional(['payment_channel', 'ewallet_type', 'type', 'method']);
+
+            $joined = $this->hasColumn($db, $table, 'account_id')
+                || $this->hasColumn($db, $table, 'account_no');
+
+            $query
+                ->select('ppl.id')
+                // Through the join rather than off the log: the log records who
+                // paid only as a key. A row whose account has since been deleted
+                // keeps its amount and loses its name, which is the honest
+                // outcome — the money is still real.
+                ->selectRaw($joined ? 'c.first_name AS first_name' : "'' AS first_name")
+                ->selectRaw($joined ? 'c.last_name AS last_name' : "'' AS last_name")
+                ->selectRaw($joined ? 'ba.account_no AS account_no' : "'' AS account_no")
+                ->selectRaw("'Payment Portal' AS category")
+                // The gateway that actually carried it — GCash, Maya, a bank
+                // code — falling back to the channel name where the schema does
+                // not record one.
+                ->selectRaw(
+                    $channelCol === null
+                        ? "'Payment Portal' AS method"
+                        : "COALESCE(NULLIF(ppl.{$channelCol}, ''), 'Payment Portal') AS method"
+                )
+                ->selectRaw("ppl.{$amountCol} AS amount")
+                ->selectRaw("ppl.{$dateCol} AS occurred_at")
+                ->selectRaw("'' AS handled_by")
+                ->selectRaw("'' AS remarks")
+                ->selectRaw($refCol === null ? "'' AS reference" : "ppl.{$refCol} AS reference");
+
+            $sortable = [
+                'subscriber' => $joined ? 'c.last_name' : "ppl.{$dateCol}",
+                'account_number' => $joined ? 'ba.account_no' : "ppl.{$dateCol}",
+                'occurred_at' => "ppl.{$dateCol}",
+            ];
+        } else {
+            $query
+                ->select('t.id')
+                // The two halves rather than a CONCAT, joined in PHP by
+                // fullName() as every other row-building method here does. One
+                // implementation of "how a name is assembled" is the point —
+                // and SQL string functions are the part of this driver most
+                // likely to differ between the engines it is pointed at.
+                ->selectRaw('c.first_name AS first_name')
+                ->selectRaw('c.last_name AS last_name')
+                ->selectRaw('t.account_no AS account_no')
+                ->selectRaw("COALESCE(NULLIF(t.transaction_type, ''), 'Subscription') AS category")
+                ->selectRaw("COALESCE(NULLIF(t.payment_method, ''), 'Unspecified') AS method")
+                ->selectRaw('t.received_payment AS amount')
+                ->selectRaw('t.date_processed AS occurred_at')
+                ->selectRaw('t.processed_by_user AS handled_by')
+                ->selectRaw("COALESCE(t.remarks, '') AS remarks")
+                ->selectRaw('t.or_no AS reference');
+
+            $sortable = [
+                'subscriber' => 'c.last_name',
+                'account_number' => 't.account_no',
+                'occurred_at' => 't.date_processed',
+                'status' => 't.payment_method',
+                'plan' => 't.transaction_type',
+            ];
+        }
+
+        $sort = (string) ($params['sort'] ?? 'occurred_at');
+        $column = $sortable[$sort] ?? ($sortable['occurred_at'] ?? array_values($sortable)[0]);
+        $direction = strtolower((string) ($params['direction'] ?? 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        return $query->orderBy(DB::raw($column), $direction);
     }
 
     /**
@@ -2734,10 +3294,37 @@ class GowiserReportsDriver implements ReportsDriver
             $query->leftJoin('plan_list as pl', function ($join) {
                 $join->on(DB::raw('LOWER(TRIM(pl.plan_name))'), '=', DB::raw('LOWER(TRIM(r.desired_plan))'));
             });
-        } elseif ($key === 'installed' || $key === 'reschedule') {
+        } elseif (in_array($key, self::JOB_ORDER_METRICS, true)) {
+            // Three joins, not two, and the third is the one that matters.
+            //
+            // A job order reaches a *billed* customer through
+            // account_id → billing_accounts → customers. But an account is only
+            // created once the service is in, so every job order that has not
+            // been installed yet has account_id NULL — which is precisely the
+            // population Rescheduled Install and Pending Install consist of.
+            // Both modals rendered a full page of em dashes for name, plan and
+            // area because every row was being asked for a customer that does
+            // not exist yet.
+            //
+            // Before it is billed, the client lives on the application the job
+            // order was raised from (job_orders.application_id — see SYNC's
+            // JobOrder::application). So both paths are joined and every field
+            // is COALESCE'd across them in selectRecords: the billed customer
+            // where there is one, the applicant where there is not.
             $query->leftJoin('billing_accounts as ba', 'ba.id', '=', 'r.account_id')
                 ->leftJoin('customers as c', 'c.id', '=', 'ba.customer_id')
-                ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id');
+                ->leftJoin('applications as ap', 'ap.id', '=', 'r.application_id')
+                ->leftJoin('plan_list as pl', function ($join) {
+                    // By id off the billing account, falling back to matching
+                    // the plan the applicant asked for by name — an application
+                    // carries no plan id, only `desired_plan` as free text.
+                    $join->on('pl.id', '=', 'ba.plan_id')
+                        ->orOn(
+                            DB::raw('LOWER(TRIM(pl.plan_name))'),
+                            '=',
+                            DB::raw('LOWER(TRIM(ap.desired_plan))')
+                        );
+                });
         } else {
             // service_orders keys the account by number, not by id.
             $query->leftJoin('billing_accounts as ba', 'ba.account_no', '=', 'r.account_no')
@@ -2745,38 +3332,45 @@ class GowiserReportsDriver implements ReportsDriver
                 ->leftJoin('plan_list as pl', 'pl.id', '=', 'ba.plan_id');
         }
 
-        $name = $key === 'application'
-            ? ['r.first_name', 'r.last_name', 'r.mobile_number', 'r.barangay', 'r.city']
-            : ['c.first_name', 'c.last_name', 'c.contact_number_primary', 'c.barangay', 'c.city'];
+        // Searched, sorted and selected through the same expressions, so a job
+        // order whose client is still only an applicant is findable by the name
+        // the table is showing. See personColumns.
+        $person = $this->personColumns($key);
 
-        $account = $key === 'application' ? 'r.email_address' : 'ba.account_no';
+        $searchable = [
+            $person['account'],
+            $person['first_name'],
+            $person['last_name'],
+            $person['contact'],
+            $person['barangay'],
+            $person['city'],
+            $person['plan'],
+        ];
 
         $search = trim((string) ($params['search'] ?? ''));
 
         if ($search !== '') {
             $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
 
-            $query->where(function ($group) use ($like, $name, $account) {
-                $group->where($account, 'like', $like);
-
-                foreach ($name as $column) {
-                    $group->orWhere($column, 'like', $like);
+            $query->where(function ($group) use ($like, $searchable) {
+                foreach ($searchable as $index => $expression) {
+                    $index === 0
+                        ? $group->whereRaw("{$expression} LIKE ?", [$like])
+                        : $group->orWhereRaw("{$expression} LIKE ?", [$like]);
                 }
-
-                $group->orWhere('pl.plan_name', 'like', $like);
             });
         }
 
         $plan = trim((string) ($params['plan'] ?? ''));
 
         if ($plan !== '') {
-            $query->where('pl.plan_name', $plan);
+            $query->whereRaw("{$person['plan']} = ?", [$plan]);
         }
 
         $area = trim((string) ($params['area'] ?? ''));
 
         if ($area !== '') {
-            $query->where($key === 'application' ? 'r.barangay' : 'c.barangay', $area);
+            $query->whereRaw("{$person['barangay']} = ?", [$area]);
         }
 
         return $query;
@@ -2790,44 +3384,134 @@ class GowiserReportsDriver implements ReportsDriver
      * unchecked would be an injection point on a connection that is read-only but
      * is still pointed at a production database.
      */
-    private function selectRecords(?Builder $query, string $key, array $params): Builder
+    /**
+     * Where each person-shaped field lives, per metric.
+     *
+     * Three tables reach a customer three different ways, and one of them
+     * reaches them two ways at once:
+     *
+     *   application  the applicant is on the row itself; there is no account.
+     *   job order    a *billed* client through account_id → billing_accounts →
+     *                customers, and an *unbilled* one through application_id →
+     *                applications. Which of the two is populated depends on
+     *                whether the service has gone in yet, so both are joined and
+     *                every field falls back — see decorateRecords.
+     *   service order  always billed, keyed by account number.
+     *
+     * Returned as expressions rather than column names because the job-order
+     * case is a COALESCE, and because the SELECT list, the ORDER BY whitelist and
+     * the search predicate all have to agree about it. They did not before: the
+     * search looked at `c.first_name` for a job order whose customer row does
+     * not exist, so searching Rescheduled Install by name matched nothing.
+     *
+     * @return array<string,string>
+     */
+    private function personColumns(string $key): array
     {
+        if ($key === 'application') {
+            return [
+                'account' => 'r.email_address',
+                'first_name' => 'r.first_name',
+                'last_name' => 'r.last_name',
+                'contact' => 'r.mobile_number',
+                'barangay' => 'r.barangay',
+                'city' => 'r.city',
+                'plan' => "COALESCE(NULLIF(pl.plan_name, ''), r.desired_plan)",
+            ];
+        }
+
+        if (in_array($key, self::JOB_ORDER_METRICS, true)) {
+            // NULLIF as well as COALESCE: SYNC writes empty strings as often as
+            // nulls, and a COALESCE alone would hold onto the blank and never
+            // reach the applicant behind it.
+            $either = fn (string $billed, string $applied): string =>
+                "COALESCE(NULLIF({$billed}, ''), {$applied})";
+
+            return [
+                'account' => 'ba.account_no',
+                'first_name' => $either('c.first_name', 'ap.first_name'),
+                'last_name' => $either('c.last_name', 'ap.last_name'),
+                'contact' => $either('c.contact_number_primary', 'ap.mobile_number'),
+                'barangay' => $either('c.barangay', 'ap.barangay'),
+                'city' => $either('c.city', 'ap.city'),
+                'plan' => $either('pl.plan_name', 'ap.desired_plan'),
+            ];
+        }
+
+        return [
+            'account' => 'ba.account_no',
+            'first_name' => 'c.first_name',
+            'last_name' => 'c.last_name',
+            'contact' => 'c.contact_number_primary',
+            'barangay' => 'c.barangay',
+            'city' => 'c.city',
+            'plan' => 'pl.plan_name',
+        ];
+    }
+
+    private function selectRecords(
+        ConnectionInterface $db,
+        ?Builder $query,
+        string $key,
+        array $params
+    ): Builder {
         $metric = self::WORK_METRICS[$key];
         $isApplication = $key === 'application';
 
-        $person = $isApplication ? 'r' : 'c';
         $date = $metric['dates'][0];
+        $person = $this->personColumns($key);
 
         $query
             ->select('r.id')
-            ->selectRaw(($isApplication ? "r.email_address" : 'ba.account_no') . ' AS account_no')
-            ->selectRaw("{$person}.first_name AS first_name")
-            ->selectRaw("{$person}.last_name AS last_name")
-            ->selectRaw(($isApplication ? 'r.mobile_number' : 'c.contact_number_primary') . ' AS contact_number')
-            ->selectRaw("{$person}.barangay AS barangay")
-            ->selectRaw("{$person}.city AS city")
-            ->selectRaw('pl.plan_name AS plan_name')
+            ->selectRaw($person['account'] . ' AS account_no')
+            ->selectRaw($person['first_name'] . ' AS first_name')
+            ->selectRaw($person['last_name'] . ' AS last_name')
+            ->selectRaw($person['contact'] . ' AS contact_number')
+            ->selectRaw($person['barangay'] . ' AS barangay')
+            ->selectRaw($person['city'] . ' AS city')
+            ->selectRaw($person['plan'] . ' AS plan_name')
             ->selectRaw("r.{$date} AS occurred_at");
 
         $status = $metric['status_column'];
         $query->selectRaw($status === null ? "r.status AS row_status" : "r.{$status} AS row_status");
 
-        // Technician, where the table records one at all.
-        if ($key === 'installed' || $key === 'reschedule') {
+        // Technician, where the table records one at all. Named differently on
+        // the two queues — a job order records who went out in `visit_by`, a
+        // service order in `visit_by_user`.
+        if (in_array($key, self::JOB_ORDER_METRICS, true)) {
             $query->selectRaw('COALESCE(NULLIF(r.visit_by, \'\'), r.assigned_email) AS technician');
-        } elseif ($key === 'repair' || $key === 'pending') {
+        } elseif ($key === 'repair') {
             $query->selectRaw('r.visit_by_user AS technician');
         } else {
             $query->selectRaw("'' AS technician");
         }
 
+        // When the row last changed state. Distinct from `occurred_at`, which
+        // for an installation is the day the service went in and for an
+        // application the day it was filed — a reader chasing a stalled job
+        // needs to know when anybody last touched it, which is neither.
+        $modified = $this->presentColumns($db, $metric['table'], ['updated_at', 'timestamp', 'created_at']);
+        $query->selectRaw(
+            $modified === [] ? 'NULL AS modified_date' : "r.{$modified[0]} AS modified_date"
+        );
+
+        // The per-metric columns, each dropped rather than guessed at when this
+        // schema has not got it — see RECORD_EXTRAS.
+        foreach (self::RECORD_EXTRAS[$key] ?? [] as $alias => $column) {
+            $query->selectRaw(
+                $this->hasColumn($db, $metric['table'], $column)
+                    ? "r.{$column} AS {$alias}"
+                    : "'' AS {$alias}"
+            );
+        }
+
         $sortable = [
-            'subscriber' => "{$person}.last_name",
-            'account_number' => $isApplication ? 'r.email_address' : 'ba.account_no',
+            'subscriber' => $person['last_name'],
+            'account_number' => $person['account'],
             'occurred_at' => "r.{$date}",
             'status' => $status === null ? 'r.status' : "r.{$status}",
-            'plan' => 'pl.plan_name',
-            'location' => "{$person}.barangay",
+            'plan' => $person['plan'],
+            'location' => $person['barangay'],
         ];
 
         $sort = (string) ($params['sort'] ?? 'occurred_at');
@@ -2845,13 +3529,11 @@ class GowiserReportsDriver implements ReportsDriver
      *
      * @return string[]
      */
-    private function recordFacet(?Builder $query, string $column): array
+    private function recordFacet(?Builder $query, string $expression): array
     {
         if ($query === null) {
             return [];
         }
-
-        $expression = $column === 'plan_name' ? 'pl.plan_name' : 'COALESCE(c.barangay, r.barangay)';
 
         try {
             return $query
@@ -3146,15 +3828,75 @@ class GowiserReportsDriver implements ReportsDriver
         string $from,
         string $to
     ): array {
-        return $db->table($table)
+        $inRange = $db->table($table)
             ->whereBetween(DB::raw("DATE({$dateColumn})"), [$from, $to])
             ->selectRaw("COALESCE(NULLIF({$statusColumn}, ''), 'Unspecified') AS label")
             ->selectRaw('COUNT(*) AS cnt')
             ->groupBy('label')
             ->orderByRaw('COUNT(*) DESC')
             ->get()
-            ->map(fn ($row) => ['label' => (string) $row->label, 'count' => (int) $row->cnt])
+            ->mapWithKeys(fn ($row) => [(string) $row->label => (int) $row->cnt])
             ->all();
+
+        // Every status the queue uses, not only the ones that happened to occur
+        // inside the range. A pipeline that renders four rows on a quiet Monday
+        // and nine on a busy Friday is unreadable as a pipeline — the reader
+        // cannot tell "no applications failed today" from "this build stopped
+        // reporting failures". A status with no rows in range is a real and
+        // useful zero, so it is shown as one.
+        //
+        // Counted all-time and unioned rather than hardcoded, because both
+        // systems write free-text statuses and a workflow state added in SYNC
+        // has to appear here without a change to this file.
+        $rows = array_map(
+            fn (string $label) => ['label' => $label, 'count' => $inRange[$label] ?? 0],
+            $this->knownStatuses($db, $table, $statusColumn, array_keys($inRange))
+        );
+
+        // Busiest first, then alphabetically so the zero rows have a stable
+        // order rather than shuffling between refreshes.
+        usort(
+            $rows,
+            fn (array $a, array $b) => $b['count'] <=> $a['count'] ?: strcasecmp($a['label'], $b['label'])
+        );
+
+        return $rows;
+    }
+
+    /**
+     * Every distinct value the status column holds, plus whatever was in range.
+     *
+     * One grouped scan of an indexed column, capped: a free-text status column
+     * that has accumulated hundreds of distinct values is a data-quality problem
+     * and rendering all of them would bury the handful that are real workflow
+     * states. On failure the in-range list is returned unchanged — losing the
+     * zero rows is a smaller loss than losing the panel.
+     *
+     * @param string[] $inRange
+     * @return string[]
+     */
+    private function knownStatuses(
+        ConnectionInterface $db,
+        string $table,
+        string $statusColumn,
+        array $inRange
+    ): array {
+        try {
+            $all = $db->table($table)
+                ->selectRaw("COALESCE(NULLIF({$statusColumn}, ''), 'Unspecified') AS label")
+                ->groupBy('label')
+                ->orderByRaw('COUNT(*) DESC')
+                ->limit(self::QUEUE_STATUS_LIMIT)
+                ->pluck('label')
+                ->map(fn ($label) => (string) $label)
+                ->all();
+        } catch (\Throwable $e) {
+            report($e);
+
+            return $inRange;
+        }
+
+        return array_values(array_unique(array_merge($inRange, $all)));
     }
 
     /**

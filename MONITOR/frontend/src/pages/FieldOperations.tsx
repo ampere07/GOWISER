@@ -11,12 +11,11 @@ import {
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import FilterBar from '../components/reporting/FilterBar';
-import DataTable from '../components/reporting/DataTable';
 import { DonutChart } from '../components/reporting/charts';
 import { ErrorBanner, PanelState } from '../components/reporting/primitives';
 // Shared with the Group Overview, which renders the same two panels — see
 // OperationsPanels for why they are no longer defined here.
-import { QueuePanel, TurnaroundPanel, statusTone } from '../components/reporting/OperationsPanels';
+import { QueuePanel, TurnaroundPanel } from '../components/reporting/OperationsPanels';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
 import WidgetRange from '../components/reporting/WidgetRange';
@@ -25,9 +24,8 @@ import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
 import { reportingService } from '../services/reportingService';
-import { OperationsData, WorkRow } from '../types/reporting';
+import { OperationsData } from '../types/reporting';
 import { WIDGET } from '../types/rbac';
-import { formatDate, formatNumber } from '../utils/format';
 
 // BarController, not only BarElement — see the note in charts.tsx for why
 // omitting the controller is the trap that blanks a page rather than a panel.
@@ -124,8 +122,21 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
         </Card>
       ) : (
         <div className={`grid grid-cols-1 gap-4 ${queues.length > 1 ? 'lg:grid-cols-3' : ''}`}>
+          {/* `plainLabels` matches the Group Overview, which has always
+              rendered these three panels under the business's own names. It was
+              off here on the argument that a field manager works in the source
+              system's vocabulary and renaming it under them makes this page
+              harder to reconcile against the system they administer.
+
+              That held while the two screens were read by different people. They
+              are not: the same panel appearing as "Job Orders / Done" on one tab
+              and "New Installations / Installed" on the next is the same report
+              making two different claims, and reconciling *those* is the harder
+              job. The status names below are unmapped fall-throughs anyway, so
+              anything the operating system adds still shows under its own name.
+          */}
           {queues.map((queue) => (
-            <QueuePanel key={queue.key} queue={queue} />
+            <QueuePanel key={queue.key} queue={queue} plainLabels />
           ))}
         </div>
       )}
@@ -199,117 +210,18 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
         </div>
       )}
 
-      {/* ── Recent work ──────────────────────────────────────────────── */}
-      <DataTable<WorkRow>
-        title="Recent Work"
-        subtitle="Most recently opened, newest first"
-        rows={data?.recent ?? []}
-        rowKey={(row) => row.id}
-        loading={first}
-        error={error}
-        emptyMessage="No work has been recorded yet."
-        searchPlaceholder="Search account, subscriber…"
-        // Opened-desc keeps the panel's stated promise ("newest first") as the
-        // starting point; every column is sortable from there.
-        defaultSort="opened"
-        filters={[
-          {
-            key: 'status',
-            label: 'All statuses',
-            // Built from the rows themselves rather than a hardcoded list: both
-            // systems write free-text statuses and a new one must still filter.
-            options: Array.from(
-              new Set((data?.recent ?? []).map((row) => row.status || 'Unspecified'))
-            )
-              .sort()
-              .map((status) => ({ value: status, label: status })),
-            predicate: (row, value) => (row.status || 'Unspecified') === value,
-          },
-        ]}
-        columns={[
-          {
-            key: 'status',
-            header: 'Status',
-            value: (row) => row.status || 'Unspecified',
-            render: (row) => (
-              <span
-                className="inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap"
-                style={{ color: statusTone(row.status) }}
-              >
-                <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: statusTone(row.status) }}
-                />
-                {row.status || 'Unspecified'}
-              </span>
-            ),
-          },
-          {
-            key: 'account',
-            header: 'Account #',
-            value: (row) => row.account_number,
-            render: (row) => (
-              <span className="font-mono text-xs text-blue-600 dark:text-blue-400">
-                {row.account_number || '—'}
-              </span>
-            ),
-          },
-          {
-            key: 'subscriber',
-            header: 'Subscriber',
-            value: (row) => row.subscriber,
-            render: (row) => (
-              <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                {row.subscriber || '—'}
-              </span>
-            ),
-          },
-          {
-            key: 'location',
-            header: 'Location',
-            value: (row) => row.location ?? '',
-            render: (row) => (
-              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                {row.location || '—'}
-              </span>
-            ),
-          },
-          {
-            key: 'plan',
-            header: 'Plan',
-            value: (row) => row.plan,
-            render: (row) => (
-              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                {row.plan || '—'}
-              </span>
-            ),
-          },
-          {
-            key: 'assignee',
-            header: 'Assigned to',
-            value: (row) => row.assignee,
-            render: (row) => (
-              <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                {row.assignee || <span className="italic text-gray-400">unassigned</span>}
-              </span>
-            ),
-          },
-          {
-            key: 'opened',
-            header: 'Opened',
-            align: 'right',
-            // Sorts on the raw timestamp, not the rendered "Aug 02, 2026" —
-            // which would order alphabetically and put April before January.
-            value: (row) => row.opened_at ?? '',
-            searchable: false,
-            render: (row) => (
-              <span className={isDarkMode ? 'text-gray-400' : 'text-gray-500'}>
-                {formatDate(row.opened_at)}
-              </span>
-            ),
-          },
-        ]}
-      />
+      {/* A "Recent Work" table stood here and has been removed.
+
+          It listed the last few dozen rows across all three queues, sorted by
+          when they were opened — which is neither a backlog (the queue panels
+          above are, and they count every still-open job regardless of age) nor a
+          report (it was capped at whatever the driver returned, with no paging
+          and no total). What it actually answered was "what happened lately",
+          which nobody manages a field team by, and its search box invited using
+          it as a lookup tool against a list that did not contain most records.
+
+          `recent` is still in the API payload and still computed by the drivers.
+          It is the panel that had no question, not the data. */}
 
       <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
         Backlog counts every still-open job regardless of the date range — a job opened months ago is

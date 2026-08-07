@@ -442,11 +442,14 @@ class ExecutiveOverviewService
     /**
      * The billing-status headcount, and the field force's day and month.
      *
-     * `Schedule` and `Pending` are job-order states rather than volumes, taken
-     * over the month-to-date cadence: they answer "how much work is waiting", and
-     * a day's window would report a rescheduled queue as empty every morning
-     * before the first visit is moved. The rows around them are volumes and are
-     * scoped to their own labels — Daily to today, Monthly to the month.
+     * `Rescheduled Install` and `Pending Install` are job-order *states* rather
+     * than volumes, and are counted all-time: they answer "how much work is
+     * waiting", and any window reports a rescheduled queue as empty every
+     * morning before the first visit is moved while hiding every install that
+     * has been stuck for months — which is the population somebody opens those
+     * two tiles to find. The rows around them are volumes and are scoped to
+     * their own labels — Daily to today, Monthly to the month. See
+     * GowiserReportsDriver::WORK_METRICS and its `all_time` flag.
      *
      * `work_available` is false rather than nine zeros when no monitored schema
      * models these queues at all. NETMANAGER has one installations queue and no

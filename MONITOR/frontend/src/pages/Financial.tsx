@@ -17,9 +17,8 @@ import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import FilterBar from '../components/reporting/FilterBar';
 import WidgetRange from '../components/reporting/WidgetRange';
-import { AccentCard, MiniStat } from '../components/reporting/StatCard';
+import { AccentCard } from '../components/reporting/StatCard';
 import BreakdownTable from '../components/reporting/BreakdownTable';
-import PayablesPanel from '../components/reporting/PayablesPanel';
 import { DonutChart, TrendChart } from '../components/reporting/charts';
 import {
   Bar,
@@ -48,7 +47,7 @@ import { reportingService } from '../services/reportingService';
 import { FinancialData, IncomeChannel } from '../types/reporting';
 import { ACTION, WIDGET } from '../types/rbac';
 import { UserData } from '../types/api';
-import { formatDate, formatMoney, formatNumber, formatPercent, pluralise } from '../utils/format';
+import { formatDate, formatMoney, formatPercent, pluralise } from '../utils/format';
 
 interface FinancialProps {
   refreshToken: number;
@@ -84,15 +83,20 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
 
   const [printOpen, setPrintOpen] = React.useState(false);
 
-  // One range per widget. Headline, trend, breakdowns and payables all default to
-  // month-to-date, so on first load they share a cache key and cost one request
-  // between them; only a widget someone moves pays for itself.
-  const headlineRange = useWidgetRange('monthly');
+  // One range per widget, all defaulting to the same preset so that on first
+  // load they share a cache key and cost one request between them; only a widget
+  // someone moves pays for itself.
+  //
+  // Daily rather than month-to-date. This page is opened to answer "what came in
+  // today" far more often than "how is the month going", and the month is one
+  // click away on every widget. The trend chart keeps a longer window because a
+  // trend over one day is a single point — it is a shape, not a total, and the
+  // reason it carries its own control at all.
+  const headlineRange = useWidgetRange('daily');
   const trendRange = useWidgetRange('monthly');
-  const channelsRange = useWidgetRange('monthly');
-  const opexRange = useWidgetRange('monthly');
-  const payablesRange = useWidgetRange('monthly');
-  const breakdownRange = useWidgetRange('monthly');
+  const channelsRange = useWidgetRange('daily');
+  const opexRange = useWidgetRange('daily');
+  const breakdownRange = useWidgetRange('daily');
 
   const headline = useReportingSection<FinancialData>(
     reportingService.getFinancial,
@@ -120,13 +124,6 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
     dateFrom: opexRange.range.from,
     dateTo: opexRange.range.to,
   });
-
-  const payables = useReportingSection<FinancialData>(
-    reportingService.getFinancial,
-    filters,
-    refreshToken,
-    { dateFrom: payablesRange.range.from, dateTo: payablesRange.range.to }
-  );
 
   const breakdowns = useReportingSection<FinancialData>(
     reportingService.getFinancial,
@@ -221,56 +218,18 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
               caption={kpi ? pluralise(kpi.income_count, 'payment') : undefined}
               loading={first}
             >
-              {/* Office vs portal is the split branch managers are asked about
-                  daily, so it lives inside the Income card rather than a panel
-                  of its own further down the page. */}
-              {seesRevenue && (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <MiniStat
-                      label="Office Collection"
-                      value={formatMoney(kpi?.office_income)}
-                      caption={kpi ? pluralise(kpi.office_count, 'payment') : undefined}
-                      tone="success"
-                    />
-                    <MiniStat
-                      label="Portal Collection"
-                      value={formatMoney(kpi?.portal_income)}
-                      caption={kpi ? pluralise(kpi.portal_count, 'payment') : undefined}
-                      tone="info"
-                    />
-                  </div>
+              {/* Office Collection and Portal Collection were two MiniStats
+                  here and have been removed. They restated, at a smaller size
+                  and under different names, two of the three tiles in the Income
+                  Channels panel immediately below — where the same split is
+                  drawn with its share of income, its underlying payment methods
+                  and a chart. A headline that repeats the panel under it makes
+                  the page longer without answering anything new, and gave two
+                  places to quote "office collections" from.
 
-                  {kpi && kpi.office_by_type.length > 0 && (
-                    <div
-                      className={`mt-3 pt-3 border-t ${
-                        isDarkMode ? 'border-gray-800' : 'border-gray-200'
-                      }`}
-                    >
-                      <p className={`text-xs mb-1.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                        Office collections by charge type
-                      </p>
-                      {kpi.office_by_type.map((row) => (
-                        <div
-                          key={row.label}
-                          className="flex items-baseline justify-between gap-2 text-xs py-0.5"
-                        >
-                          <span className={`truncate ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                            {row.label}
-                            <span className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>
-                              {' '}
-                              ×{formatNumber(row.count)}
-                            </span>
-                          </span>
-                          <span className="font-semibold whitespace-nowrap">
-                            {formatMoney(row.total)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
+                  The by-charge-type breakdown that hung off them has gone with
+                  them for the same reason: it is a breakdown of a figure this
+                  card no longer shows. */}
             </AccentCard>
 
             <AccentCard
@@ -345,14 +304,16 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           require={WIDGET.financialMetrics}
           fallback={<RestrictedPanel title="Financial Projections & Performance" height={160} />}
         >
-          {/* No date-range control on this panel, deliberately. Both figures are
-              anchored on the calendar — the last seven days and the current month
-              — so a range picker would appear to drive numbers it cannot change,
-              which is worse than not offering one. */}
+          {/* No date-range control on this panel, deliberately. Two of the three
+              figures are anchored on the calendar — the last seven days and the
+              current month — so a picker here would appear to drive numbers it
+              cannot change, which is worse than not offering one. The third,
+              Daily Average, follows the Headline range and says so in its
+              tooltip and its caption. */}
           <Card flush>
             <CardHeader
               title="Sales Projections & Performance"
-              subtitle="Seven-day rolling average and the month-to-date projection"
+              subtitle="Daily average, the seven-day rolling average, and the month-to-date projection"
               icon={<TrendingDown size={16} />}
             />
             <CardBody>
@@ -365,10 +326,36 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
                 {/* Expected MRC and Collection Rate were removed from this panel:
                     both are projections *against* a target rather than
                     measurements of what happened, and both drove conversations
-                    about the assumption rather than the takings. The two figures
-                    left are what was actually collected and what that rate
-                    implies for the month. */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    about the assumption rather than the takings. The three
+                    figures left are what was actually collected, at two
+                    resolutions, and what that rate implies for the month. */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Daily Average leads: it is the only one of the three a
+                      branch is held to day by day, and it is the divisor the
+                      other two are built out of. Anchored on the selected range
+                      rather than on the calendar, unlike its two neighbours —
+                      which is why it carries the range label underneath and they
+                      carry a fixed window. */}
+                  <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Daily Average
+                      </p>
+                      <MetricTooltip
+                        title="Daily Average Collection"
+                        explanation="Collections over the selected range divided by the number of days in it — every day counts, including the ones with no takings. Unlike the two figures beside it this one follows the Headline range control, so it answers 'what is a normal day' for whatever window is on screen."
+                        formula="Income in range ÷ Days in range"
+                      />
+                    </div>
+                    <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {formatMoney(kpi?.daily_average ?? 0)}
+                    </p>
+                    <p className={`text-[11px] mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {formatMoney(kpi?.income)} over {kpi?.days_elapsed ?? 1}{' '}
+                      {pluralise(kpi?.days_elapsed ?? 1, 'day')}
+                    </p>
+                  </div>
+
                   <div className={`rounded-lg p-3 border ${isDarkMode ? 'bg-gray-800/40 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
                     <div className="flex items-center justify-between">
                       <p className={`text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
@@ -453,19 +440,18 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           </div>
         </Restricted>
 
-        {/* ── Accounts payable ──────────────────────────────────────────── */}
-        <Restricted
-          require={WIDGET.financialPayables}
-          fallback={<RestrictedPanel title="Accounts Payable" height={240} />}
-        >
-          <PayablesPanel
-            ledger={payables.data?.payables ?? null}
-            loading={payables.loading && !payables.data}
-            error={payables.error}
-            onChanged={() => payablesRange.setPreset(payablesRange.preset)}
-            actions={<WidgetRange state={payablesRange} />}
-          />
-        </Restricted>
+        {/* "Accounts Payable & Recurring Expenses" stood here and has been
+            removed. It was the only writing panel on a reporting page — a
+            paid/unpaid toggle against a month — and it made this module two
+            things at once: a report of what happened, and a ledger somebody
+            maintains. The two have different audiences and different failure
+            modes, and a mis-click on a reporting screen should not change a
+            payable's state.
+
+            The `payables` block is still computed and still in the API payload,
+            and PayablesPanel is still in the tree — nothing about the ledger has
+            been deleted, only its place on this page. The `widget.financial.payables`
+            permission is likewise still in the catalogue. */}
 
         {/* ── Four horizons side by side ─────────────────────────────────── */}
         <Restricted
@@ -654,16 +640,17 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
             />
           </div>
 
-          <BreakdownTable
-            title="Payment Notes"
-            labelHeader="Note"
-            countLabel="Subscribers"
-            totalLabel="Amount"
-            rows={breakdowns.data?.payment_notes ?? []}
-            loading={breakdowns.loading && !breakdowns.data}
-            error={breakdowns.error}
-            emptyMessage="No payments with notes for this period."
-          />
+          {/* "Payment Notes" stood here and has been removed. It grouped
+              collections by the free-text remark a cashier typed, which produces
+              one row per spelling of the same note — "promo", "Promo", "promo
+              adj" — and a total that reconciles against nothing. The remark is
+              still on the individual payment for anyone who needs it; what has
+              gone is the pretence that it is a category. Removed from the
+              printed report as well, so the two agree.
+
+              `payment_notes` remains in the API payload: the drivers compute it
+              and dropping the field would break a published response shape for a
+              cosmetic gain. */}
 
           {/* "Collections by Branch" stood here and has been removed as a
               redundant report. GOWISER is a single operating company with no

@@ -85,7 +85,17 @@ export interface ManagedRole {
   id: number;
   name: string;
   description: string | null;
+  /**
+   * The effective map, which for a full-access role is everything regardless of
+   * what is stored against it. See Permissions::effective.
+   */
   permissions: string[];
+  /**
+   * True for Super Admin and Executive. Their map is not consulted when access
+   * is decided, so it cannot meaningfully be edited — the server refuses the
+   * attempt rather than saving a change that would do nothing.
+   */
+  full_access?: boolean;
   is_system: boolean;
   user_count?: number;
 }

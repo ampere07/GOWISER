@@ -7,6 +7,7 @@ import {
   Database,
   Info,
   Loader2,
+  Network,
   Pencil,
   Plug,
   Plus,
@@ -17,6 +18,7 @@ import {
 import { ReportingPage, PageHeader } from '../components/reporting/PageLayout';
 import Card, { CardHeader, CardBody } from '../components/reporting/Card';
 import ConnectionForm from '../components/databases/ConnectionForm';
+import SchemaMapPanel from '../components/databases/SchemaMapPanel';
 import {
   Button,
   ErrorBanner,
@@ -82,6 +84,8 @@ const Databases: React.FC<DatabasesProps> = ({ refreshToken }) => {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DatabaseConnection | null>(null);
   const [inspecting, setInspecting] = useState<DatabaseConnection | null>(null);
+  /** The connection whose data map is open. Only one panel is ever open. */
+  const [mapping, setMapping] = useState<DatabaseConnection | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -433,12 +437,36 @@ const Databases: React.FC<DatabasesProps> = ({ refreshToken }) => {
                     <Button
                       variant="outline"
                       icon={<Table2 size={14} />}
-                      onClick={() => setInspecting(connection)}
+                      onClick={() => {
+                        setMapping(null);
+                        setInspecting(connection);
+                      }}
                       disabled={!connection.enabled}
                       title={
                         connection.enabled
                           ? 'Inspect tables'
                           : 'Enable this connection before inspecting it'
+                      }
+                    />
+
+                    {/* Distinct from the inspector beside it, and worth its own
+                        button: that one lists what the database *has*, this one
+                        shows what the portal *reads* — which metric card each
+                        table feeds and how the tables reach one another. The
+                        first answers "is this the right database", the second
+                        answers "why is that figure wrong". */}
+                    <Button
+                      variant="outline"
+                      icon={<Network size={14} />}
+                      onClick={() => {
+                        setInspecting(null);
+                        setMapping(connection);
+                      }}
+                      disabled={!connection.enabled}
+                      title={
+                        connection.enabled
+                          ? 'Show which metric cards this database feeds'
+                          : 'Enable this connection before mapping it'
                       }
                     />
                     <Button
@@ -477,6 +505,8 @@ const Databases: React.FC<DatabasesProps> = ({ refreshToken }) => {
       {inspecting && (
         <TableInspector connection={inspecting} onClose={() => setInspecting(null)} />
       )}
+
+      {mapping && <SchemaMapPanel connection={mapping} onClose={() => setMapping(null)} />}
 
       {confirmDelete && (
         <Card>

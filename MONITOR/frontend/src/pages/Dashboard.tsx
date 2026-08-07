@@ -5,7 +5,6 @@ import SubscriberAnalytics from './SubscriberAnalytics';
 import Financial from './Financial';
 import FieldOperations from './FieldOperations';
 import Tech from './Tech';
-import Employee from './Employee';
 import Databases from './Databases';
 import ExecutiveOverview from './ExecutiveOverview';
 import UserManagement from './UserManagement';
@@ -13,8 +12,10 @@ import Roles from './Roles';
 import AuditTrail from './AuditTrail';
 import Settings from './Settings';
 import MikrotikRadius from './MikrotikRadius';
+import ToastHost, { toastRefreshed } from '../components/common/Toast';
 import { UserData } from '../types/api';
 import { PermissionContext } from '../hooks/usePermissions';
+import { isRefreshSuspended } from '../hooks/useAutoRefresh';
 import { useTheme } from '../hooks/useTheme';
 import { useMonitorStore } from '../store/monitorStore';
 import { monitorService } from '../services/monitorService';
@@ -26,8 +27,17 @@ interface DashboardProps {
   onLogout: () => void;
 }
 
-/** How often the visible dashboard silently re-fetches, in seconds. */
-const POLL_SECONDS = Number(process.env.REACT_APP_POLL_INTERVAL || 30);
+/**
+ * The dashboard-wide poll used to run on a build-time constant
+ * (REACT_APP_POLL_INTERVAL, defaulting to thirty seconds) that nothing in the
+ * product could reach. It now runs on the interval set under Settings →
+ * Auto-Refresh, which is the control that claims to govern exactly this.
+ *
+ * Those two things being separate was the bug: an administrator who set
+ * auto-refresh to Off still had every open dashboard re-reading every monitored
+ * database twice a minute, and the setting page said otherwise. See
+ * AppSetting::refreshIntervals for why the interval is portal-wide.
+ */
 
 const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const isDarkMode = useTheme();
@@ -68,6 +78,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     () => ({
       permissions: user.permissions ?? [],
       isExecutiveRole: Boolean(user.is_executive_role),
+      isFullAccess: Boolean(user.is_full_access),
       user,
     }),
     [user]
@@ -109,6 +120,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       setRefreshToken((token) => token + 1);
       markUpdated();
 
+      // Every refresh says so, whether somebody pressed the button or the poll
+      // came round. A silent re-read is indistinguishable from a page that has
+      // stopped updating, and on a screen quoted out loud that difference
+      // matters more than the second of chrome it costs. Repeats collapse into
+      // one row rather than stacking — see ToastHost.
+      toastRefreshed();
+
       if (manual) {
         window.setTimeout(() => setIsRefreshing(false), 600);
       }
@@ -116,18 +134,43 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     [activeSource, markUpdated]
   );
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Polling a backgrounded tab wastes queries on a production database.
-      if (document.visibilityState === 'visible') {
-        monitorService.invalidate();
-        reportingService.invalidate(activeSource);
-        triggerRefresh(false);
-      }
-    }, POLL_SECONDS * 1000);
+  const pollSeconds = Number(user.preferences?.overview_refresh ?? 0);
 
-    return () => clearInterval(interval);
-  }, [activeSource, triggerRefresh]);
+  useEffect(() => {
+    // Off is off. No timer at all rather than one that fires and returns early,
+    // so a portal set to Off costs nothing and cannot be woken by the
+    // visibility handler below either.
+    if (pollSeconds <= 0) return;
+
+    const poll = () => {
+      // Polling a backgrounded tab wastes queries on a production database.
+      if (document.visibilityState !== 'visible') return;
+
+      // Held while a drill-down or a dialog is open anywhere below. Reloading
+      // the table somebody is reading row forty of is worse than a stale one,
+      // and that is as true of this poll as of a page's own timer.
+      if (isRefreshSuspended()) return;
+
+      monitorService.invalidate();
+      reportingService.invalidate(activeSource);
+      triggerRefresh(false);
+    };
+
+    const interval = setInterval(poll, pollSeconds * 1000);
+
+    // A tab returning to the foreground refreshes at once rather than waiting
+    // out the remainder of an interval that elapsed while nobody was looking.
+    const onVisible = () => {
+      if (!document.hidden) poll();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [pollSeconds, activeSource, triggerRefresh]);
 
   // A permission or capability change can pull the current section out from
   // under the user. Move them to the first section still available rather than
@@ -197,8 +240,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         return <FieldOperations refreshToken={refreshToken} />;
       case 'tech':
         return <Tech refreshToken={refreshToken} />;
-      case 'employee':
-        return <Employee refreshToken={refreshToken} />;
       case 'mikrotik-radius':
         return <MikrotikRadius refreshToken={refreshToken} />;
       case 'databases':
@@ -251,6 +292,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           <div className="h-full overflow-y-auto">{renderContent()}</div>
         </div>
       </div>
+
+      {/* Mounted once at the root rather than per page: a notice raised by the
+          poll must survive the user navigating between sections mid-fade. */}
+      <ToastHost />
     </div>
     </PermissionContext.Provider>
   );

@@ -51,7 +51,15 @@ class UserManagementController extends Controller
                     'id' => (int) $role->id,
                     'name' => $role->role_name,
                     'description' => $role->description,
-                    'permissions' => is_array($role->permissions) ? $role->permissions : [],
+                    // The *effective* map, not the stored column. For Super
+                    // Admin and Executive the two differ — their saved list is
+                    // ignored at enforcement time — and showing the column would
+                    // report a narrower role than the middleware grants.
+                    'permissions' => Permissions::effective(
+                        $role->role_name,
+                        is_array($role->permissions) ? $role->permissions : []
+                    ),
+                    'full_access' => Permissions::isFullAccessRole($role->role_name),
                     'is_system' => (bool) $role->is_system,
                     'user_count' => $users->where('role_id', $role->id)->count(),
                 ])->all(),
@@ -211,9 +219,16 @@ class UserManagementController extends Controller
      * Reshapes a role's permission map.
      *
      * System roles keep their name — deleting or renaming Super Admin out from
-     * under the last administrator is the failure mode this guards — but their
-     * permissions stay editable, because a deployment's idea of what an Executive
+     * under the last administrator is the failure mode this guards — but most of
+     * them stay editable, because a deployment's idea of what a Finance Admin
      * sees is legitimately its own.
+     *
+     * The two full-access roles are the exception, and are refused outright
+     * rather than accepted and ignored. Their map is not consulted at
+     * enforcement time (see Permissions::FULL_ACCESS_ROLES), so a saved edit
+     * would change nothing while the screen showed it as having taken — which is
+     * the worst of the three possible behaviours. An administrator who wants a
+     * narrower role should make one, which is what this screen is for.
      */
     public function updateRole(Request $request, Role $role)
     {
@@ -223,17 +238,15 @@ class UserManagementController extends Controller
             'permissions.*' => ['string'],
         ]);
 
-        $before = ['permissions' => is_array($role->permissions) ? $role->permissions : []];
-        $permissions = Permissions::sanitise($data['permissions']);
-
-        // Super Admin is the escape hatch. Letting it be narrowed means a portal
-        // that can lock every administrator out of its own permission screen.
-        if (strcasecmp($role->role_name, 'Super Admin') === 0
-            && !in_array(Permissions::ACTION_USERS_MANAGE, $permissions, true)) {
+        if (Permissions::isFullAccessRole($role->role_name)) {
             throw ValidationException::withMessages([
-                'permissions' => 'Super Admin must keep user-management access.',
+                'permissions' => "[{$role->role_name}] holds every permission by definition and cannot be narrowed. "
+                    . 'Create a role with the access you want and move the accounts onto it.',
             ]);
         }
+
+        $before = ['permissions' => is_array($role->permissions) ? $role->permissions : []];
+        $permissions = Permissions::sanitise($data['permissions']);
 
         $role->fill([
             'description' => $data['description'] ?? $role->description,
@@ -258,6 +271,7 @@ class UserManagementController extends Controller
                     'name' => $role->role_name,
                     'description' => $role->description,
                     'permissions' => $permissions,
+                    'full_access' => false,
                     'is_system' => (bool) $role->is_system,
                 ],
             ],
@@ -319,7 +333,16 @@ class UserManagementController extends Controller
     private function effectiveFor(array $data): array
     {
         $role = Role::find($data['role_id']);
-        $base = is_array($role?->permissions) ? $role->permissions : [];
+
+        // Through Permissions::effective rather than off the column, so this
+        // preview agrees with User::permissionList for the full-access roles —
+        // whose stored map is not what gets enforced. Two answers to "what will
+        // this account be able to do" is the one thing this screen must not have.
+        $base = Permissions::effective(
+            $role?->role_name,
+            is_array($role?->permissions) ? $role->permissions : []
+        );
+
         $overrides = $this->overrides($data) ?? ['grant' => [], 'deny' => []];
 
         return array_values(array_diff(

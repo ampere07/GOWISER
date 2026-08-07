@@ -163,7 +163,7 @@ class ExecutiveOverviewController extends Controller
             'plan' => ['nullable', 'string', 'max:128'],
             'search' => ['nullable', 'string', 'max:128'],
             'page' => ['nullable', 'integer', 'min:1', 'max:10000'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:' . ReportingService::MAX_PER_PAGE],
         ]);
 
         try {
@@ -229,8 +229,19 @@ class ExecutiveOverviewController extends Controller
             ])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'page' => ['nullable', 'integer', 'min:1', 'max:10000'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:' . ReportingService::MAX_PER_PAGE],
         ]);
+
+        // The money metrics list transactions, so they follow the same widget
+        // permission that masks the two money blocks on the dashboard itself.
+        // Without this a role that sees "restricted" where the Income tile
+        // should be could still read every payment line by asking for them
+        // directly — masking a figure while serving the ledger behind it is not
+        // a restriction, it is a longer route to the same data.
+        if (GowiserReportsDriver::isMoneyMetric($validated['metric'])
+            && !$request->user()->can_(Permissions::WIDGET_EXECUTIVE_FINANCE)) {
+            return $this->deny($request, 'role cannot see executive financial figures');
+        }
 
         try {
             return response()->json([

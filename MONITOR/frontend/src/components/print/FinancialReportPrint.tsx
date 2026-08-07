@@ -147,34 +147,13 @@ const FinancialReportPrint: React.FC<FinancialReportPrintProps> = ({
         )}
       </table>
 
-      {/* ── Notes ───────────────────────────────────────────────────── */}
-      {data.payment_notes.length > 0 && (
-        <>
-          <h3 style={sectionTitle}>Payment Notes</h3>
-          <table style={table}>
-            <thead>
-              <tr>
-                <th style={th}>Note</th>
-                <th style={{ ...th, textAlign: 'right' }}>Subscribers</th>
-                <th style={{ ...th, textAlign: 'right' }}>Payments</th>
-                <th style={{ ...th, textAlign: 'right' }}>Amount ({company.currency_symbol})</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.payment_notes.map((note) => (
-                <tr key={note.label}>
-                  <td style={td}>{note.label}</td>
-                  {/* `count` is the subscriber count the driver groups by; the
-                      payment count rides along in `detail` when it differs. */}
-                  <td style={{ ...td, textAlign: 'right' }}>{formatNumber(note.count)}</td>
-                  <td style={{ ...td, textAlign: 'right' }}>{note.detail || '—'}</td>
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{formatMoney(note.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      {/* A "Payment Notes" table stood here and has been removed along with the
+          panel of the same name on the Financial page. It grouped collections by
+          the free-text remark a cashier typed, which produced one row per
+          spelling of the same note and totalled nothing anybody reconciles
+          against. `payment_notes` is still in the API payload — the drivers
+          compute it and removing the field would break a published response
+          shape for a cosmetic gain — it is simply no longer rendered. */}
 
       {/* ── Summary ─────────────────────────────────────────────────── */}
       <h3 style={sectionTitle}>Financial Summary</h3>
