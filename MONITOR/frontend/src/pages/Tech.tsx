@@ -15,10 +15,12 @@ import {
 } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice, SourceCell } from '../components/reporting/DatabaseFilter';
+import { PageActions, PagePeriodBar, usePageChrome } from '../components/reporting/PageChrome';
 import WidgetRange from '../components/reporting/WidgetRange';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
+import { useLinkedRange } from '../hooks/useLinkedRange';
 import { reportingService } from '../services/reportingService';
 import { TechData, Technician, TechnicianLocation, TechnicianWorkload } from '../types/reporting';
 import { formatNumber, formatTime, pluralise } from '../utils/format';
@@ -45,32 +47,41 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   const { filters, update, reset, databases } = useSectionFilters('tech');
 
-  // Every Tech widget carries its own range, as the other modules now do.
-  // Headline counts and workload share one because they are two views of the
-  // same question — who did what, over what period — and splitting them would
-  // let the summary contradict the table beneath it. Field positions and the
-  // roster are statements of now and take a range only so the control is
-  // consistent across the page.
-  const workloadRange = useWidgetRange('monthly');
-  const positionsRange = useWidgetRange('monthly');
-  const rosterRange = useWidgetRange('monthly');
+  const chrome = usePageChrome();
+  const [reloads, setReloads] = React.useState(0);
 
-  const primary = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+  // One page period, which every widget follows until somebody moves it.
+  // Headline counts and workload always move together because they are two
+  // views of the same question — who did what, over what period — and splitting
+  // them would let the summary contradict the table beneath it. Field positions
+  // and the roster are statements of now and take a range only so the control is
+  // consistent across the page.
+  const pageRange = useWidgetRange('monthly');
+  const workloadRange = useLinkedRange(pageRange);
+  const positionsRange = useLinkedRange(pageRange);
+  const rosterRange = useLinkedRange(pageRange);
+
+  const primary = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken + reloads, {
     dateFrom: workloadRange.range.from,
     dateTo: workloadRange.range.to,
   });
 
-  const positions = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+  const positions = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken + reloads, {
     dateFrom: positionsRange.range.from,
     dateTo: positionsRange.range.to,
   });
 
-  const roster = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken, {
+  const roster = useReportingSection<TechData>(reportingService.getTech, filters, refreshToken + reloads, {
     dateFrom: rosterRange.range.from,
     dateTo: rosterRange.range.to,
   });
 
-  const { data, loading, error, sourceLabel, substituted } = primary;
+  const { data, loading, error, source, sourceLabel, substituted } = primary;
+
+  const refresh = () => {
+    reportingService.invalidate(source || undefined);
+    setReloads((count) => count + 1);
+  };
 
   const first = loading && !data;
 
@@ -89,6 +100,7 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
   const showSource = workload.some((row) => Boolean(row.source_label));
 
   return (
+    <div ref={chrome.container} className={chrome.containerClass}>
     <ReportingPage>
       <PageHeader
         title="Tech"
@@ -98,6 +110,7 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
             {sourceLabel && <> · {sourceLabel}</>}
           </>
         }
+        actions={<PageActions chrome={chrome} onRefresh={refresh} refreshing={loading} />}
       />
 
       <SourceNotice show={substituted} sourceLabel={sourceLabel} />
@@ -113,6 +126,8 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
         databases={databases}
         showBranch={false}
       />
+
+      <PagePeriodBar chrome={chrome} state={pageRange} />
 
       {/* ── Headline ──────────────────────────────────────────────────── */}
       <Card>
@@ -443,6 +458,7 @@ const Tech: React.FC<TechProps> = ({ refreshToken }) => {
         the field now" is derived from how recently a device reported, not from the status it claims.
       </p>
     </ReportingPage>
+    </div>
   );
 };
 

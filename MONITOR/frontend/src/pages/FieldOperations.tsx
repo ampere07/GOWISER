@@ -18,11 +18,13 @@ import { ErrorBanner, PanelState } from '../components/reporting/primitives';
 import { QueuePanel, TurnaroundPanel } from '../components/reporting/OperationsPanels';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
+import { PageActions, PagePeriodBar, usePageChrome } from '../components/reporting/PageChrome';
 import WidgetRange from '../components/reporting/WidgetRange';
 import { Restricted, RestrictedPanel } from '../components/rbac/Restricted';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
+import { useLinkedRange } from '../hooks/useLinkedRange';
 import { reportingService } from '../services/reportingService';
 import { OperationsData } from '../types/reporting';
 import { WIDGET } from '../types/rbac';
@@ -47,33 +49,43 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
   const isDarkMode = useTheme();
   const { filters, update, reset, branches, databases } = useSectionFilters('operations');
 
-  // A range per widget, on the two panels that are genuinely period-bound.
-  // The queue panels below are a statement of what is open *now* and carry no
-  // range at all — a backlog filtered to a date window is not a backlog.
-  const slaRange = useWidgetRange('monthly');
-  const concernsRange = useWidgetRange('monthly');
+  const chrome = usePageChrome();
+  const [reloads, setReloads] = React.useState(0);
+
+  // The page period drives the two panels that are genuinely period-bound.
+  // The queue panels are a statement of what the queue holds *now* and carry no
+  // range at all — a queue does not have a date, which is why the pipeline is
+  // counted all-time on the backend rather than over this window.
+  const pageRange = useWidgetRange('monthly');
+  const slaRange = useLinkedRange(pageRange);
+  const concernsRange = useLinkedRange(pageRange);
 
   const primary = useReportingSection<OperationsData>(
     reportingService.getOperations,
     filters,
-    refreshToken
+    refreshToken + reloads
   );
 
   const sla = useReportingSection<OperationsData>(
     reportingService.getOperations,
     filters,
-    refreshToken,
+    refreshToken + reloads,
     { dateFrom: slaRange.range.from, dateTo: slaRange.range.to }
   );
 
   const concernsSection = useReportingSection<OperationsData>(
     reportingService.getOperations,
     filters,
-    refreshToken,
+    refreshToken + reloads,
     { dateFrom: concernsRange.range.from, dateTo: concernsRange.range.to }
   );
 
-  const { data, loading, error, sourceLabel, substituted } = primary;
+  const { data, loading, error, source, sourceLabel, substituted } = primary;
+
+  const refresh = () => {
+    reportingService.invalidate(source || undefined);
+    setReloads((count) => count + 1);
+  };
 
   const first = loading && !data;
 
@@ -83,6 +95,7 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
   const showBranchLabel = branchLabel && branchLabel !== 'All branches' && branchLabel !== 'All accounts';
 
   return (
+    <div ref={chrome.container} className={chrome.containerClass}>
     <ReportingPage>
       <PageHeader
         title="Operations"
@@ -93,6 +106,7 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
             {showBranchLabel && <> · {branchLabel}</>}
           </>
         }
+        actions={<PageActions chrome={chrome} onRefresh={refresh} refreshing={loading} />}
       />
 
       <SourceNotice show={substituted} sourceLabel={sourceLabel} />
@@ -106,6 +120,18 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
         branches={branches}
         databases={databases}
         showBranch={branches.length > 0}
+      />
+
+      <PagePeriodBar
+        chrome={chrome}
+        state={pageRange}
+        // The queues below ignore it, and say so here rather than leaving the
+        // reader to work out why three of the five panels never move.
+        trailing={
+          <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+            turnaround &amp; concerns · queues are the whole backlog
+          </span>
+        }
       />
 
       {/* ── Queues ────────────────────────────────────────────────────── */}
@@ -231,6 +257,7 @@ const FieldOperations: React.FC<FieldOperationsProps> = ({ refreshToken }) => {
           : 'This system records field work as a single queue, so new connections and repairs are not distinguishable.'}
       </p>
     </ReportingPage>
+    </div>
   );
 };
 

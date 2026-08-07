@@ -2179,23 +2179,28 @@ class GowiserReportsDriver implements ReportsDriver
             'range' => ['from' => $from, 'to' => $to],
             'range_label' => $this->rangeLabel($from, $to),
 
+            // The pipeline is the whole queue, not the slice of it raised inside
+            // the selected range — see queueStatusesOverall for why, and for the
+            // 88-against-180 discrepancy that windowing produced. `work_streams`
+            // below still uses the windowed tally, because that block genuinely
+            // answers "what came in during this period".
             'queues' => [
                 [
                     'key' => 'applications',
                     'label' => 'Applications',
-                    'statuses' => $applicationStatuses,
+                    'statuses' => $this->queueStatusesOverall($db, 'applications', 'status'),
                     'backlog' => $this->queueBacklog($db, 'applications', 'status', 'timestamp'),
                 ],
                 [
                     'key' => 'job_orders',
                     'label' => 'Job Orders',
-                    'statuses' => $jobStatuses,
+                    'statuses' => $this->queueStatusesOverall($db, 'job_orders', 'onsite_status'),
                     'backlog' => $this->queueBacklog($db, 'job_orders', 'onsite_status', 'timestamp'),
                 ],
                 [
                     'key' => 'service_orders',
                     'label' => 'Service Orders',
-                    'statuses' => $serviceStatuses,
+                    'statuses' => $this->queueStatusesOverall($db, 'service_orders', 'support_status'),
                     'backlog' => $this->queueBacklog($db, 'service_orders', 'support_status', 'timestamp'),
                 ],
             ],
@@ -3828,75 +3833,53 @@ class GowiserReportsDriver implements ReportsDriver
         string $from,
         string $to
     ): array {
-        $inRange = $db->table($table)
+        return $db->table($table)
             ->whereBetween(DB::raw("DATE({$dateColumn})"), [$from, $to])
             ->selectRaw("COALESCE(NULLIF({$statusColumn}, ''), 'Unspecified') AS label")
             ->selectRaw('COUNT(*) AS cnt')
             ->groupBy('label')
             ->orderByRaw('COUNT(*) DESC')
             ->get()
-            ->mapWithKeys(fn ($row) => [(string) $row->label => (int) $row->cnt])
+            ->map(fn ($row) => ['label' => (string) $row->label, 'count' => (int) $row->cnt])
             ->all();
-
-        // Every status the queue uses, not only the ones that happened to occur
-        // inside the range. A pipeline that renders four rows on a quiet Monday
-        // and nine on a busy Friday is unreadable as a pipeline — the reader
-        // cannot tell "no applications failed today" from "this build stopped
-        // reporting failures". A status with no rows in range is a real and
-        // useful zero, so it is shown as one.
-        //
-        // Counted all-time and unioned rather than hardcoded, because both
-        // systems write free-text statuses and a workflow state added in SYNC
-        // has to appear here without a change to this file.
-        $rows = array_map(
-            fn (string $label) => ['label' => $label, 'count' => $inRange[$label] ?? 0],
-            $this->knownStatuses($db, $table, $statusColumn, array_keys($inRange))
-        );
-
-        // Busiest first, then alphabetically so the zero rows have a stable
-        // order rather than shuffling between refreshes.
-        usort(
-            $rows,
-            fn (array $a, array $b) => $b['count'] <=> $a['count'] ?: strcasecmp($a['label'], $b['label'])
-        );
-
-        return $rows;
     }
 
     /**
-     * Every distinct value the status column holds, plus whatever was in range.
+     * The same tally over the whole queue, ignoring the date range.
      *
-     * One grouped scan of an indexed column, capped: a free-text status column
-     * that has accumulated hundreds of distinct values is a data-quality problem
-     * and rendering all of them would bury the handful that are real workflow
-     * states. On failure the in-range list is returned unchanged — losing the
-     * zero rows is a smaller loss than losing the panel.
+     * ── Why the pipeline is not windowed ──────────────────────────────
      *
-     * @param string[] $inRange
-     * @return string[]
+     * A queue's status breakdown is a statement about what is in the queue, and
+     * a queue does not have a date. Windowed, this panel answered "of the
+     * applications *filed this month*, how many are cancelled" — which is a real
+     * question and not the one the panel is read for, and it produced totals
+     * that disagreed with the operating system's own sidebar by a factor of two:
+     * 88 applications here against 180 in SYNC, because ninety-two of them were
+     * filed before the first of the month and are still sitting in the queue.
+     *
+     * The same argument the backlog figure has always made — "old backlog is
+     * still backlog" — applies to every row of the pipeline, not only to the
+     * open ones.
+     *
+     * Capped at QUEUE_STATUS_LIMIT distinct values: both systems write free text
+     * here, so a column that has collected hundreds is a data-quality problem
+     * rather than a pipeline, and drawing all of them buries the handful that
+     * are real workflow states.
      */
-    private function knownStatuses(
+    private function queueStatusesOverall(
         ConnectionInterface $db,
         string $table,
-        string $statusColumn,
-        array $inRange
+        string $statusColumn
     ): array {
-        try {
-            $all = $db->table($table)
-                ->selectRaw("COALESCE(NULLIF({$statusColumn}, ''), 'Unspecified') AS label")
-                ->groupBy('label')
-                ->orderByRaw('COUNT(*) DESC')
-                ->limit(self::QUEUE_STATUS_LIMIT)
-                ->pluck('label')
-                ->map(fn ($label) => (string) $label)
-                ->all();
-        } catch (\Throwable $e) {
-            report($e);
-
-            return $inRange;
-        }
-
-        return array_values(array_unique(array_merge($inRange, $all)));
+        return $db->table($table)
+            ->selectRaw("COALESCE(NULLIF({$statusColumn}, ''), 'Unspecified') AS label")
+            ->selectRaw('COUNT(*) AS cnt')
+            ->groupBy('label')
+            ->orderByRaw('COUNT(*) DESC')
+            ->limit(self::QUEUE_STATUS_LIMIT)
+            ->get()
+            ->map(fn ($row) => ['label' => (string) $row->label, 'count' => (int) $row->cnt])
+            ->all();
     }
 
     /**
