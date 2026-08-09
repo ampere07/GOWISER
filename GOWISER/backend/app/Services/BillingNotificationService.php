@@ -345,10 +345,10 @@ class BillingNotificationService
      * prepaid notices carry no email.
      *
      * Uses its own 'PrepaidPreExpiry' template so operations can word the early warning differently
-     * from the lapse notice, and falls back to 'StatementofAccount' when that template is missing or
-     * has been deactivated — the same template {@see generatePrepaidExpirySmsMessage()} uses — so a
-     * fresh install that has not yet reviewed its templates still warns customers rather than
-     * silently sending nothing.
+     * from the lapse notice, and falls back to a built-in standardized message when that template is
+     * missing or has been deactivated — see {@see generatePrepaidPreExpirySmsMessage()} — so a fresh
+     * install that has not yet configured its templates still warns customers rather than silently
+     * sending nothing.
      *
      * Never throws: failures come back in `errors` so one account cannot abort a batch scan.
      *
@@ -385,7 +385,7 @@ class BillingNotificationService
                 return $results;
             }
 
-            $smsMessage = $this->generatePrepaidPreExpirySmsMessage($account, $expiresAt, $renewalAmount);
+            $smsMessage = $this->generatePrepaidPreExpirySmsMessage($account, $expiresAt);
 
             if (!$smsMessage) {
                 $results['errors'][] = 'No usable SMS template for the prepaid pre-expiry notice';
@@ -434,20 +434,27 @@ class BillingNotificationService
     }
 
     /**
+     * The standardized pre-expiry SMS body, used whenever no active 'PrepaidPreExpiry' template is
+     * configured. Deliberately carries no price/amount placeholder — a pre-expiry warning is not a
+     * bill, and account_no/plan_name/due_date are all that is needed to tell the customer their
+     * plan is about to lapse.
+     */
+    protected const PREPAID_PRE_EXPIRY_SMS_TEMPLATE =
+        'Dear {{customer_name}}, your prepaid plan ({{plan_name}}) for account {{account_no}} will expire on {{due_date}}. Renew early at sync.gowiser.ph to avoid service interruption.';
+
+    /**
      * SMS body for the prepaid pre-expiry warning.
      *
-     * Prefers the dedicated 'PrepaidPreExpiry' template and falls back to 'StatementofAccount'.
-     * Because that fallback is written against the full billing placeholder set, every amount alias
-     * is substituted here too — otherwise a fallback rendering would go out with a literal
-     * {{total_amount}} in it.
+     * Prefers the dedicated 'PrepaidPreExpiry' template and falls back to the standardized
+     * {@see PREPAID_PRE_EXPIRY_SMS_TEMPLATE} when that template is missing or inactive, so this
+     * warning never depends on the unrelated postpaid billing template set (and never needs a
+     * renewal amount) to render.
      *
-     * Returns null when neither template is available, which the caller reports as an error rather
-     * than sending a half-rendered message.
+     * Only ever returns null on an unexpected exception — there is always a message to send.
      */
     protected function generatePrepaidPreExpirySmsMessage(
         BillingAccount $account,
-        Carbon $expiresAt,
-        float $renewalAmount
+        Carbon $expiresAt
     ): ?string {
         try {
             $customer = $account->customer;
@@ -457,50 +464,23 @@ class BillingNotificationService
                 ->where('is_active', 1)
                 ->first();
 
-            if (!$template) {
-                $template = DB::table('sms_templates')
-                    ->where('template_type', 'StatementofAccount')
-                    ->where('is_active', 1)
-                    ->first();
-
-                if ($template) {
-                    Log::info('Prepaid pre-expiry SMS falling back to the StatementofAccount template', [
-                        'account_no' => $account->account_no
-                    ]);
-                }
-            }
+            $messageContent = $template?->message_content ?? self::PREPAID_PRE_EXPIRY_SMS_TEMPLATE;
 
             if (!$template) {
-                Log::warning('Prepaid pre-expiry SMS skipped: no active PrepaidPreExpiry or StatementofAccount template', [
+                Log::info('Prepaid pre-expiry SMS falling back to the built-in standardized template', [
                     'account_no' => $account->account_no
                 ]);
-                return null;
             }
 
-            $paymentLink = config('app.payment_link', 'https://sync.gowiser.ph');
-            $planNameRaw = $account->plan ? $account->plan->plan_name : ($customer->desired_plan ?? 'N/A');
-            $planNameFormatted = str_replace('₱', 'P', $planNameRaw);
+            $planName = $account->plan?->plan_name ?? $customer->desired_plan ?? 'N/A';
+            $planNameFormatted = str_replace('₱', 'P', $planName);
             $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
-            $amount = number_format($renewalAmount, 2);
 
-            $message = $template->message_content;
-            $message = str_replace('{{customer_name}}', $customerName, $message);
-            $message = str_replace('{{account_no}}', $account->account_no, $message);
+            $message = str_replace('{{customer_name}}', $customerName, $messageContent);
             $message = str_replace('{{plan_name}}', $planNameFormatted, $message);
             $message = str_replace('{{plan_nam}}', $planNameFormatted, $message);
-            $message = str_replace('{{amount_due}}', $amount, $message);
-            $message = str_replace('{{total_amount}}', $amount, $message);
-            $message = str_replace('{{total_due}}', $amount, $message);
-            $message = str_replace('{{amount}}', $amount, $message);
-            $message = str_replace('{{balance}}', $amount, $message);
+            $message = str_replace('{{account_no}}', $account->account_no, $message);
             $message = str_replace('{{due_date}}', $expiresAt->format('M d, Y'), $message);
-            $message = str_replace('{{payment_link}}', $paymentLink, $message);
-
-            // No statement exists, so the SOA date placeholders in the fallback template fall back
-            // to today — same as generatePrepaidExpirySmsMessage().
-            $todayStr = date('M d, Y');
-            $message = str_replace('{{soa_date}}', $todayStr, $message);
-            $message = str_replace('{{soa_data}}', $todayStr, $message);
 
             return $this->replaceGlobalVariables($message);
         } catch (\Exception $e) {

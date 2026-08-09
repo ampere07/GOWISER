@@ -160,6 +160,12 @@ Route::middleware(['auth', 'executive'])->group(function () {
     // the same query the counter used, so the modal can never show a different
     // population from the tile that opened it.
     Route::get('/executive/records', [ExecutiveOverviewController::class, 'metricRecords']);
+
+    // The saved Edit Layout state — section positions plus per-section font
+    // size / tile columns / rows. localStorage is the fast path on every load;
+    // this is the durable backup, written once when Edit Layout closes.
+    Route::get('/executive/overview/layout', [ExecutiveOverviewController::class, 'getLayout']);
+    Route::put('/executive/overview/layout', [ExecutiveOverviewController::class, 'putLayout']);
 });
 
 /*

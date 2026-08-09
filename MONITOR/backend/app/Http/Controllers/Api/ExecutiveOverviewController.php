@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
+use App\Models\User;
 use App\Services\ExecutiveOverviewService;
 use App\Services\Reports\GowiserReportsDriver;
 use App\Services\Reports\StatusMap;
@@ -11,6 +12,7 @@ use App\Services\ReportingService;
 use App\Support\PayloadMasker;
 use App\Support\Permissions;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
@@ -271,6 +273,97 @@ class ExecutiveOverviewController extends Controller
                 'message' => config('app.debug')
                     ? $e->getMessage()
                     : 'Unable to list those records.',
+            ], 500);
+        }
+    }
+
+    /** The four sections a saved layout may position or style. Whitelist for putLayout(). */
+    private const SECTION_KEYS = ['range', 'monthly', 'subscribers', 'plans'];
+
+    /**
+     * This user's saved Group Overview grid layout, or null if they have never
+     * saved one — the frontend falls back to localStorage, then to the default
+     * stacked layout, in that order.
+     *
+     * Not audited, for the same reason workStreams()/metricRecords() are not:
+     * opening the dashboard is the access event show() already records, and a
+     * preference read is not a second one.
+     */
+    public function getLayout(Request $request)
+    {
+        $denied = $this->guard($request);
+
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        $preferences = $request->user()->preferences;
+
+        return response()->json([
+            'status' => 'success',
+            'data' => (is_array($preferences) ? $preferences['executive_overview_layout'] ?? null : null),
+        ]);
+    }
+
+    /**
+     * Saves this user's Group Overview grid layout.
+     *
+     * Read-modify-write under a row lock, touching only the
+     * `executive_overview_layout` key of the `preferences` JSON column — any
+     * other key already on the row (including the legacy `overview_refresh`/
+     * `mikrotik_refresh` values the column no longer drives, see User::$preferences)
+     * survives untouched. A resent identical payload produces the same end
+     * state, so this is naturally idempotent: no duplicate rows, nothing orphaned.
+     */
+    public function putLayout(Request $request)
+    {
+        $denied = $this->guard($request);
+
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        $rules = [];
+
+        foreach (self::SECTION_KEYS as $key) {
+            $rules["positions.{$key}"] = ['required', 'array'];
+            $rules["positions.{$key}.x"] = ['required', 'integer', 'min:0', 'max:1'];
+            $rules["positions.{$key}.y"] = ['required', 'integer', 'min:0', 'max:50'];
+            $rules["positions.{$key}.w"] = ['required', Rule::in([1, 2])];
+            $rules["cardSettings.{$key}"] = ['nullable', 'array'];
+            $rules["cardSettings.{$key}.fontSize"] = ['nullable', 'integer', 'min:8', 'max:72'];
+            $rules["cardSettings.{$key}.cols"] = ['nullable', 'integer', 'min:1', 'max:5'];
+            $rules["cardSettings.{$key}.rows"] = ['nullable', 'integer', 'min:1', 'max:8'];
+        }
+
+        // validate() drops any key not named above — that is the whitelist. A
+        // fifth section key or an extra field on the payload cannot be smuggled
+        // into this user's preferences blob.
+        $validated = $request->validate($rules);
+
+        try {
+            $saved = DB::transaction(function () use ($request, $validated) {
+                $user = User::whereKey($request->user()->id)->lockForUpdate()->first();
+                $preferences = is_array($user->preferences) ? $user->preferences : [];
+                $preferences['executive_overview_layout'] = $validated;
+                $user->preferences = $preferences;
+                $user->save();
+
+                return $preferences['executive_overview_layout'];
+            });
+
+            Log::info('Executive overview layout saved', ['user_id' => $request->user()->id]);
+
+            return response()->json(['status' => 'success', 'data' => $saved]);
+        } catch (\Throwable $e) {
+            Log::error('Executive overview layout save failed: ' . $e->getMessage(), [
+                'user_id' => $request->user()->id,
+                'exception' => get_class($e),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => config('app.debug') ? $e->getMessage() : 'Unable to save the layout.',
             ], 500);
         }
     }

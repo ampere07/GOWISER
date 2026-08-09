@@ -1593,16 +1593,12 @@ class EnhancedBillingGenerationServiceWithNotifications
                     continue;
                 }
 
+                // No renewal-amount guard here: a prepaid account reaching the expiry window is
+                // told regardless of whether its plan has a quotable price. quotePrepaidRenewalAmount()
+                // returns 0.0 for an unpriced/unlinked plan and the notice still goes out — see
+                // BillingNotificationService::generatePrepaidExpirySmsMessage(), which renders fine
+                // with a zero amount.
                 $renewalAmount = $this->quotePrepaidRenewalAmount($account);
-
-                if ($renewalAmount <= 0) {
-                    $results['skipped']++;
-                    $this->log('warning', 'Skipped prepaid expiry notice — account has no priced plan to quote', [
-                        'account_no' => $account->account_no,
-                        'plan_id' => $account->plan_id,
-                    ]);
-                    continue;
-                }
 
                 // 8:00 AM Asia/Manila, matching queueNotification() — the scan runs at 01:00 and
                 // customers should not be woken by it.
@@ -1794,16 +1790,12 @@ class EnhancedBillingGenerationServiceWithNotifications
                     continue;
                 }
 
+                // No renewal-amount guard here: any prepaid account inside the pre-expiry window is
+                // warned regardless of whether its plan has a quotable price. quotePrepaidRenewalAmount()
+                // returns 0.0 for an unpriced/unlinked plan and the warning still goes out — the
+                // pre-expiry template no longer carries a price placeholder at all (see
+                // BillingNotificationService::generatePrepaidPreExpirySmsMessage()).
                 $renewalAmount = $this->quotePrepaidRenewalAmount($account);
-
-                if ($renewalAmount <= 0) {
-                    $results['skipped']++;
-                    $this->log('warning', 'Skipped prepaid pre-expiry notice — account has no priced plan to quote', [
-                        'account_no' => $account->account_no,
-                        'plan_id' => $account->plan_id,
-                    ]);
-                    continue;
-                }
 
                 // 8:00 AM Asia/Manila, matching queueNotification() and the expiry scan — this
                 // runs at 01:00 and customers should not be woken by it.

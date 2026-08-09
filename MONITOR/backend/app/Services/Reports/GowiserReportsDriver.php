@@ -1184,9 +1184,14 @@ class GowiserReportsDriver implements ReportsDriver
      * Income is `transactions`; spending is `expenses_logs`, GOWISER's expenses
      * module. Two rules carried over deliberately:
      *
-     *  - `expense_type` is the same reporting-horizon concept NetManager calls
-     *    period_type, so the same rule applies: a month's rent booked 'monthly'
+     *  - `frequency` is the same reporting-horizon concept NetManager calls
+     *    period_type, so the same rule applies: a month's rent booked 'Monthly'
      *    must not be charged against a single day. See ReportPeriod::expenseTypes.
+     *    `expense_type` looks similar but is a different column entirely — an
+     *    accounting classification ('OPEX'/'CAPEX'), not a cadence. Production
+     *    data confirmed this the hard way: filtering on `expense_type` against
+     *    ReportPeriod::expenseTypes()'s daily/monthly/yearly values silently
+     *    excluded every 'OPEX'-tagged row (81% of the table) from every report.
      *
      *  - `expenses_logs` is soft-deleted. A deleted row is not spending, and
      *    including it is the classic way this page ends up disagreeing with the
@@ -1439,7 +1444,7 @@ class GowiserReportsDriver implements ReportsDriver
             ->selectRaw('COUNT(*) AS cnt')
             ->selectRaw('COALESCE(SUM(e.amount), 0) AS total')
             ->selectRaw('MAX(e.date) AS last_booked')
-            ->selectRaw("MAX(LOWER(COALESCE(e.expense_type, 'daily'))) AS period_type")
+            ->selectRaw("MAX(LOWER(COALESCE(e.frequency, 'daily'))) AS period_type")
             ->groupBy('label', 'category_id')
             ->orderByRaw('COALESCE(SUM(e.amount), 0) DESC')
             ->get()
@@ -1693,9 +1698,11 @@ class GowiserReportsDriver implements ReportsDriver
      * Expense rows for a range, restricted to the horizons that belong in a
      * report of this granularity, and excluding soft-deleted rows.
      *
-     * `expense_type` is GOWISER's name for NetManager's period_type and carries
-     * the same meaning, so the same rule governs both: a longer report absorbs
-     * the shorter horizons, a shorter one never absorbs the longer.
+     * `frequency` is GOWISER's name for NetManager's period_type and carries the
+     * same meaning, so the same rule governs both: a longer report absorbs the
+     * shorter horizons, a shorter one never absorbs the longer. `expense_type` is
+     * a same-shaped but unrelated column — an accounting classification
+     * ('OPEX'/'CAPEX') — and must not be used here; see the docblock above.
      */
     private function expenseRows(
         ConnectionInterface $db,
@@ -1707,7 +1714,7 @@ class GowiserReportsDriver implements ReportsDriver
             ->whereNull('e.deleted_at')
             ->whereBetween(DB::raw('DATE(e.date)'), [$from, $to])
             ->whereIn(
-                DB::raw("LOWER(COALESCE(e.expense_type, 'daily'))"),
+                DB::raw("LOWER(COALESCE(e.frequency, 'daily'))"),
                 ReportPeriod::expenseTypes($granularity)
             );
     }
@@ -1860,7 +1867,7 @@ class GowiserReportsDriver implements ReportsDriver
         $expenseQuery = $db->table('expenses_logs as e')
             ->whereNull('e.deleted_at')
             ->whereIn(
-                DB::raw("LOWER(COALESCE(e.expense_type, 'daily'))"),
+                DB::raw("LOWER(COALESCE(e.frequency, 'daily'))"),
                 ReportPeriod::expenseTypes($granularity)
             );
 
@@ -2099,7 +2106,7 @@ class GowiserReportsDriver implements ReportsDriver
                 'e.supplier',
                 'e.amount',
                 'e.description',
-                'e.expense_type',
+                'e.frequency',
                 'e.category',
                 'e.processed_by',
                 'ec.category_name'
@@ -2115,7 +2122,7 @@ class GowiserReportsDriver implements ReportsDriver
                 // one on a signed document is worse than a supplier name.
                 'employee' => (string) ($row->payee ?: $row->supplier ?: $row->provider ?: ''),
                 'remark' => (string) ($row->description ?? ''),
-                'period_type' => strtolower((string) ($row->expense_type ?? 'daily')),
+                'period_type' => strtolower((string) ($row->frequency ?? 'daily')),
                 'amount' => round((float) $row->amount, 2),
                 'recorded_by' => (string) ($row->processed_by ?? ''),
             ])

@@ -1273,6 +1273,46 @@ export interface ExecutivePlans {
   total: number;
 }
 
+/** The four blocks on the Group Overview, and the order they read by default. */
+export type ExecutiveOverviewSectionKey = 'range' | 'monthly' | 'subscribers' | 'plans';
+
+/**
+ * One section's place in the editable grid.
+ *
+ * `w` is 1 (half width) or 2 (full width) — the page is a two-column grid, so
+ * those are the only widths that produce a layout rather than a ragged one.
+ * There is deliberately no `h`: height auto-fits each section's content at
+ * render time (see useAutoGridHeight in ExecutiveOverview.tsx), so persisting
+ * a stale height would only fight the live measurement on load.
+ */
+export interface ExecutiveSectionPosition {
+  x: number;
+  y: number;
+  w: 1 | 2;
+}
+
+/**
+ * A section's card settings, edited only while Edit Layout is active.
+ *
+ * Every field is optional and `undefined` means "use the section's default
+ * sizing" — a user who never opens the settings sees the same page as before
+ * this existed.
+ */
+export interface ExecutiveSectionCardSettings {
+  /** Pixel size driving the section's title and every tile's label/value/caption. */
+  fontSize?: number;
+  /** Tiles per row at the `xl` breakpoint, overriding the section's natural count. */
+  cols?: number;
+  /** Optional explicit row count for the tile grid, alongside `cols`. */
+  rows?: number;
+}
+
+/** The whole saved layout: where each section sits, and how each one is dressed. */
+export interface ExecutiveOverviewLayout {
+  positions: Record<ExecutiveOverviewSectionKey, ExecutiveSectionPosition>;
+  cardSettings: Record<ExecutiveOverviewSectionKey, ExecutiveSectionCardSettings>;
+}
+
 export interface ExecutiveOverviewData {
   as_of: string;
   generated_at: string;

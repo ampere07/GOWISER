@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Responsive } from 'react-grid-layout';
+// @ts-ignore - the legacy subpath ships JS with a .d.ts, but the package's own
+// type resolution for it is inconsistent across bundler settings
+import { WidthProvider } from 'react-grid-layout/legacy';
+import 'react-grid-layout/css/styles.css';
+import 'react-resizable/css/styles.css';
 import {
   AlertTriangle,
   CalendarClock,
   CalendarDays,
   CalendarRange,
   Check,
-  Columns2,
   GripVertical,
   Layers,
   Lock,
@@ -17,8 +22,9 @@ import {
   Lock as LockIcon,
   Maximize2,
   Minimize2,
+  Minus,
+  Plus,
   Receipt,
-  Rows2,
   SlidersHorizontal,
   Sun,
   TrendingUp,
@@ -43,53 +49,62 @@ import { reportingService } from '../services/reportingService';
 import {
   ExecutiveMetricKey,
   ExecutiveOverviewData,
+  ExecutiveOverviewLayout,
+  ExecutiveOverviewSectionKey,
+  ExecutiveSectionCardSettings,
   ExecutiveTimeframe,
   MetricRecord,
   SubscriberRecord,
 } from '../types/reporting';
 import { formatAmount, formatDate, formatNumber } from '../utils/format';
 
+const ResponsiveGridLayout = WidthProvider(Responsive);
+
 interface ExecutiveOverviewProps {
   refreshToken: number;
 }
 
-/** The four blocks, in the order the layout reads them by default. */
-type SectionKey = 'range' | 'monthly' | 'subscribers' | 'plans';
+/** The four blocks on the Group Overview. */
+type SectionKey = ExecutiveOverviewSectionKey;
 
-const DEFAULT_ORDER: SectionKey[] = ['range', 'monthly', 'subscribers', 'plans'];
+const SECTION_KEYS: SectionKey[] = ['range', 'monthly', 'subscribers', 'plans'];
 
 /**
  * How wide a block is, in columns of the two-column page grid.
  *
  * Two is the full page width and the default for every block. One puts two
  * blocks side by side, which is what a wall display with room to spare wants and
- * what a laptop does not — so it is opt-in per block rather than a breakpoint.
+ * what a laptop does not — so it is opt-in per block, set by dragging a
+ * section's edge in Edit Layout.
  */
 type SectionSpan = 1 | 2;
 
-const DEFAULT_SPANS: Record<SectionKey, SectionSpan> = {
-  range: 2,
-  monthly: 2,
-  subscribers: 2,
-  plans: 2,
+const DEFAULT_LAYOUT: ExecutiveOverviewLayout = {
+  positions: {
+    range: { x: 0, y: 0, w: 2 },
+    monthly: { x: 0, y: 1, w: 2 },
+    subscribers: { x: 0, y: 2, w: 2 },
+    plans: { x: 0, y: 3, w: 2 },
+  },
+  cardSettings: {
+    range: {},
+    monthly: {},
+    subscribers: {},
+    plans: {},
+  },
 };
-
-interface Layout {
-  order: SectionKey[];
-  spans: Record<SectionKey, SectionSpan>;
-}
-
-const DEFAULT_LAYOUT: Layout = { order: DEFAULT_ORDER, spans: DEFAULT_SPANS };
 
 /**
  * Version suffix on the storage key.
  *
- * The saved value used to be a bare array of section keys and is now an object
- * carrying widths as well. Reading the old shape through the new parser would
- * fall back to the default anyway, but a fresh key means a browser that has been
- * through both builds cannot end up with half of each.
+ * The saved shape has changed twice now — first from a bare array of section
+ * keys to one carrying widths, and now again from order+width to real grid
+ * positions plus per-section card settings for react-grid-layout. Reading an
+ * older shape through the new parser falls back to the default anyway, but a
+ * fresh key means a browser that has been through more than one build cannot
+ * end up with a mix of the two.
  */
-const LAYOUT_KEY = 'executive_overview_layout_v2';
+const LAYOUT_KEY = 'executive_overview_layout_v3';
 
 /**
  * Tells the tiles inside a block how much room they have.
@@ -101,6 +116,123 @@ const LAYOUT_KEY = 'executive_overview_layout_v2';
  * remembering to do so on each new row.
  */
 const SectionWidth = React.createContext<SectionSpan>(2);
+
+/**
+ * A section's font size and tile columns/rows, set in Edit Layout.
+ *
+ * Every field defaults to undefined, meaning "use this section's normal
+ * sizing" — a reader who never opens Edit Layout sees exactly the page that
+ * existed before this context did.
+ */
+const CardSettingsContext = React.createContext<ExecutiveSectionCardSettings>({});
+
+/**
+ * Row height, in grid units of pixels, for the react-grid-layout grid.
+ *
+ * Coarse enough to be cheap to lay out, fine enough that a section's measured
+ * content height rounds to it without a visible gap or clip — see
+ * useAutoGridHeight, which is the only thing that ever sets a section's `h`.
+ */
+const GRID_ROW_HEIGHT = 8;
+/** Gap between grid items, matching the vertical rhythm the plain flex layout used. */
+const GRID_GAP = 16;
+/** A section's height in grid rows before its first real measurement lands. */
+const DEFAULT_SECTION_ROWS = 8;
+
+/**
+ * Keeps a react-grid-layout item's height in step with its actual content.
+ *
+ * Sections on this page are read at a glance, not scrolled inside a box (a
+ * deliberate choice — see the Edit Layout rule below), so height is never a
+ * setting a user drags, only something measured. A ResizeObserver on the
+ * section's own content converts pixel height to grid row units and reports it
+ * up. The `requestAnimationFrame` deferral plus the row-count diff before
+ * calling back are what keep this from looping: ResizeObserver already fires
+ * once immediately on `observe()`, which is what gives the correct initial
+ * height for free without a separate measure-on-mount path.
+ */
+function useAutoGridHeight(
+  ref: React.RefObject<HTMLDivElement | null>,
+  sectionKey: SectionKey,
+  onHeightChange: (key: SectionKey, rows: number) => void
+) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    let raf = 0;
+    let lastRows = -1;
+
+    const observer = new ResizeObserver(([entry]) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const rows = Math.max(
+          1,
+          Math.ceil((entry.contentRect.height + GRID_GAP) / (GRID_ROW_HEIGHT + GRID_GAP))
+        );
+
+        if (rows !== lastRows) {
+          lastRows = rows;
+          onHeightChange(sectionKey, rows);
+        }
+      });
+    });
+
+    observer.observe(el);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [ref, sectionKey, onHeightChange]);
+}
+
+/** Measures a section's rendered content and reports its height in grid rows. */
+const GridSectionMeasurer: React.FC<{
+  sectionKey: SectionKey;
+  onHeightChange: (key: SectionKey, rows: number) => void;
+  children: React.ReactNode;
+}> = ({ sectionKey, onHeightChange, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useAutoGridHeight(ref, sectionKey, onHeightChange);
+  return <div ref={ref}>{children}</div>;
+};
+
+/**
+ * Reconciles any candidate layout object against the current section list and
+ * value ranges, falling back to the default for anything missing or malformed.
+ *
+ * Every field is checked rather than trusted — a build that adds or removes a
+ * section must not leave a saved layout hiding the new one or rendering a key
+ * that no longer exists, and both a hand-edited localStorage entry and a stale
+ * backend row are things that happen.
+ */
+const sanitizeLayout = (candidate: unknown): ExecutiveOverviewLayout => {
+  const source = (candidate && typeof candidate === 'object' ? candidate : {}) as Partial<ExecutiveOverviewLayout>;
+
+  const positions = {} as ExecutiveOverviewLayout['positions'];
+  const cardSettings = {} as ExecutiveOverviewLayout['cardSettings'];
+
+  SECTION_KEYS.forEach((key) => {
+    const pos = source.positions?.[key];
+    positions[key] =
+      pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)
+        ? { x: pos.x, y: pos.y, w: pos.w === 1 ? 1 : 2 }
+        : DEFAULT_LAYOUT.positions[key];
+
+    const settings = source.cardSettings?.[key];
+    cardSettings[key] =
+      settings && typeof settings === 'object'
+        ? {
+            fontSize: Number.isFinite(settings.fontSize) ? settings.fontSize : undefined,
+            cols: Number.isFinite(settings.cols) ? settings.cols : undefined,
+            rows: Number.isFinite(settings.rows) ? settings.rows : undefined,
+          }
+        : {};
+  });
+
+  return { positions, cardSettings };
+};
 
 /**
  * The four presets, each with the icon it compresses to.
@@ -191,10 +323,32 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   const container = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [layout, setLayout] = useState<Layout>(() => readLayout());
-  const [dragging, setDragging] = useState<SectionKey | null>(null);
+  const [layout, setLayout] = useState<ExecutiveOverviewLayout>(() => readLayout());
+  const [sectionRows, setSectionRows] = useState<Record<SectionKey, number>>(() =>
+    SECTION_KEYS.reduce(
+      (acc, key) => ({ ...acc, [key]: DEFAULT_SECTION_ROWS }),
+      {} as Record<SectionKey, number>
+    )
+  );
 
-  const { order, spans } = layout;
+  const { positions, cardSettings } = layout;
+
+  // Backend fallback: if this browser has never saved a layout, try this
+  // user's last saved one before settling for the hardcoded default.
+  // localStorage stays the instant, primary path on every later load — this
+  // only fires once, when that primary path comes up empty.
+  useEffect(() => {
+    if (localStorage.getItem(LAYOUT_KEY)) return;
+
+    reportingService
+      .getExecutiveOverviewLayout()
+      .then((saved) => {
+        if (saved) setLayout(sanitizeLayout(saved));
+      })
+      .catch((err) => {
+        console.error('Failed to load the saved Group Overview layout', err);
+      });
+  }, []);
 
   // ── Sticky period bar ──────────────────────────────────────────────
   // A sentinel above the bar rather than a scroll listener: IntersectionObserver
@@ -316,23 +470,106 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   }, []);
 
   // ── Layout editing ─────────────────────────────────────────────────
-  const persist = (next: Layout) => {
+  const persist = (next: ExecutiveOverviewLayout) => {
     setLayout(next);
     localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
   };
 
-  const drop = (target: SectionKey) => {
-    if (!dragging || dragging === target) return;
+  const handleHeightChange = useCallback((key: SectionKey, rows: number) => {
+    setSectionRows((prev) => (prev[key] === rows ? prev : { ...prev, [key]: rows }));
+  }, []);
 
-    const next = order.filter((key) => key !== dragging);
-    next.splice(next.indexOf(target), 0, dragging);
+  /**
+   * react-grid-layout's own drag/resize, replacing the old drop-target
+   * drag-and-drop and the half/full width buttons.
+   *
+   * Only x/y/w are ever read out of it — resizeHandles is restricted to the
+   * east edge below, so height never comes from the grid; a section's `h` is
+   * always the measured value in sectionRows (see useAutoGridHeight). Committed
+   * only while editing, so compaction reacting to a height change outside Edit
+   * Layout can never overwrite a save with a position nobody chose.
+   */
+  const handleGridLayoutChange = (_current: unknown, allLayouts: Record<string, any[]>) => {
+    if (!editing) return;
 
-    persist({ ...layout, order: next });
-    setDragging(null);
+    const items = allLayouts.lg ?? [];
+    if (items.length === 0) return;
+
+    const nextPositions = { ...positions };
+    let changed = false;
+
+    items.forEach((item) => {
+      const key = item.i as SectionKey;
+      if (!SECTION_KEYS.includes(key)) return;
+
+      const w: SectionSpan = item.w === 2 ? 2 : 1;
+      const current = nextPositions[key];
+
+      if (!current || current.x !== item.x || current.y !== item.y || current.w !== w) {
+        nextPositions[key] = { x: item.x, y: item.y, w };
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      persist({ ...layout, positions: nextPositions });
+    }
   };
 
-  const resize = (key: SectionKey, span: SectionSpan) =>
-    persist({ ...layout, spans: { ...spans, [key]: span } });
+  const updateCardSettings = (key: SectionKey, updates: Partial<ExecutiveSectionCardSettings>) => {
+    persist({
+      ...layout,
+      cardSettings: { ...cardSettings, [key]: { ...cardSettings[key], ...updates } },
+    });
+  };
+
+  const toggleEditing = () => {
+    setEditing((current) => {
+      const next = !current;
+
+      // Closing Edit Layout is the one moment this syncs to the backend —
+      // every drag/resize/setting tick only touches localStorage, so a
+      // mid-edit network hiccup can never interrupt someone mid-drag.
+      if (current && !next) {
+        reportingService.putExecutiveOverviewLayout(layout).catch((err) => {
+          console.error('Failed to save the Group Overview layout', err);
+        });
+      }
+
+      return next;
+    });
+  };
+
+  const orderedKeys = useMemo(
+    () =>
+      [...SECTION_KEYS].sort((a, b) => {
+        const pa = positions[a] ?? DEFAULT_LAYOUT.positions[a];
+        const pb = positions[b] ?? DEFAULT_LAYOUT.positions[b];
+        return pa.y - pb.y || pa.x - pb.x;
+      }),
+    [positions]
+  );
+
+  const gridLayouts = useMemo(() => {
+    const items = SECTION_KEYS.map((key) => {
+      const pos = positions[key] ?? DEFAULT_LAYOUT.positions[key];
+
+      return {
+        i: key,
+        x: pos.x,
+        y: pos.y,
+        w: pos.w,
+        h: sectionRows[key] ?? DEFAULT_SECTION_ROWS,
+        minW: 1,
+        maxW: 2,
+        minH: 1,
+        isDraggable: editing,
+        isResizable: editing,
+      };
+    });
+
+    return { lg: items };
+  }, [positions, sectionRows, editing]);
 
   if (forbidden) {
     return (
@@ -738,8 +975,8 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
               <Button
                 icon={editing ? <Check size={15} /> : <Pencil size={15} />}
                 variant={editing ? 'primary' : 'outline'}
-                onClick={() => setEditing((current) => !current)}
-                title="Drag the sections into the order you read them in"
+                onClick={toggleEditing}
+                title="Drag sections to reorder, drag an edge to resize, and set font size or tile columns per card"
               >
                 {editing ? 'Done' : 'Edit Layout'}
               </Button>
@@ -906,8 +1143,8 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
           >
             <span className="flex items-center gap-2">
               <GripVertical size={15} />
-              Drag a section by its handle to reorder, and set its width with the
-              buttons beside it. Saved to this browser.
+              Drag a section by its handle to reorder, drag its right edge to resize, and
+              use the font-size and column/row controls on each card. Saved to this browser.
             </span>
             <Button icon={<RotateCcw size={13} />} onClick={() => persist(DEFAULT_LAYOUT)}>
               Reset
@@ -940,69 +1177,152 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
             about how to use spare room cannot be honoured on a screen that has
             none, and forcing it would make the phone layout unreadable to
             satisfy a setting made on a wall display. */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
-          {order.map((key) => {
-            const span = spans[key];
+        <ResponsiveGridLayout
+          className="layout"
+          layouts={gridLayouts}
+          breakpoints={{ lg: 1280, sm: 0 }}
+          cols={{ lg: 2, sm: 1 }}
+          rowHeight={GRID_ROW_HEIGHT}
+          margin={[GRID_GAP, GRID_GAP]}
+          containerPadding={[0, 0]}
+          compactType="vertical"
+          isDraggable={editing}
+          isResizable={editing}
+          resizeHandles={['e']}
+          draggableHandle=".eo-drag-handle"
+          onLayoutChange={handleGridLayoutChange}
+        >
+          {orderedKeys.map((key) => {
+            const pos = positions[key] ?? DEFAULT_LAYOUT.positions[key];
+            const settings = cardSettings[key] ?? {};
 
             return (
               <div
                 key={key}
-                draggable={editing}
-                onDragStart={() => setDragging(key)}
-                onDragEnd={() => setDragging(null)}
-                onDragOver={(event) => editing && event.preventDefault()}
-                onDrop={() => drop(key)}
-                className={`${span === 2 ? 'xl:col-span-2' : 'xl:col-span-1'} ${
+                className={
                   editing
-                    ? `relative rounded-xl transition-opacity ${
-                        dragging === key ? 'opacity-40' : ''
-                      } ring-2 ring-dashed ${isDarkMode ? 'ring-blue-800' : 'ring-blue-300'}`
+                    ? `rounded-xl ring-2 ring-dashed ${isDarkMode ? 'ring-blue-800' : 'ring-blue-300'}`
                     : ''
-                }`}
+                }
               >
                 {editing && (
-                  <div className="absolute -top-3 left-4 right-4 z-10 flex items-center justify-between gap-2">
+                  <div className="absolute -top-3 left-4 right-4 z-10 flex flex-wrap items-center gap-2">
                     <span
-                      className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold cursor-grab active:cursor-grabbing ${
+                      className={`eo-drag-handle flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold cursor-grab active:cursor-grabbing ${
                         isDarkMode ? 'bg-blue-500/20 text-blue-200' : 'bg-blue-600 text-white'
                       }`}
                     >
                       <GripVertical size={12} /> drag
                     </span>
 
-                    {/* Two widths rather than a drag handle on the edge. The
-                        page is a two-column grid, so "half" and "full" are the
-                        only widths that produce a layout rather than a ragged
-                        one — and a resize handle that can only stop at two
-                        places is a worse control than two buttons. */}
+                    {/* Font size — mirrors the +/- control on Live Monitor's
+                        widgets, scaled down to this page's tile typography. */}
                     <span
-                      className={`flex items-center gap-0.5 rounded-md p-0.5 ${
+                      className={`flex items-center rounded-md p-0.5 ${
                         isDarkMode ? 'bg-blue-500/20' : 'bg-blue-600'
                       }`}
-                      role="radiogroup"
-                      aria-label="Section width"
                     >
-                      <WidthButton
-                        active={span === 1}
-                        label="Half width"
-                        icon={<Columns2 size={12} />}
-                        onClick={() => resize(key, 1)}
-                      />
-                      <WidthButton
-                        active={span === 2}
-                        label="Full width"
-                        icon={<Rows2 size={12} />}
-                        onClick={() => resize(key, 2)}
-                      />
+                      <button
+                        type="button"
+                        aria-label="Decrease font size"
+                        title="Decrease font size"
+                        onClick={() =>
+                          updateCardSettings(key, {
+                            fontSize: Math.max(8, (settings.fontSize ?? 12) - 1),
+                          })
+                        }
+                        className={`p-1 rounded ${
+                          isDarkMode ? 'text-blue-100 hover:bg-blue-400/30' : 'text-white hover:bg-blue-700'
+                        }`}
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span
+                        className={`px-1 text-[10px] font-mono ${isDarkMode ? 'text-blue-100' : 'text-white'}`}
+                        title="Font size"
+                      >
+                        {settings.fontSize ?? 12}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Increase font size"
+                        title="Increase font size"
+                        onClick={() =>
+                          updateCardSettings(key, { fontSize: (settings.fontSize ?? 12) + 1 })
+                        }
+                        className={`p-1 rounded ${
+                          isDarkMode ? 'text-blue-100 hover:bg-blue-400/30' : 'text-white hover:bg-blue-700'
+                        }`}
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </span>
+
+                    {/* Tile columns/rows — the equivalent of Live Monitor's
+                        internal grid Cols/Rows setting, applied to this
+                        section's Row layout. Blank means "automatic". */}
+                    <span className="flex items-center gap-1">
+                      <label
+                        className={`flex items-center gap-1 text-[10px] font-bold uppercase ${
+                          isDarkMode ? 'text-blue-200' : 'text-blue-800'
+                        }`}
+                      >
+                        Cols
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          value={settings.cols ?? ''}
+                          placeholder="auto"
+                          onChange={(event) => {
+                            const value = parseInt(event.target.value, 10);
+                            updateCardSettings(key, { cols: Number.isFinite(value) ? value : undefined });
+                          }}
+                          className={`w-12 px-1 py-0.5 text-xs rounded border ${
+                            isDarkMode
+                              ? 'bg-gray-900 border-gray-700 text-white'
+                              : 'bg-white border-gray-300 text-black'
+                          }`}
+                        />
+                      </label>
+                      <label
+                        className={`flex items-center gap-1 text-[10px] font-bold uppercase ${
+                          isDarkMode ? 'text-blue-200' : 'text-blue-800'
+                        }`}
+                      >
+                        Rows
+                        <input
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={settings.rows ?? ''}
+                          placeholder="auto"
+                          onChange={(event) => {
+                            const value = parseInt(event.target.value, 10);
+                            updateCardSettings(key, { rows: Number.isFinite(value) ? value : undefined });
+                          }}
+                          className={`w-12 px-1 py-0.5 text-xs rounded border ${
+                            isDarkMode
+                              ? 'bg-gray-900 border-gray-700 text-white'
+                              : 'bg-white border-gray-300 text-black'
+                          }`}
+                        />
+                      </label>
                     </span>
                   </div>
                 )}
 
-                <SectionWidth.Provider value={span}>{sections[key]}</SectionWidth.Provider>
+                <GridSectionMeasurer sectionKey={key} onHeightChange={handleHeightChange}>
+                  <SectionWidth.Provider value={pos.w}>
+                    <CardSettingsContext.Provider value={settings}>
+                      {sections[key]}
+                    </CardSettingsContext.Provider>
+                  </SectionWidth.Provider>
+                </GridSectionMeasurer>
               </div>
             );
           })}
-        </div>
+        </ResponsiveGridLayout>
 
         <p className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
           Composed from the reporting modules, so every figure here is the one that module shows.
@@ -1075,39 +1395,11 @@ const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({ refreshToken }) =
   );
 };
 
-/**
- * The saved layout, falling back to the default on anything unexpected.
- *
- * Every field is reconciled against the current section list rather than
- * trusted. A build that adds or removes a section must not leave a saved layout
- * hiding the new one or rendering a key that no longer exists — and a hand-
- * edited localStorage entry is a thing that happens.
- */
-const readLayout = (): Layout => {
+/** The saved layout, falling back to the default on anything unexpected. */
+const readLayout = (): ExecutiveOverviewLayout => {
   try {
     const stored = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
-
-    if (!stored || typeof stored !== 'object' || !Array.isArray(stored.order)) {
-      return DEFAULT_LAYOUT;
-    }
-
-    const kept: SectionKey[] = stored.order.filter((key: SectionKey) =>
-      DEFAULT_ORDER.includes(key)
-    );
-    const missing = DEFAULT_ORDER.filter((key) => !kept.includes(key));
-
-    const spans = { ...DEFAULT_SPANS };
-
-    DEFAULT_ORDER.forEach((key) => {
-      // Anything that is not literally 1 falls back to full width. A block
-      // rendered at some third width the grid has no column count for is worse
-      // than one that ignored a saved preference.
-      if (stored.spans?.[key] === 1) {
-        spans[key] = 1;
-      }
-    });
-
-    return { order: [...kept, ...missing], spans };
+    return stored ? sanitizeLayout(stored) : DEFAULT_LAYOUT;
   } catch {
     return DEFAULT_LAYOUT;
   }
@@ -1474,6 +1766,7 @@ const Section: React.FC<{
   children: React.ReactNode;
 }> = ({ title, subtitle, icon, note, children }) => {
   const isDarkMode = useTheme();
+  const { fontSize } = React.useContext(CardSettingsContext);
 
   return (
     <section
@@ -1490,6 +1783,7 @@ const Section: React.FC<{
           className={`flex items-center gap-2.5 text-lg font-bold uppercase tracking-[0.12em] ${
             isDarkMode ? 'text-white' : 'text-gray-900'
           }`}
+          style={fontSize ? { fontSize: `${fontSize * 1.5}px` } : undefined}
         >
           <span className="text-blue-500">{icon}</span>
           {title}
@@ -1515,48 +1809,31 @@ const Section: React.FC<{
  * by side at this type size; the fifth column is only used where the alternative
  * is orphaning one metric onto a row of its own.
  */
-/** One of the two width choices in the layout editor's per-section control. */
-const WidthButton: React.FC<{
-  active: boolean;
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-}> = ({ active, label, icon, onClick }) => {
-  const isDarkMode = useTheme();
-
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className={`rounded p-1 transition-colors ${
-        active
-          ? isDarkMode
-            ? 'bg-blue-400/30 text-blue-100'
-            : 'bg-white text-blue-700'
-          : isDarkMode
-          ? 'text-blue-200/70 hover:text-blue-100'
-          : 'text-white/70 hover:text-white'
-      }`}
-    >
-      {icon}
-    </button>
-  );
-};
-
 const Row: React.FC<{ children: React.ReactNode; wide?: boolean }> = ({ children, wide }) => {
   const span = React.useContext(SectionWidth);
+  const { cols: colsOverride, rows } = React.useContext(CardSettingsContext);
 
   // A block the user has narrowed to half the page cannot hold four or five
-  // tiles across — the labels truncate to nothing and the numbers stop being
-  // readable at a distance, which is the whole point of this screen. Two across
-  // is the widest a half-width block stays legible at.
-  const columns = span === 1 ? 'xl:grid-cols-2' : wide ? 'xl:grid-cols-5' : 'xl:grid-cols-4';
+  // tiles across by default — the labels truncate to nothing and the numbers
+  // stop being readable at a distance, which is the whole point of this
+  // screen. Two across is the widest a half-width block stays legible at,
+  // unless a user overrides it explicitly in Edit Layout.
+  const naturalCols = span === 1 ? 2 : wide ? 5 : 4;
+  const cols = colsOverride ?? naturalCols;
 
-  return <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${columns}`}>{children}</div>;
+  return (
+    <div
+      className="grid grid-cols-1 sm:grid-cols-2 gap-4 xl:[grid-template-columns:repeat(var(--row-cols),minmax(0,1fr))]"
+      style={
+        {
+          '--row-cols': cols,
+          ...(rows ? { gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` } : {}),
+        } as React.CSSProperties
+      }
+    >
+      {children}
+    </div>
+  );
 };
 
 type Tone = 'success' | 'danger' | 'warning' | 'neutral' | 'info';
@@ -1632,6 +1909,16 @@ const Tile: React.FC<{
   formula?: string;
 }> = ({ label, value, caption, tone = 'neutral', icon, onOpen, formula }) => {
   const isDarkMode = useTheme();
+  const { fontSize } = React.useContext(CardSettingsContext);
+
+  // fontSize is the same small base unit Live Monitor's own widget font
+  // control uses (default 12), multiplied up per element rather than being the
+  // literal pixel size of any one of them — the ratios below reproduce this
+  // tile's default Tailwind sizes almost exactly at that default, so turning
+  // the control on doesn't jump the page before anyone touches it.
+  const labelStyle = fontSize ? { fontSize: `${fontSize}px` } : undefined;
+  const valueStyle = fontSize ? { fontSize: `${fontSize * 3}px` } : undefined;
+  const captionStyle = fontSize ? { fontSize: `${fontSize * 0.92}px` } : undefined;
 
   const body = (
     <>
@@ -1642,6 +1929,7 @@ const Tile: React.FC<{
           className={`text-xs font-semibold uppercase tracking-[0.1em] truncate ${
             isDarkMode ? 'text-gray-400' : 'text-gray-500'
           }`}
+          style={labelStyle}
           title={label}
         >
           {label}
@@ -1657,6 +1945,7 @@ const Tile: React.FC<{
         className={`mt-2 text-4xl font-bold tabular-nums tracking-tight truncate ${
           TONE_TEXT[tone] || (isDarkMode ? 'text-white' : 'text-gray-900')
         }`}
+        style={valueStyle}
       >
         {value}
       </p>
@@ -1664,6 +1953,7 @@ const Tile: React.FC<{
       {caption && (
         <p
           className={`mt-1.5 text-[11px] truncate ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}
+          style={captionStyle}
           title={caption}
         >
           {caption}
@@ -1713,6 +2003,7 @@ const NestedTile: React.FC<{
   children: React.ReactNode;
 }> = ({ label, caption, children }) => {
   const isDarkMode = useTheme();
+  const { fontSize } = React.useContext(CardSettingsContext);
 
   return (
     <div
@@ -1724,6 +2015,7 @@ const NestedTile: React.FC<{
         className={`text-xs font-semibold uppercase tracking-[0.1em] ${
           isDarkMode ? 'text-gray-400' : 'text-gray-500'
         }`}
+        style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
       >
         {label}
       </p>
@@ -1731,7 +2023,10 @@ const NestedTile: React.FC<{
       <div className="mt-1 space-y-0.5">{children}</div>
 
       {caption && (
-        <p className={`mt-1 text-[11px] ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+        <p
+          className={`mt-1 text-[11px] ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}
+          style={fontSize ? { fontSize: `${fontSize * 0.92}px` } : undefined}
+        >
           {caption}
         </p>
       )}
@@ -1745,16 +2040,21 @@ const NestedFigure: React.FC<{ label: string; value: React.ReactNode; tone?: Ton
   tone = 'neutral',
 }) => {
   const isDarkMode = useTheme();
+  const { fontSize } = React.useContext(CardSettingsContext);
 
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <span className={`text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+      <span
+        className={`text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}
+        style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
+      >
         {label}
       </span>
       <span
         className={`text-lg font-bold tabular-nums truncate ${
           TONE_TEXT[tone] || (isDarkMode ? 'text-white' : 'text-gray-900')
         }`}
+        style={fontSize ? { fontSize: `${fontSize * 1.5}px` } : undefined}
       >
         {value}
       </span>

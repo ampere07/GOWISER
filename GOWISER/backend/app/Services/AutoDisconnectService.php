@@ -566,6 +566,13 @@ class AutoDisconnectService
      *   - RADIUS-unreachable / restrict-failure paths queue (deduped) for retry instead of
      *     aborting the run.
      *
+     * Sends the SMS 'Disconnected' notice (same template/mechanism as postpaid's
+     * {@see processDisconnection()}) the moment an account completes this disconnect — RADIUS
+     * restrict succeeded AND billing_status was just flipped to Inactive. It is deliberately not
+     * sent for an account whose technical_details.username_status is merely 'Restricted' without
+     * that transition having just completed here, so a customer already Restricted for an unrelated
+     * reason is never mistakenly texted "disconnected" by this sweep.
+     *
      * @return array{success:bool, restricted:int, skipped:int, queued:int, errors:array, duration:int}
      */
     public function processPrepaidRestrictions(): array
@@ -606,7 +613,9 @@ class AutoDisconnectService
             $this->writeLog("[RULE] Restricting accounts that expired before {$restrictFrom->format('Y-m-d H:i:s')}.");
 
             // Active prepaid accounts whose service period lapsed on an earlier calendar day.
-            $accounts = BillingAccount::with(['technicalDetails', 'billingStatus'])
+            // customer is eager-loaded alongside the RADIUS/status relations so the disconnect SMS
+            // below never triggers a lazy per-account query.
+            $accounts = BillingAccount::with(['technicalDetails', 'billingStatus', 'customer'])
                 ->whereIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
                 ->where('billing_status_id', $activeStatusId)
                 ->whereNotNull('prepaid_expires_at')
@@ -704,6 +713,24 @@ class AutoDisconnectService
                         $this->writeLog("  [RADIUS] ✓ Successfully restricted");
                         $this->writeLog("  [DB] Status overridden to Inactive (ID: {$inactiveStatusId})");
                         $this->writeLog("[{$counter}/{$totalCount}] ✓ SUCCESS - Restricted (status: Inactive)");
+
+                        // Disconnect SMS — only for a subscriber that has actually completed the
+                        // disconnect this run (RADIUS restrict succeeded AND billing_status just
+                        // flipped to Inactive, both just above). Never fires for an account that is
+                        // merely sitting in a Restricted username_status without having completed
+                        // that transition — e.g. one already Restricted for an unrelated reason
+                        // (job-order provisioning) that this sweep did not touch.
+                        $isMerelyRestricted = strcasecmp((string) ($technicalDetail->username_status ?? ''), 'Restricted') === 0;
+
+                        if ($isMerelyRestricted) {
+                            $this->writeLog("  [SMS] Skipped — username_status is merely Restricted, not a completed disconnect");
+                        } elseif ($this->smsService && $account->customer && $account->customer->contact_number_primary) {
+                            $this->writeLog("  [SMS] Sending prepaid disconnect notification...");
+                            $this->triggerSMS($account, 'Disconnected');
+                            $this->writeLog("  [SMS] ✓ SMS sent");
+                        } else {
+                            $this->writeLog("  [SMS] Skipping (no SMS service or no contact number)");
+                        }
                     } else {
                         $reason = $restrictResult['message'] ?? 'Unknown RADIUS error';
                         $this->writeLog("  [RADIUS] Restrict failed: {$reason}. Queueing for retry.");

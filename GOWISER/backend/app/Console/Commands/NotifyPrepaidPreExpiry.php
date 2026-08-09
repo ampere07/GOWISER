@@ -116,16 +116,7 @@ class NotifyPrepaidPreExpiry extends Command
         if ($template) {
             $this->info('SMS template: PrepaidPreExpiry (active).');
         } else {
-            $fallback = DB::table('sms_templates')
-                ->where('template_type', 'StatementofAccount')
-                ->where('is_active', 1)
-                ->exists();
-
-            if ($fallback) {
-                $this->warn('No active PrepaidPreExpiry template — falling back to StatementofAccount.');
-            } else {
-                $this->error('No active PrepaidPreExpiry OR StatementofAccount template — no SMS can be generated.');
-            }
+            $this->warn('No active PrepaidPreExpiry template — using the built-in standardized pre-expiry message.');
         }
 
         if (!Schema::hasColumn('sms_queue', 'dedupe_key')) {
@@ -182,8 +173,6 @@ class NotifyPrepaidPreExpiry extends Command
                 && Carbon::parse($account->prepaid_pre_expiry_notified_for)->toDateTimeString() === $expiry->toDateTimeString()
             ) {
                 $verdict = 'skip: already warned';
-            } elseif ($amount <= 0) {
-                $verdict = 'skip: no priced plan';
             } elseif (empty($contact)) {
                 $verdict = 'skip: no contact number';
             }

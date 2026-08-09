@@ -5,6 +5,7 @@ import {
   EmployeeData,
   ExecutiveMetricKey,
   ExecutiveOverviewData,
+  ExecutiveOverviewLayout,
   ExecutiveTimeframe,
   FinancialData,
   MetricRecord,
@@ -180,6 +181,36 @@ export const reportingService = {
       },
       CACHE_MS
     ),
+
+  /**
+   * The saved Group Overview grid layout, or null if this user has never saved
+   * one.
+   *
+   * Uncached, like the metric drill-downs below — this is read once on mount as
+   * a fallback when localStorage is empty, not on every render, so a cache buys
+   * nothing and risks serving a stale layout right after a save.
+   */
+  getExecutiveOverviewLayout: async (): Promise<ExecutiveOverviewLayout | null> => {
+    const response = await api.get<{ status: string; data: ExecutiveOverviewLayout | null }>(
+      '/executive/overview/layout'
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Persists the Group Overview grid layout. Called once when Edit Layout is
+   * closed, not on every drag tick — localStorage is the fast path for every
+   * other read/write, this is just the durable backup.
+   */
+  putExecutiveOverviewLayout: async (
+    layout: ExecutiveOverviewLayout
+  ): Promise<ExecutiveOverviewLayout> => {
+    const response = await api.put<{ status: string; data: ExecutiveOverviewLayout }>(
+      '/executive/overview/layout',
+      layout
+    );
+    return response.data.data;
+  },
 
   /**
    * The records behind one metric tile.
