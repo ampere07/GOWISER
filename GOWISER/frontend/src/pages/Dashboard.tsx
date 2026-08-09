@@ -252,6 +252,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userData?.role_id]);
 
+    // Reports is Super Admin only. Direct/stale navigation into it (e.g. a leftover
+    // localStorage activeSection from before a role change) is redirected to the dashboard
+    // rather than left to render — the Sidebar link is hidden, but nothing else enforced this.
+    useEffect(() => {
+        if (activeSection !== 'reports') return;
+        const normalizedRole = userData?.role?.toLowerCase().replace(/\s+/g, '') || '';
+        const isSuperAdmin = String(userData?.role_id) === '7' || normalizedRole === 'superadmin';
+        if (!isSuperAdmin) {
+            setActiveSection('dashboard');
+        }
+    }, [activeSection, userData]);
+
     useEffect(() => {
         const fetchColorPalette = async () => {
             try {
@@ -368,8 +380,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <WorkOrder />;
             case 'service-order':
                 return <ServiceOrder autoOpenServiceOrderId={serviceOrderAutoOpenId} />;
-            case 'reports':
-                return <Reports />;
+            case 'reports': {
+                const normalizedRole = userData?.role?.toLowerCase().replace(/\s+/g, '') || '';
+                const isSuperAdmin = String(userData?.role_id) === '7' || normalizedRole === 'superadmin';
+                return isSuperAdmin ? <Reports /> : null;
+            }
             case 'commission':
                 return <Commission />;
             case 'agent-payout':

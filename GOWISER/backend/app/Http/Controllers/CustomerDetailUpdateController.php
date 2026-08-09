@@ -374,9 +374,21 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
+            // A fresh non-VIP -> VIP transition. Comping a customer exempts them from prepaid
+            // expiration entirely (billing_status_id alone already does that everywhere prepaid
+            // expiry is evaluated — AutoDisconnectService filters to Active accounts, VIP is a
+            // separate status), so the stale expiry date is cleared too rather than left to
+            // silently linger and confuse anyone reading the account.
+            $willBecomeVip = ((int) $billingStatusId === $this->getVipBillingStatusId())
+                && $oldBillingStatusId !== $this->getVipBillingStatusId();
+
             $updateData = [
                 'billing_status_id' => $billingStatusId,
             ];
+
+            if ($willBecomeVip) {
+                $updateData['prepaid_expires_at'] = null;
+            }
 
             if ($request->has('updatedBy')) {
                 $updateData['updated_by'] = $request->input('updatedBy');

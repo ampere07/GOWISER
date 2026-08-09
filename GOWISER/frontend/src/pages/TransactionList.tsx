@@ -1424,7 +1424,9 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         case 'account_no':
           return transaction.account?.account_no || '-';
         case 'received_payment':
-          return formatCurrency(transaction.received_payment);
+          return Number(transaction.received_payment ?? 0).toFixed(2);
+        case 'account_balance':
+          return Number(transaction.account?.account_balance ?? 0).toFixed(2);
         case 'remarks':
           return transaction.remarks || 'No remarks';
         case 'status':

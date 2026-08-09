@@ -1204,6 +1204,20 @@ const Invoice: React.FC = () => {
           return record.accountNo || '-';
         case 'address':
           return record.address || '-';
+        case 'invoiceBalance':
+          return Number(record.invoiceBalance ?? 0).toFixed(2);
+        case 'serviceCharge':
+          return Number(record.serviceCharge ?? 0).toFixed(2);
+        case 'rebate':
+          return Number(record.rebate ?? 0).toFixed(2);
+        case 'discounts':
+          return Number(record.discounts ?? 0).toFixed(2);
+        case 'staggered':
+          return Number(record.staggered ?? 0).toFixed(2);
+        case 'totalAmount':
+          return Number(record.totalAmount ?? 0).toFixed(2);
+        case 'receivedPayment':
+          return Number(record.receivedPayment ?? 0).toFixed(2);
         default:
           return renderCellValue(record, columnKey);
       }

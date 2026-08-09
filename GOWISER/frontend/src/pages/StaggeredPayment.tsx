@@ -933,9 +933,9 @@ const StaggeredPayment: React.FC = () => {
         case 'staggered_date':
           return formatDate(record.staggered_date);
         case 'staggered_balance':
-          return formatCurrency(record.staggered_balance);
+          return Number(record.staggered_balance ?? 0).toFixed(2);
         case 'monthly_payment':
-          return formatCurrency(record.monthly_payment);
+          return Number(record.monthly_payment ?? 0).toFixed(2);
         case 'months_to_pay':
           return record.months_to_pay;
         case 'status':

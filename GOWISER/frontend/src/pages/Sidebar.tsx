@@ -245,7 +245,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     { id: 'work-order', label: 'Work Order', icon: Wrench, allowedRoles: ['administrator', 'agent', 'Osp', 'headtech'], badge: navBadges.work_order },
     { id: 'lcp-nap-location', label: 'LCP/NAP Location', icon: MapPinned, allowedRoles: ['administrator', 'technician', 'Osp', 'headtech'] },
     { id: 'sms-blast', label: 'SMS Blast', icon: MessageSquare, allowedRoles: ['administrator'] },
-    { id: 'reports', label: 'Reports', icon: FileText, allowedRoles: ['administrator', 'superadmin'] },
+    { id: 'reports', label: 'Reports', icon: FileText, allowedRoles: ['superadmin'] },
     {
       id: 'agent-group',
       label: 'Agent',

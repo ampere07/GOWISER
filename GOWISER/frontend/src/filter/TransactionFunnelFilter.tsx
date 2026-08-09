@@ -262,7 +262,10 @@ const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({
         if (selectedColumn.dataType === 'checklist') {
             let options: { label: string, value: string | number }[] = [];
             if (selectedColumn.key === 'payment_method') {
-                options = paymentMethods.map(m => ({ label: m.payment_method, value: m.id }));
+                // value must be the payment method NAME, not its id — TransactionList's
+                // getValForFilter compares against the resolved string name, and the id
+                // never matches it (filtering by payment method silently returned nothing).
+                options = paymentMethods.map(m => ({ label: m.payment_method, value: m.payment_method }));
             } else if (selectedColumn.key === 'transaction_type') {
                 options = transactionTypes.map(t => ({ label: t, value: t }));
             } else if (selectedColumn.key === 'status') {

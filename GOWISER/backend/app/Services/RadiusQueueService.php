@@ -14,13 +14,52 @@ class RadiusQueueService
     private $logName = 'Radius_Queue';
 
     /**
+     * Retry backoff schedule: wait time BEFORE attempt N, keyed 1-10.
+     *
+     * Attempt 1 is the first attempt made from inside the queue (after the initial direct
+     * execution already failed and the item was queued), so backoff[1] is also the delay
+     * applied at queue-time. backoff[N] for N=2..10 is applied in markRetryOrFailed() once
+     * attempt N-1 has failed. With max_attempts = 10 every entry in this table is used exactly
+     * once per item's lifecycle.
+     */
+    private const RETRY_BACKOFF_MINUTES = [
+        1 => 5,
+        2 => 30,
+        3 => 60,
+        4 => 120,
+        5 => 180,
+        6 => 240,
+        7 => 360,
+        8 => 480,
+        9 => 720,
+        10 => 1440,
+    ];
+
+    /**
      * Queue a failed RADIUS operation for retry
      */
     public static function queue(array $data): ?int
     {
         try {
             $attempt = $data['attempts'] ?? 0;
-            $maxAttempts = $data['max_attempts'] ?? 5;
+            $maxAttempts = $data['max_attempts'] ?? 10;
+
+            // Dedupe: a pending/processing entry for the same account + operation already
+            // covers this failure. Without this guard, every caller that queues on failure
+            // without its own pre-check (most of them) could pile up duplicate rows for the
+            // same underlying RADIUS action.
+            if (!empty($data['account_no'])) {
+                $existing = DB::table('radius_operation_queue')
+                    ->where('account_no', $data['account_no'])
+                    ->where('operation', $data['operation'])
+                    ->whereIn('status', ['pending', 'processing'])
+                    ->orderByDesc('id')
+                    ->value('id');
+
+                if ($existing) {
+                    return (int) $existing;
+                }
+            }
 
             $insertData = [
                 'source_type'     => $data['source_type'],
@@ -32,7 +71,8 @@ class RadiusQueueService
                 'attempts'        => $attempt,
                 'max_attempts'    => $maxAttempts,
                 'last_error'      => $data['last_error'] ?? null,
-                'next_retry_at'   => Carbon::now(),
+                // Wait before attempt 1 — see RETRY_BACKOFF_MINUTES.
+                'next_retry_at'   => Carbon::now()->addMinutes(self::RETRY_BACKOFF_MINUTES[1]),
                 'created_by'      => $data['created_by'] ?? 'System',
                 'created_at'      => now(),
                 'updated_at'      => now(),
@@ -346,18 +386,25 @@ class RadiusQueueService
             $this->writeLog("  [RETRY] ✗ Item #{$item->id} permanently FAILED after {$newAttempts}/{$item->max_attempts} attempts");
             $this->writeLog("  [RETRY] Last Error: {$error}");
         } else {
-            // Schedule for next retry (timing controlled by cron frequency in Hestia)
+            // Schedule for next retry using the fixed backoff schedule — the wait BEFORE the
+            // attempt about to be made (attempt number newAttempts + 1). Falls back to the
+            // longest defined step for any attempt number beyond the table (e.g. a caller with
+            // a custom max_attempts > 10).
+            $nextAttemptNumber = $newAttempts + 1;
+            $backoffMinutes = self::RETRY_BACKOFF_MINUTES[$nextAttemptNumber]
+                ?? max(self::RETRY_BACKOFF_MINUTES);
+
             DB::table('radius_operation_queue')
                 ->where('id', $item->id)
                 ->update([
                     'status'        => 'pending',
                     'attempts'      => $newAttempts,
                     'last_error'    => $error,
-                    'next_retry_at' => Carbon::now(),
+                    'next_retry_at' => Carbon::now()->addMinutes($backoffMinutes),
                     'updated_at'    => now(),
                 ]);
 
-            $this->writeLog("  [RETRY] Item #{$item->id} scheduled for retry (attempt {$newAttempts}/{$item->max_attempts})");
+            $this->writeLog("  [RETRY] Item #{$item->id} scheduled for retry (attempt {$newAttempts}/{$item->max_attempts}) in {$backoffMinutes} minute(s)");
         }
     }
 

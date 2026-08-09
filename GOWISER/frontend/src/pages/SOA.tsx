@@ -1160,6 +1160,28 @@ const SOA: React.FC = () => {
           return record.accountNo || '-';
         case 'address':
           return record.address || '-';
+        case 'balanceFromPreviousBill':
+          return Number(record.balanceFromPreviousBill ?? 0).toFixed(2);
+        case 'paymentReceivedPrevious':
+          return Number(record.paymentReceivedPrevious ?? 0).toFixed(2);
+        case 'remainingBalancePrevious':
+          return Number(record.remainingBalancePrevious ?? 0).toFixed(2);
+        case 'monthlyServiceFee':
+          return Number(record.monthlyServiceFee ?? 0).toFixed(2);
+        case 'serviceCharge':
+          return Number(record.serviceCharge ?? 0).toFixed(2);
+        case 'rebate':
+          return Number(record.rebate ?? 0).toFixed(2);
+        case 'discounts':
+          return Number(record.discounts ?? 0).toFixed(2);
+        case 'staggered':
+          return Number(record.staggered ?? 0).toFixed(2);
+        case 'vat':
+          return Number(record.vat ?? 0).toFixed(2);
+        case 'amountDue':
+          return Number(record.amountDue ?? 0).toFixed(2);
+        case 'totalAmountDue':
+          return Number(record.totalAmountDue ?? 0).toFixed(2);
         default:
           return renderCellValue(record, columnKey);
       }

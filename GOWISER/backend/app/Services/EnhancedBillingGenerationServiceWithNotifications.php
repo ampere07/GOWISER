@@ -1617,14 +1617,15 @@ class EnhancedBillingGenerationServiceWithNotifications
 
                 $results['notifications'][] = $notification;
 
-                // notifyPrepaidExpiry() never throws — a provider outage, a missing template or a
-                // customer with no contact details all come back in `errors` with the delivery
-                // flags false. Marking unconditionally therefore recorded "notified" for a notice
-                // that was never queued, and because the marker matches the expiry timestamp for
+                // notifyPrepaidExpiry() never throws — a provider outage or a customer with no
+                // phone number on file both come back in `errors` with `sms_sent` false (prepaid
+                // notices are SMS-only; email_queued is always false and never counts against
+                // delivery). Marking unconditionally therefore recorded "notified" for a notice
+                // that was never sent, and because the marker matches the expiry timestamp for
                 // as long as the account stays lapsed, the customer was never told at all.
                 // Marked only once something actually went out, so a transient failure retries
                 // tomorrow. A duplicate is not a risk: SmsQueueService::queueSms() deduplicates on
-                // (account, contact, message, time_sent), and the email queue is keyed the same way.
+                // (account, contact, message, time_sent).
                 if (!$notification['sms_sent'] && !$notification['email_queued']) {
                     $results['failed']++;
                     $results['errors'][] = [

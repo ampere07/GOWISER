@@ -1723,7 +1723,15 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
         return indexA - indexB;
       });
 
-    exportToCSV('job_orders_export', exportColumns, sortedJobOrders, renderCellValue);
+    // Raw number for CSV export; on-screen display keeps ₱ via renderCellValue/formatPrice.
+    const getExportValue = (jobOrder: JobOrder, columnKey: string) => {
+      if (columnKey === 'installationFee') {
+        return Number(jobOrder.Installation_Fee ?? jobOrder.installation_fee ?? 0).toFixed(2);
+      }
+      return renderCellValue(jobOrder, columnKey);
+    };
+
+    exportToCSV('job_orders_export', exportColumns, sortedJobOrders, getExportValue);
   };
 
   const renderCellDisplay = (jobOrder: JobOrder, columnKey: string) => {
