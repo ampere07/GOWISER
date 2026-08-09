@@ -748,6 +748,22 @@ class TransactionController extends Controller
             ]
             );
 
+            // Reconcile billing_status/RADIUS against the account's current prepaid_expires_at,
+            // now that the revert is durable. This endpoint (unlike the admin-approval revert
+            // workflow) never touched billing_status/RADIUS before, so a reverted payment that had
+            // extended a prepaid period or reconnected the customer left both stale. Security
+            // Deposit transactions never affect balance/expiry, so there is nothing to reconcile.
+            // Never throws — see the service's contract.
+            $prepaidEnforcement = null;
+            if ($transaction->transaction_type !== 'Security Deposit') {
+                $prepaidEnforcement = app(\App\Services\PrepaidRevertReconciliationService::class)->reconcileAfterRevert(
+                    $accountNo,
+                    null,
+                    Auth::check() ? Auth::user()->email_address : 'System',
+                    $userId
+                );
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Transaction reverted successfully',
@@ -755,7 +771,8 @@ class TransactionController extends Controller
                     'transaction' => $transaction,
                     'new_balance' => $newBalance,
                     'reverted_invoices' => $revertedInvoices
-                ]
+                ],
+                'prepaid_enforcement' => $prepaidEnforcement
             ]);
         }
         catch (\Exception $e) {

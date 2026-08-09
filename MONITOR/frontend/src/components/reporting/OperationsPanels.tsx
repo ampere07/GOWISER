@@ -1,10 +1,10 @@
 import React from 'react';
 import { Clock, Timer } from 'lucide-react';
 import Card, { CardHeader, CardBody } from './Card';
-import { Bar, PanelState, Pill, Table, Td, Th, Thead, Tr } from './primitives';
+import { Bar, PanelState, Table, Td, Th, Thead, Tr } from './primitives';
 import { useTheme } from '../../hooks/useTheme';
 import { OperationsData, Turnaround, TurnaroundByType, WorkQueue } from '../../types/reporting';
-import { formatDate, formatNumber, pluralise } from '../../utils/format';
+import { formatNumber, pluralise } from '../../utils/format';
 
 /**
  * The two Operations panels, shared by the Operations page and the Group
@@ -109,6 +109,48 @@ const statusLabel = (queueKey: string, label: string): string =>
   STATUS_LABELS[queueKey]?.[label.toLowerCase().trim()] ?? label;
 
 /**
+ * The rows a panel draws, under whichever vocabulary it is using.
+ *
+ * ── Why the plain-label pass has to merge ─────────────────────────────
+ *
+ * The map above is deliberately many-to-one: a service order sitting at "For
+ * Visit" and one sitting at "In Progress" are both, to anybody outside the
+ * operations team, waiting to be repaired. Rendering the mapped names without
+ * merging produced two rows both labelled "To be repaired" — 623 and 38 — which
+ * reads as a rendering fault, and invites adding the two by hand to find out
+ * what the queue actually holds.
+ *
+ * Merged on the *displayed* name rather than on a bucket key, so a pair that
+ * happens to share a name shares a row, and anything unmapped keeps its own.
+ */
+const panelRows = (
+  queue: WorkQueue,
+  plainLabels: boolean
+): { label: string; count: number; tone: string }[] => {
+  const merged = new Map<string, { label: string; count: number; tone: string }>();
+
+  queue.statuses.forEach((status) => {
+    const label = plainLabels ? statusLabel(queue.key, status.label) : status.label;
+    const existing = merged.get(label);
+
+    if (existing) {
+      existing.count += status.count;
+      return;
+    }
+
+    // The tone follows the first source status to claim the row. The map only
+    // ever merges statuses that mean the same thing, so the colours agree.
+    merged.set(label, { label, count: status.count, tone: statusTone(status.label) });
+  });
+
+  // Array.from rather than spreading the iterator: this project targets es5,
+  // where spreading a Map iterator needs downlevelIteration.
+  return Array.from(merged.values()).sort(
+    (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+  );
+};
+
+/**
  * One work queue: its status pipeline and its backlog.
  *
  * `plainLabels` is off by default so the Operations page keeps reporting the
@@ -122,37 +164,39 @@ export const QueuePanel: React.FC<{ queue: WorkQueue; plainLabels?: boolean }> =
 }) => {
   const isDarkMode = useTheme();
 
-  const total = queue.statuses.reduce((sum, status) => sum + status.count, 0);
+  const rows = panelRows(queue, plainLabels);
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
   const title = plainLabels ? queueLabel(queue) : queue.label;
 
   return (
     <Card flush className="h-full">
-      <CardHeader
-        title={title}
-        badge={pluralise(total, 'record')}
-        actions={
-          queue.backlog.open > 0 ? (
-            <Pill tone="warning">{formatNumber(queue.backlog.open)} open</Pill>
-          ) : (
-            <Pill tone="success">clear</Pill>
-          )
-        }
-      />
+      {/* Header carries the queue's name and its total, and nothing else.
+          Three figures used to sit up here and at the foot of the card — a
+          record count, an "open" pill and an oldest-open line — each counted on
+          a different basis from the pipeline below them and from each other,
+          which is why they never agreed: the pipeline was windowed to the
+          selected range while the backlog and the oldest item were all-time. A
+          card carrying four numbers that cannot be reconciled against one
+          another is worse than a card carrying one. The pipeline is now the
+          whole queue and it adds up to the total beside the title.
+
+          `backlog` is still in the API payload and still computed. */}
+      <CardHeader title={title} badge={pluralise(total, 'record')} />
       <CardBody>
-        {queue.statuses.length === 0 ? (
+        {rows.length === 0 ? (
           <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-            Nothing opened in this range.
+            This queue is empty.
           </p>
         ) : (
           <div className="space-y-2">
-            {queue.statuses.map((status) => (
-              <div key={status.label}>
+            {rows.map((row) => (
+              <div key={row.label}>
                 <div className="flex items-baseline justify-between gap-2 mb-1">
                   <span className={`text-sm truncate ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                    {plainLabels ? statusLabel(queue.key, status.label) : status.label}
+                    {row.label}
                   </span>
                   <span className="text-sm font-bold whitespace-nowrap">
-                    {formatNumber(status.count)}
+                    {formatNumber(row.count)}
                   </span>
                 </div>
                 {/* Full-width track: these bars compare statuses within one
@@ -165,27 +209,14 @@ export const QueuePanel: React.FC<{ queue: WorkQueue; plainLabels?: boolean }> =
                   <span
                     className="block h-full rounded-full transition-all duration-500"
                     style={{
-                      width: `${total > 0 ? (status.count / total) * 100 : 0}%`,
-                      backgroundColor: statusTone(status.label),
+                      width: `${total > 0 ? (row.count / total) * 100 : 0}%`,
+                      backgroundColor: row.tone,
                     }}
                   />
                 </span>
               </div>
             ))}
           </div>
-        )}
-
-        {queue.backlog.oldest_opened_at && (
-          <p
-            className={`mt-3 pt-3 border-t text-xs ${
-              isDarkMode ? 'border-gray-800 text-gray-400' : 'border-gray-200 text-gray-500'
-            }`}
-          >
-            Oldest open item waiting since {formatDate(queue.backlog.oldest_opened_at)}
-            {queue.backlog.oldest_age_days !== null && (
-              <> · {formatNumber(queue.backlog.oldest_age_days)} days</>
-            )}
-          </p>
         )}
       </CardBody>
     </Card>

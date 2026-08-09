@@ -1591,6 +1591,10 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
           return record.address || '-';
         case 'customerName':
           return record.customerName || '-';
+        case 'balance':
+          return Number(record.balance ?? 0).toFixed(2);
+        case 'totalPaid':
+          return Number(record.totalPaid ?? 0).toFixed(2);
         default:
           return renderCellValue(record, columnKey);
       }

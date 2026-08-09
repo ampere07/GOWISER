@@ -66,9 +66,33 @@ const PrintReportOverlay: React.FC<PrintReportOverlayProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The range this report covers, editable here.
+   *
+   * Seeded from the caller and then owned by the overlay, which is a change
+   * from taking the page's range as gospel. A printed financial report is
+   * almost always a month or a quarter, and the page behind it now opens on
+   * Daily — so inheriting it produced a preview covering today, which on a
+   * quiet morning is a correctly-built report with nothing in it. That is
+   * indistinguishable, at a glance, from a broken one.
+   *
+   * Editable rather than merely widened to a month, because the alternative is
+   * closing the preview, changing a widget range on the page behind it, and
+   * reopening — to change the one thing this dialog exists to produce.
+   */
+  const [from, setFrom] = useState(dateFrom);
+  const [to, setTo] = useState(dateTo);
+
+  // Re-seeded on open rather than on every prop change, so adjusting the dates
+  // in here is not undone by a widget moving on the page underneath.
   useEffect(() => {
-    if (open) setLayout(initialLayout);
-  }, [open, initialLayout]);
+    if (!open) return;
+
+    setLayout(initialLayout);
+    setFrom(dateFrom);
+    setTo(dateTo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   /**
    * Marks the body while the overlay is up, which is what arms the print rules.
@@ -106,7 +130,7 @@ const PrintReportOverlay: React.FC<PrintReportOverlayProps> = ({
     setError(null);
 
     reportingService
-      .getPrintable(source, dateFrom, dateTo, branch)
+      .getPrintable(source, from, to, branch)
       .then((result) => {
         if (cancelled) return;
         setData(result.data);
@@ -127,7 +151,7 @@ const PrintReportOverlay: React.FC<PrintReportOverlayProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, source, dateFrom, dateTo, branch]);
+  }, [open, source, from, to, branch]);
 
   if (!open) return null;
 
@@ -166,10 +190,37 @@ const PrintReportOverlay: React.FC<PrintReportOverlayProps> = ({
           ))}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500 hidden sm:inline">
-            {data ? data.range_label : `${dateFrom} – ${dateTo}`}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The range, editable. A report covering the wrong month is the
+              commonest thing to get wrong about a printout, and it is worth
+              being able to correct without leaving the preview. */}
+          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className="hidden sm:inline">Range</span>
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(event) => setFrom(event.target.value)}
+              aria-label="Report start date"
+              className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs tabular-nums text-gray-700"
+            />
+          </label>
+          <span className="text-xs text-gray-400">→</span>
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(event) => setTo(event.target.value)}
+            aria-label="Report end date"
+            className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs tabular-nums text-gray-700"
+          />
+
+          {/* Stated even when the report is empty, so "nothing was collected in
+              this range" is legible as an answer rather than as a failure. */}
+          <span className="text-xs text-gray-500 hidden lg:inline">
+            {data ? data.range_label : `${from} – ${to}`}
           </span>
+
           <button
             type="button"
             onClick={() => window.print()}
@@ -202,13 +253,29 @@ const PrintReportOverlay: React.FC<PrintReportOverlayProps> = ({
             {error}
           </div>
         ) : data ? (
-          <ReportBody
-            layout={layout}
-            data={data}
-            filters={filters}
-            preparedBy={preparedBy}
-            preparedByRole={preparedByRole}
-          />
+          <>
+            {/* Said out loud rather than left to be inferred from a document
+                with nothing in it. An empty report and a broken one look
+                identical on screen, and the first thing to check is the range —
+                which is now one control away, at the top of this dialog. */}
+            {data.payments.length === 0 && data.expenses.length === 0 && (
+              <div className="no-print mx-auto mb-4 flex max-w-lg items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <AlertTriangle size={16} className="flex-shrink-0" />
+                <span>
+                  Nothing was collected or spent in {data.range_label}. The report below is
+                  correct and empty — widen the range above if that is not what you meant.
+                </span>
+              </div>
+            )}
+
+            <ReportBody
+              layout={layout}
+              data={data}
+              filters={filters}
+              preparedBy={preparedBy}
+              preparedByRole={preparedByRole}
+            />
+          </>
         ) : null}
       </div>
     </div>,

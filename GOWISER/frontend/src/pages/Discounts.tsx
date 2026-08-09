@@ -787,7 +787,7 @@ const Discounts: React.FC = () => {
         case 'emailAddress': return record.emailAddress || '-';
         case 'address': return record.address || '-';
         case 'plan': return record.plan || '-';
-        case 'discountAmount': return `₱ ${(record.discountAmount ?? 0).toFixed(2)}`;
+        case 'discountAmount': return Number(record.discountAmount ?? 0).toFixed(2);
         case 'discountStatus': return record.discountStatus || '-';
         case 'dateCreated': return formatDate(record.dateCreated);
         case 'processedBy': return record.processedBy || '-';

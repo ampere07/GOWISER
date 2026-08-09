@@ -536,7 +536,10 @@ const SOChargePage: React.FC = () => {
   const handleExport = () => {
     if (!filteredRecords.length) return;
     const exportColumns = allColumns.filter(col => visibleColumns.includes(col.key)).sort((a, b) => columnOrder.indexOf(a.key) - columnOrder.indexOf(b.key));
-    const getExportValue = (record: SOChargeRecord, columnKey: string) => renderCellValue(record, columnKey);
+    const getExportValue = (record: SOChargeRecord, columnKey: string) => {
+      if (columnKey === 'amount') return Number(record.amount ?? 0).toFixed(2);
+      return renderCellValue(record, columnKey);
+    };
     exportToCSV('so_charge_export', exportColumns, filteredRecords, getExportValue);
   };
 

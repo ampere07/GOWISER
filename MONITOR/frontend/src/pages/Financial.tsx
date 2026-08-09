@@ -35,6 +35,7 @@ import {
 } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
+import { PageActions, PagePeriodBar, usePageChrome } from '../components/reporting/PageChrome';
 import { Restricted, RestrictedPanel, MaskedValue } from '../components/rbac/Restricted';
 import PrintReportOverlay from '../components/print/PrintReportOverlay';
 import { MetricTooltip } from '../components/common/MetricTooltip';
@@ -42,6 +43,7 @@ import { useReportingSection } from '../hooks/useReportingSection';
 import { usePermissions } from '../hooks/usePermissions';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
+import { useLinkedRange } from '../hooks/useLinkedRange';
 import { useMonitorStore } from '../store/monitorStore';
 import { reportingService } from '../services/reportingService';
 import { FinancialData, IncomeChannel } from '../types/reporting';
@@ -82,30 +84,45 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const { filters, update, reset, branches, databases } = useSectionFilters('financial');
 
   const [printOpen, setPrintOpen] = React.useState(false);
+  // Bumped by the page's own Refresh button, on top of the dashboard poll.
+  const [reloads, setReloads] = React.useState(0);
 
-  // One range per widget, all defaulting to the same preset so that on first
-  // load they share a cache key and cost one request between them; only a widget
-  // someone moves pays for itself.
-  //
-  // Daily rather than month-to-date. This page is opened to answer "what came in
-  // today" far more often than "how is the month going", and the month is one
-  // click away on every widget. The trend chart keeps a longer window because a
-  // trend over one day is a single point — it is a shape, not a total, and the
-  // reason it carries its own control at all.
-  const headlineRange = useWidgetRange('daily');
+  const chrome = usePageChrome();
+
+  /**
+   * The page period, and the widgets that follow it.
+   *
+   * Daily rather than month-to-date: this page is opened to answer "what came in
+   * today" far more often than "how is the month going", and the month is now
+   * one click away at the top rather than six clicks across the card headers.
+   *
+   * Every widget is linked, so the bar moves all of them together — and each
+   * keeps its own control for the comparison this page exists to make, holding
+   * revenue on the year while the trend sits on the month. A widget someone
+   * moves detaches and says so; see useLinkedRange.
+   *
+   * The trend is the one exception, seeded on the month whatever the page is on:
+   * a trend over a single day is one point, which is not a shape.
+   */
+  const pageRange = useWidgetRange('daily');
+
+  const headlineRange = useLinkedRange(pageRange);
+  const channelsRange = useLinkedRange(pageRange);
+  const opexRange = useLinkedRange(pageRange);
+  const breakdownRange = useLinkedRange(pageRange);
   const trendRange = useWidgetRange('monthly');
-  const channelsRange = useWidgetRange('daily');
-  const opexRange = useWidgetRange('daily');
-  const breakdownRange = useWidgetRange('daily');
+
+  /** Month-to-date, for the printable ledger. See the overlay for why. */
+  const printRange = useWidgetRange('monthly');
 
   const headline = useReportingSection<FinancialData>(
     reportingService.getFinancial,
     filters,
-    refreshToken,
+    refreshToken + reloads,
     { dateFrom: headlineRange.range.from, dateTo: headlineRange.range.to }
   );
 
-  const trend = useReportingSection<FinancialData>(reportingService.getFinancial, filters, refreshToken, {
+  const trend = useReportingSection<FinancialData>(reportingService.getFinancial, filters, refreshToken + reloads, {
     dateFrom: trendRange.range.from,
     dateTo: trendRange.range.to,
     period: trendRange.granularity,
@@ -114,13 +131,13 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const channels = useReportingSection<FinancialData>(
     reportingService.getFinancial,
     filters,
-    refreshToken,
+    refreshToken + reloads,
     { dateFrom: channelsRange.range.from, dateTo: channelsRange.range.to }
   );
 
 
 
-  const opex = useReportingSection<FinancialData>(reportingService.getFinancial, filters, refreshToken, {
+  const opex = useReportingSection<FinancialData>(reportingService.getFinancial, filters, refreshToken + reloads, {
     dateFrom: opexRange.range.from,
     dateTo: opexRange.range.to,
   });
@@ -128,7 +145,7 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const breakdowns = useReportingSection<FinancialData>(
     reportingService.getFinancial,
     filters,
-    refreshToken,
+    refreshToken + reloads,
     { dateFrom: breakdownRange.range.from, dateTo: breakdownRange.range.to }
   );
 
@@ -150,11 +167,18 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
   const maxIncome = periods.reduce((max, period) => Math.max(max, period.income), 0);
   const maxExpenses = periods.reduce((max, period) => Math.max(max, period.expenses), 0);
 
+  const refresh = () => {
+    // Bypasses the client cache, as the header's own refresh does — otherwise
+    // the button appears to do nothing for up to ten seconds.
+    reportingService.invalidate(source || undefined);
+    setReloads((count) => count + 1);
+  };
+
   return (
     // `financial-module` scopes the monochrome print rules in index.css. A
     // financial printout goes into a folder and gets signed, so it prints as
     // black text on white paper regardless of the theme on screen.
-    <div className="financial-module">
+    <div className={`financial-module ${chrome.containerClass}`} ref={chrome.container}>
       <ReportingPage>
         <PageHeader
           title="Financial"
@@ -166,19 +190,26 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
             </>
           }
           actions={
-            // Printing puts the ledger on paper and out of the building, which is
-            // a stronger act than reading it — so it is a separate grant, and the
-            // route enforces the same one.
-            <Restricted require={ACTION.financialExport}>
-              <Button
-                variant="primary"
-                icon={<Printer size={14} />}
-                onClick={() => setPrintOpen(true)}
-                disabled={!data}
-              >
-                Print Report
-              </Button>
-            </Restricted>
+            <PageActions
+              chrome={chrome}
+              onRefresh={refresh}
+              refreshing={loading}
+              extra={
+                // Printing puts the ledger on paper and out of the building,
+                // which is a stronger act than reading it — so it is a separate
+                // grant, and the route enforces the same one.
+                <Restricted require={ACTION.financialExport}>
+                  <Button
+                    variant="primary"
+                    icon={<Printer size={14} />}
+                    onClick={() => setPrintOpen(true)}
+                    disabled={!data}
+                  >
+                    Print Report
+                  </Button>
+                </Restricted>
+              }
+            />
           }
         />
 
@@ -194,6 +225,8 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           databases={databases}
           showBranch={branches.length > 0}
         />
+
+        <PagePeriodBar chrome={chrome} state={pageRange} />
 
         {/* ── Headline ──────────────────────────────────────────────────── */}
         <Card>
@@ -679,8 +712,13 @@ const Financial: React.FC<FinancialProps> = ({ refreshToken, user }) => {
           open={printOpen}
           onClose={() => setPrintOpen(false)}
           source={source || activeSource}
-          dateFrom={headlineRange.range.from}
-          dateTo={headlineRange.range.to}
+          // Month-to-date, not the headline widget's range. The page now opens
+          // on Daily, and a printed financial report covering a single quiet
+          // morning is a correctly-built document with nothing in it — which
+          // reads as broken. The overlay carries its own date controls, so this
+          // is a starting point rather than a decision made for the user.
+          dateFrom={printRange.range.from}
+          dateTo={printRange.range.to}
           branch={filters.branch}
           preparedBy={user.full_name || user.username || user.email || ''}
           preparedByRole={user.role || ''}

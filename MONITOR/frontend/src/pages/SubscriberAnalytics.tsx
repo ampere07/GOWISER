@@ -20,10 +20,12 @@ import { DonutChart } from '../components/reporting/charts';
 import { ErrorBanner, PanelState } from '../components/reporting/primitives';
 import { SourceNotice, useSectionFilters } from '../components/reporting/sectionShell';
 import { AggregateNotice } from '../components/reporting/DatabaseFilter';
+import { PageActions, PagePeriodBar, usePageChrome } from '../components/reporting/PageChrome';
 import { Restricted, RestrictedPanel } from '../components/rbac/Restricted';
 import { useReportingSection } from '../hooks/useReportingSection';
 import { useTheme } from '../hooks/useTheme';
 import { useWidgetRange } from '../hooks/useWidgetRange';
+import { useLinkedRange } from '../hooks/useLinkedRange';
 import { reportingService } from '../services/reportingService';
 import { SubscriberAnalyticsData } from '../types/reporting';
 import { WIDGET } from '../types/rbac';
@@ -115,25 +117,35 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
   // as it stands rather than something that accrues over a window.
   const { filters, update, reset, branches, databases } = useSectionFilters('subscriber_analytics');
 
+  const chrome = usePageChrome();
+  const [reloads, setReloads] = React.useState(0);
+
   // Only one widget on this page is period-bound. The billing summary, the
   // status and plan charts and the barangay table are all statements of the base
   // *as it stands* — filtering a headcount to a date window does not narrow it,
   // it just makes the number wrong — so they carry no range control at all.
   //
+  // Which is why the period bar above carries a note saying so. A page-wide
+  // control that visibly moves one card in five would otherwise read as broken.
+  //
   // Opens on Daily rather than month-to-date. "How many joined today" is the
   // question this page is opened for; month-to-date is the one asked afterwards,
-  // and it is one click away. On the first of the month the old default also
-  // showed a single day's growth under a label reading "monthly", which reads as
-  // a collapse rather than as an empty month.
-  const growthRange = useWidgetRange('daily');
+  // and it is one click away.
+  const pageRange = useWidgetRange('daily');
+  const growthRange = useLinkedRange(pageRange);
 
-  const { data, loading, error, sourceLabel, substituted } =
+  const { data, loading, error, source, sourceLabel, substituted } =
     useReportingSection<SubscriberAnalyticsData>(
       reportingService.getSubscriberAnalytics,
       filters,
-      refreshToken,
+      refreshToken + reloads,
       { dateFrom: growthRange.range.from, dateTo: growthRange.range.to }
     );
+
+  const refresh = () => {
+    reportingService.invalidate(source || undefined);
+    setReloads((count) => count + 1);
+  };
 
   const kpi = data?.kpi;
   const billing = data?.billing_summary;
@@ -148,6 +160,7 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
     .sort(([, a], [, b]) => b - a);
 
   return (
+    <div ref={chrome.container} className={chrome.containerClass}>
     <ReportingPage>
       <PageHeader
         title="Subscriber Analytics"
@@ -158,6 +171,7 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
             {data && data.branch_label !== 'All branches' && <> · {data.branch_label}</>}
           </>
         }
+        actions={<PageActions chrome={chrome} onRefresh={refresh} refreshing={loading} />}
       />
 
       <SourceNotice show={substituted} sourceLabel={sourceLabel} />
@@ -171,6 +185,19 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
         branches={branches}
         databases={databases}
         showBranch={branches.length > 0}
+      />
+
+      <PagePeriodBar
+        chrome={chrome}
+        state={pageRange}
+        // Stated on the bar itself, because it is true of this page and of no
+        // other: four of the five blocks below are headcounts, and a headcount
+        // has no period. Without the note the control looks broken.
+        trailing={
+          <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+            growth only · headcounts are as of now
+          </span>
+        }
       />
 
       {/* ── Billing status summary header ─────────────────────────────── */}
@@ -372,6 +399,7 @@ const SubscriberAnalytics: React.FC<SubscriberAnalyticsProps> = ({ refreshToken 
         in SYNC appears here without a change to this portal.
       </p>
     </ReportingPage>
+    </div>
   );
 };
 

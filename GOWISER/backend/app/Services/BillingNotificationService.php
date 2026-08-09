@@ -176,18 +176,17 @@ class BillingNotificationService
      * plan they pick at checkout, so there is no document to bill against and none to attach.
      * This notice is what replaces that bill.
      *
-     * Deliberately reuses the SAME due-date templates as a normal bill — the 'StatementofAccount'
-     * SMS template and the billing email template — rather than introducing a prepaid-only pair.
-     * The customer gets the message they already recognise ("here is what is due, here is by
-     * when") and operations keeps one set of templates to maintain. The expiry date fills
-     * {{due_date}} and the renewal price fills the amount placeholders.
+     * SMS only, deliberately. This used to also send an email that reused the SOA_TEMPLATE code
+     * (there being no prepaid-specific template) to "stand in for a bill", but that meant a
+     * routine SOA_TEMPLATE deactivation — a postpaid-only config choice — surfaced as a "template
+     * not found" error for every prepaid customer, since prepaid accounts were never supposed to
+     * depend on SOA/invoice infrastructure at all. Prepaid accounts do not use SOA_TEMPLATE, full
+     * stop; the renewal amount and due date now travel to the customer via SMS only.
      *
      * No PDF is produced: {@see notifyBillingGenerated()} only generates one for an SOA, and there
      * is no SOA here.
      *
-     * Email and SMS are attempted independently and neither blocks the other, mirroring
-     * notifyBillingGenerated() — a customer with no phone number still gets the email. Never
-     * throws; failures come back in `errors`.
+     * Never throws; failures come back in `errors`.
      *
      * @param  Carbon       $expiresAt      the lapsed prepaid_expires_at, shown as the due date
      * @param  float        $renewalAmount  what settles the renewal, VAT/withholding applied
@@ -213,35 +212,12 @@ class BillingNotificationService
                 throw new \Exception("Customer not found for account {$account->account_no}");
             }
 
-            if ($customer->email_address) {
-                // Same template a generated bill uses. There is no SOA, so this takes the
-                // invoice_email slot, which config points at the same SOA_TEMPLATE anyway.
-                $templateCode = config('billing.templates.invoice_email', 'SOA_TEMPLATE');
-
-                $emailQueued = $this->emailQueueService->queueFromTemplate(
-                    $templateCode,
-                    array_merge($this->preparePrepaidExpiryData($account, $expiresAt, $renewalAmount), [
-                        'recipient_email' => $customer->email_address,
-                        // Explicitly null rather than omitted: the queue reads these keys, and a
-                        // prepaid lapse notice has no document to attach.
-                        'google_drive_url' => null,
-                        'filename' => null,
-                        'attachment_path' => null,
-                        'time_sent' => $timeSent
-                    ])
-                );
-
-                $results['email_queued'] = $emailQueued !== null;
-
-                if ($emailQueued === null) {
-                    $results['errors'][] = "Email template '{$templateCode}' not found";
-                    Log::error("Email template '{$templateCode}' not found for prepaid expiry notice", [
-                        'account_no' => $account->account_no
-                    ]);
-                }
-            } else {
-                $results['errors'][] = 'Customer has no email address';
-                Log::warning('Prepaid expiry notice: customer has no email address', [
+            // No SOA_TEMPLATE email for prepaid accounts — see the method docblock. Deliberately
+            // no template lookup at all (not even to check Is_Active), so a disabled or missing
+            // SOA_TEMPLATE never affects a prepaid customer or their logs. This is expected
+            // behavior, not a delivery failure, so it does not add to `errors`.
+            if (BillingAccount::isPrepaidType($account->generation_type)) {
+                Log::info('Prepaid expiry notice: SOA_TEMPLATE email intentionally skipped for prepaid account', [
                     'account_no' => $account->account_no
                 ]);
             }
@@ -294,54 +270,6 @@ class BillingNotificationService
         }
 
         return $results;
-    }
-
-    /**
-     * Email placeholders for a prepaid lapse notice.
-     *
-     * Same key set {@see prepareEmailData()} builds, so the shared billing template renders
-     * identically — only the source of the two figures differs: the due date is the prepaid
-     * expiry rather than an invoice due date, and the amount is the renewal price rather than an
-     * invoice total. SOA-only keys are omitted because there is no statement.
-     */
-    protected function preparePrepaidExpiryData(
-        BillingAccount $account,
-        Carbon $expiresAt,
-        float $renewalAmount
-    ): array {
-        $customer = $account->customer;
-
-        $billingConfig = BillingConfig::first();
-        $disconnectionDay = $billingConfig ? $billingConfig->disconnection_day : 4;
-        $dcDate = $expiresAt->copy()->addDays($disconnectionDay);
-
-        $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
-        $planFormatted = str_replace('₱', 'P', $customer->desired_plan ?? '');
-        $amount = number_format($renewalAmount, 2);
-
-        return [
-            'Full_Name' => $customerName,
-            'Address' => $customer->address,
-            'Contact_No' => $customer->contact_number_primary,
-            'Email' => $customer->email_address,
-            'Account_No' => $account->account_no,
-            'Plan' => $planFormatted,
-            'Due_Date' => $expiresAt->format('F j Y'),
-            'DC_Date' => $dcDate->format('F j Y'),
-            'Total_Due' => $amount,
-            'Amount_Due' => $amount,
-            'amount' => $amount,
-            'amount_due' => $amount,
-            'balance' => $amount,
-            'account_no' => $account->account_no,
-            'customer_name' => $customerName,
-            'total_amount' => $amount,
-            'due_date' => $expiresAt->format('F j Y'),
-            'plan' => $planFormatted,
-            'plan_name' => $planFormatted,
-            'plan_nam' => $planFormatted,
-            'contact_no' => $customer->contact_number_primary
-        ];
     }
 
     /**
@@ -413,9 +341,8 @@ class BillingNotificationService
      * before anything is cut, sent `billing_config.prepaid_pre_expiry_days` ahead of
      * prepaid_expires_at.
      *
-     * SMS only, deliberately. The lapse notice sends an email as well because it is standing in for
-     * a bill; this one is a nudge, and adding a second full billing email days before the first
-     * would read as duplicate billing to the customer.
+     * SMS only, like the lapse notice this precedes — see {@see notifyPrepaidExpiry()} for why
+     * prepaid notices carry no email.
      *
      * Uses its own 'PrepaidPreExpiry' template so operations can word the early warning differently
      * from the lapse notice, and falls back to 'StatementofAccount' when that template is missing or
@@ -760,10 +687,21 @@ class BillingNotificationService
     ): bool {
         $customer = $account->customer;
         $tempPdfPath = null;
-        
+
         try {
+            // Prepaid accounts have no SOA/invoice to email — this path exists for postpaid
+            // monthly billing only. Guards against a prepaid account reaching here by mistake
+            // (e.g. an upstream caller failing to filter by generation_type) rather than
+            // attempting a SOA/invoice template lookup that was never meant to apply to them.
+            if (BillingAccount::isPrepaidType($account->generation_type)) {
+                Log::info('Billing email skipped: prepaid account has no SOA/invoice to send', [
+                    'account_no' => $account->account_no
+                ]);
+                return false;
+            }
+
             // Determine Document Type and Template
-            $templateCode = $soa 
+            $templateCode = $soa
                 ? config('billing.templates.soa_email', 'SOA_DESIGN_EMAIL')
                 : config('billing.templates.invoice_email', 'INVOICE_DESIGN_EMAIL');
                 

@@ -53,7 +53,6 @@ Route::apiResource('roles', RoleController::class);
 Route::get('/tech-in-out/status', [TechInOutController::class, 'getStatus']);
 Route::post('/tech-in-out/time-in', [TechInOutController::class, 'timeIn']);
 Route::post('/tech-in-out/time-out', [TechInOutController::class, 'timeOut']);
-Route::get('/reports', [ReportController::class , 'index']);
 Route::get('/commissions', [CommissionController::class, 'index']);
 Route::get('/commissions/history', [CommissionController::class, 'getHistory']);
 Route::post('/commissions/history', [CommissionController::class, 'storeHistory']);
@@ -62,70 +61,71 @@ Route::get('/commissions/agent-job-orders', [CommissionController::class, 'getJo
 Route::get('/commissions/incentive-history', [CommissionController::class, 'getIncentiveHistory']);
 Route::get('/commissions/bonus-history', [CommissionController::class, 'getBonusHistory']);
 Route::post('/commissions/bonus-history', [CommissionController::class, 'storeBonusHistory']);
-Route::post('/reports', [ReportController::class , 'store']);
-Route::get('/reports/options', [ReportController::class , 'options']);
-// Registered before the /reports/{id} routes below, which have no numeric
-// constraint and would otherwise match "settings" as an id.
-Route::get('/reports/settings', [ReportController::class , 'settings']);
-Route::put('/reports/settings', [ReportController::class , 'updateSettings'])
-    ->middleware('role:administrator,super_admin');
-Route::put('/reports/{id}', [ReportController::class , 'update'])->whereNumber('id');
-// Deleting a report also drops its dispatch ledger and unsent emails, so it is
-// Super Admin only — enforced here, not just hidden in the UI.
-Route::delete('/reports/{id}', [ReportController::class , 'destroy'])
-    ->whereNumber('id')
-    ->middleware('role:super_admin');
-Route::get('/reports/{id}/preview', [ReportController::class , 'preview'])->whereNumber('id');
-Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate'])->whereNumber('id');
-Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow'])->whereNumber('id');
-Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches'])->whereNumber('id');
-Route::get('/reports-migrate-pdf', function () {
-    $reports = \App\Models\Report::all();
-    $pdfService = new \App\Services\ReportPdfService();
-    $driveService = resolve(\App\Services\GoogleDriveService::class);
-    $folderId = $driveService->findFolder('Reports') ?? $driveService->createFolder('Reports');
 
-    $count = 0;
-    $failures = [];
-    foreach ($reports as $report) {
-        try {
-            // generate() picks the summary or tabular layout itself. The old
-            // branch called generateTablePdf(), which did not exist, so every
-            // non-summary report silently failed inside the catch below.
-            $tempPath = $pdfService->generate($report);
-            $fileName = basename($tempPath);
+// Reports module is Super Admin only — enforced here (not just hidden in the UI) since
+// reports can expose org-wide financial/commission data.
+Route::middleware('role:superadmin')->group(function () {
+    Route::get('/reports', [ReportController::class , 'index']);
+    Route::post('/reports', [ReportController::class , 'store']);
+    Route::get('/reports/options', [ReportController::class , 'options']);
+    // Registered before the /reports/{id} routes below, which have no numeric
+    // constraint and would otherwise match "settings" as an id.
+    Route::get('/reports/settings', [ReportController::class , 'settings']);
+    Route::put('/reports/settings', [ReportController::class , 'updateSettings']);
+    Route::put('/reports/{id}', [ReportController::class , 'update'])->whereNumber('id');
+    Route::delete('/reports/{id}', [ReportController::class , 'destroy'])->whereNumber('id');
+    Route::get('/reports/{id}/preview', [ReportController::class , 'preview'])->whereNumber('id');
+    Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate'])->whereNumber('id');
+    Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow'])->whereNumber('id');
+    Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches'])->whereNumber('id');
+    Route::get('/reports-migrate-pdf', function () {
+        $reports = \App\Models\Report::all();
+        $pdfService = new \App\Services\ReportPdfService();
+        $driveService = resolve(\App\Services\GoogleDriveService::class);
+        $folderId = $driveService->findFolder('Reports') ?? $driveService->createFolder('Reports');
 
-            $fileUrl = $driveService->uploadFile($tempPath, $folderId, $fileName, 'application/pdf');
+        $count = 0;
+        $failures = [];
+        foreach ($reports as $report) {
+            try {
+                // generate() picks the summary or tabular layout itself. The old
+                // branch called generateTablePdf(), which did not exist, so every
+                // non-summary report silently failed inside the catch below.
+                $tempPath = $pdfService->generate($report);
+                $fileName = basename($tempPath);
 
-            $oldUrl = $report->file_url;
-            if ($oldUrl && preg_match('/\/d\/([a-zA-Z0-9_-]+)/', $oldUrl, $matches)) {
-                try {
-                    $driveService->deleteFile($matches[1]);
+                $fileUrl = $driveService->uploadFile($tempPath, $folderId, $fileName, 'application/pdf');
+
+                $oldUrl = $report->file_url;
+                if ($oldUrl && preg_match('/\/d\/([a-zA-Z0-9_-]+)/', $oldUrl, $matches)) {
+                    try {
+                        $driveService->deleteFile($matches[1]);
+                    }
+                    catch (\Exception $e) {
+                    }
                 }
-                catch (\Exception $e) {
-                }
+
+                $report->file_url = $fileUrl;
+                $report->save();
+                @unlink($tempPath);
+                $count++;
             }
-
-            $report->file_url = $fileUrl;
-            $report->save();
-            @unlink($tempPath);
-            $count++;
+            catch (\Throwable $e) {
+                // Previously swallowed entirely, which is why a broken PDF pipeline
+                // could report "Converted 0 reports." and look like success.
+                $failures[] = "#{$report->id} {$report->report_name}: {$e->getMessage()}";
+                \Illuminate\Support\Facades\Log::error('Report PDF migration failed', [
+                    'report_id' => $report->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
-        catch (\Throwable $e) {
-            // Previously swallowed entirely, which is why a broken PDF pipeline
-            // could report "Converted 0 reports." and look like success.
-            $failures[] = "#{$report->id} {$report->report_name}: {$e->getMessage()}";
-            \Illuminate\Support\Facades\Log::error('Report PDF migration failed', [
-                'report_id' => $report->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-    return response()->json([
-        'success' => $failures === [],
-        'message' => "Converted {$count} of {$reports->count()} reports.",
-        'failures' => $failures,
-    ], $failures === [] ? 200 : 207);
+        return response()->json([
+            'success' => $failures === [],
+            'message' => "Converted {$count} of {$reports->count()} reports.",
+            'failures' => $failures,
+        ], $failures === [] ? 200 : 207);
+    });
 });
 
 Route::middleware('auth:sanctum')->group(function () {
