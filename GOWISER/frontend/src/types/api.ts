@@ -19,6 +19,16 @@ export interface LoginResponse {
   };
 }
 
+/**
+ * Body of the 409 the login endpoint returns when a technician is already signed in on
+ * another device. The login is not completed until it is re-submitted with force_login.
+ */
+export interface SessionConflictResponse {
+  status: string;
+  require_confirmation?: boolean;
+  message: string;
+}
+
 export interface ForgotPasswordResponse {
   status: string;
   message: string;

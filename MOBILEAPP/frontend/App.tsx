@@ -3,7 +3,7 @@ import './global.css';
 import Login from './src/pages/Login';
 import Dashboard from './src/pages/Dashboard';
 import { UserData } from './src/types/api';
-import { initializeCsrf, loadCookies, clearCookies } from './src/config/api';
+import apiClient, { initializeCsrf, loadCookies, clearCookies } from './src/config/api';
 import { userSettingsService } from './src/services/userSettingsService';
 import PaymentResultModal from './src/components/PaymentResultModal';
 import SplashScreen from './src/components/SplashScreen';
@@ -56,6 +56,17 @@ function App() {
   const warningTimer = useRef<NodeJS.Timeout | null>(null);
 
   const handleLogout = async () => {
+    // Tell the server first. Dropping the local cookies alone leaves the session and the
+    // recaller cookie alive server-side, and for technicians it also leaves their one allowed
+    // session slot claimed — so their next sign-in on this same device would ask them to
+    // confirm a takeover of themselves. Failure here must still clear the client, so the user
+    // is never stuck signed in.
+    try {
+      await apiClient.post('/logout');
+    } catch (error) {
+      console.error('[App] Server logout failed; clearing local session anyway:', error);
+    }
+
     // Remove user data and cookies from AsyncStorage
     await AsyncStorage.removeItem('authData');
     await AsyncStorage.removeItem('authToken');

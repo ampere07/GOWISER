@@ -33,6 +33,7 @@ use App\Http\Controllers\InventoryRelatedDataController;
 use App\Http\Controllers\PPPoEController;
 use App\Models\User;
 use App\Models\MassRebate;
+use App\Services\TechnicianSessionGuard;
 use App\Http\Controllers\Api\MonitorController;
 use App\Http\Controllers\Api\SmsBlastController;
 use App\Http\Controllers\Api\ExpensesLogController;
@@ -1223,6 +1224,40 @@ Route::post('/login', function (Request $request) {
             ], 403);
         }
 
+        // Technicians get one live login and no more. Everyone else falls straight through
+        // this block unchanged.
+        //
+        // Runs before Auth::login() on purpose: a refused attempt must not leave an
+        // authenticated session behind for the device that was told to confirm first.
+        if (TechnicianSessionGuard::applies($user)) {
+            $currentSessionId = TechnicianSessionGuard::currentSessionId($request);
+
+            if (TechnicianSessionGuard::hasSessionElsewhere($user, $currentSessionId)) {
+                // Anything other than an explicit true — absent, false, '0' — means the client
+                // has not shown the confirmation prompt yet.
+                $forceLogin = filter_var($request->input('force_login', false), FILTER_VALIDATE_BOOLEAN);
+
+                if (! $forceLogin) {
+                    \Log::info('Technician login needs takeover confirmation', [
+                        'user_id' => $user->id,
+                        'username' => $user->username,
+                        'ip' => $request->ip()
+                    ]);
+
+                    return response()->json([
+                        'status' => 'already_logged_in',
+                        'require_confirmation' => true,
+                        'message' => 'Account active on another device. Proceed and log out previous session?'
+                    ], 409);
+                }
+
+                // Confirmed. Ends the other device's session, tokens and recaller cookie in one
+                // transaction, and must happen before Auth::login() so the new device is issued
+                // a fresh remember_token rather than the revoked one.
+                TechnicianSessionGuard::takeOver($user, $request);
+            }
+        }
+
         // CRITICAL: Actually log the user in to create an authenticated session.
         //
         // $remember = true issues the long-lived recaller cookie. This is what keeps people
@@ -1243,6 +1278,13 @@ Route::post('/login', function (Request $request) {
                 'user_id' => $user->id,
                 'error' => $sessionError->getMessage()
             ]);
+        }
+
+        // Claim the single technician session slot. After regenerate(), so the id recorded is
+        // the one the device will actually present — recording the pre-login id would make
+        // this technician's own next login on this same device look like a second device.
+        if (TechnicianSessionGuard::applies($user)) {
+            TechnicianSessionGuard::register($user, $request);
         }
 
         // Verify session was created
@@ -1425,6 +1467,11 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
  */
 Route::post('/logout', function (Request $request) {
     $userId = \Auth::id();
+
+    // Free the technician's single-session slot before anything is torn down: invalidate()
+    // below rotates the session id, and the id being released has to be the one that was
+    // recorded at login. A no-op for every other role — they hold no such record.
+    TechnicianSessionGuard::release($userId, TechnicianSessionGuard::currentSessionId($request));
 
     // Cycles remember_token, so the old recaller cookie can never re-authenticate — this is
     // what makes "explicitly logged out" stick across devices holding a stale cookie.
