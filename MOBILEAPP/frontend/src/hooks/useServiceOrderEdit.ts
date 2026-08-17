@@ -14,6 +14,7 @@ import apiClient from '../config/api';
 import { getAllInventoryItems, InventoryItem } from '../services/inventoryItemService';
 import { createServiceOrderItems, ServiceOrderItem } from '../services/serviceOrderItemService';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
+import { startTimeVisitTeam } from '../utils/visitTeam';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { concernService, Concern } from '../services/concernService';
 import { getAllLCPNAPs, LCPNAP } from '../services/lcpnapService';
@@ -764,32 +765,6 @@ const initialFormState: ServiceOrderEditFormData = {
   modifiedBy: '', modifiedDate: '', serviceCharge: '0.00', status: 'unused',
   newRouterModemSN: '', newLcp: '', newNap: '', newPort: '', newVlan: '', routerModel: '', newPlan: '', newLcpnap: '', fullAddress: '', proofImage: '',
   setupImage: '', routerReadingImage: '', boxReadingImage: '', portLabelImage: ''
-};
-
-/**
- * The team chosen in the Start Timer modal, in slot order.
- *
- * That modal asks for Technician 1/2/3 and stores them on the service order as a
- * `technicians` array; this form records the same three people as Visit By, Visit
- * With and Visit With (Other). Same team, two names for it — so the positions map
- * straight across rather than the technician re-entering them.
- *
- * 'None' is a real choice in slots 2 and 3 there, and is carried through verbatim:
- * it means "nobody else attended", which is an answer.
- */
-const startTimeVisitTeam = (raw: any): [string, string, string] => {
-  // The column is TEXT cast to array by the model, but a cached or older payload
-  // can still arrive as the raw JSON string.
-  let list: any = raw;
-  if (typeof raw === 'string') {
-    try { list = JSON.parse(raw); } catch { list = []; }
-  }
-
-  if (!Array.isArray(list)) return ['', '', ''];
-
-  const slot = (i: number) => (typeof list[i] === 'string' ? list[i].trim() : '');
-
-  return [slot(0), slot(1), slot(2)];
 };
 
 const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {

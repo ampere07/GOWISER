@@ -15,6 +15,8 @@ import timezone from 'dayjs/plugin/timezone';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
+import { startTimeVisitTeam } from '../utils/visitTeam';
+
 // Global cache to persist data between form opens/re-renders
 // This makes re-opening the form instant.
 const DATA_CACHE: {
@@ -276,35 +278,12 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     return match?.name || currentUser?.full_name || currentUser?.email || '';
   }, [technicians, currentUser]);
 
-  /**
-   * The visiting team chosen in the Start Timer modal, in slot order.
-   *
-   * That modal asks for Technician 1/2/3 and stores them on the job order as a
-   * `technicians` array; this form records the same three people as Visit By,
-   * Visit With and Visit With (Other). Same team, two names for it — so the
-   * positions map straight across rather than the technician re-entering them.
-   *
-   * 'None' is a real choice in slots 2 and 3 of that modal, and is carried
-   * through verbatim: it means "nobody else attended", which is an answer.
-   */
-  const startTimeVisitTeam = useMemo(() => {
-    const raw = jobOrderData?.technicians;
-
-    // The column is TEXT cast to array by the model, but a cached or older
-    // payload can still arrive as the raw JSON string.
-    let list: any = raw;
-    if (typeof raw === 'string') {
-      try {
-        list = JSON.parse(raw);
-      } catch {
-        list = [];
-      }
-    }
-
-    if (!Array.isArray(list)) return ['', '', ''];
-
-    return [0, 1, 2].map(i => (typeof list[i] === 'string' ? list[i].trim() : ''));
-  }, [jobOrderData?.technicians]);
+  // Memoised because it feeds the pre-fill effect's dependency array below; a
+  // fresh array each render would re-run that effect on every pass.
+  const visitTeam = useMemo(
+    () => startTimeVisitTeam(jobOrderData?.technicians),
+    [jobOrderData?.technicians]
+  );
 
   /**
    * Pre-fill the visit team, since all three fields are required to save.
@@ -323,9 +302,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
     setFormData(prev => {
       const next = {
-        visit_by: prev.visit_by.trim() || startTimeVisitTeam[0] || currentTechnicianName,
-        visit_with: prev.visit_with.trim() || startTimeVisitTeam[1],
-        visit_with_other: prev.visit_with_other.trim() || startTimeVisitTeam[2],
+        visit_by: prev.visit_by.trim() || visitTeam[0] || currentTechnicianName,
+        visit_with: prev.visit_with.trim() || visitTeam[1],
+        visit_with_other: prev.visit_with_other.trim() || visitTeam[2],
       };
 
       const unchanged =
@@ -336,7 +315,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       // Returning prev unchanged keeps this from re-rendering on every pass.
       return unchanged ? prev : { ...prev, ...next };
     });
-  }, [isOpen, currentTechnicianName, startTimeVisitTeam]);
+  }, [isOpen, currentTechnicianName, visitTeam]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [routerModels, setRouterModels] = useState<RouterModelEntry[]>([]);
   const [lcpnaps, setLcpnaps] = useState<LCPNAP[]>([]);
