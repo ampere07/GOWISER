@@ -881,6 +881,20 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
+            // Keep SmartOLT's ONU label in step with the technical record.
+            //
+            // Runs last, after the commit AND after the RADIUS block, for two
+            // reasons. The commit means a SmartOLT timeout can never roll back a
+            // saved technical record. Waiting for RADIUS means the username this
+            // reads is the one that actually landed: on a rename the model still
+            // holds the OLD name at this point by design (it is kept so the RADIUS
+            // service can find the account), and it is ManualRadiusOperationsService
+            // that writes the new one. Re-reading from the database is therefore the
+            // only way to learn the true current name — and if the RADIUS call failed
+            // and was queued, the name is still the old one and SmartOLT correctly
+            // stays on it until the queue catches up.
+            $this->syncSmartOltForTechnicalDetail($accountNo, $billingAccount, $technicalDetail, $oldTechnicalDetails);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Technical details updated successfully',
@@ -1061,6 +1075,141 @@ class CustomerDetailUpdateController extends Controller
             'message' => 'Account set to VIP, but the RADIUS reconnect failed and could not be queued. Please notify an administrator to reconnect this account manually.',
             'queued' => false,
         ];
+    }
+
+
+    /**
+     * Push a technical-details change out to SmartOLT, best-effort.
+     *
+     * Two distinct cases, and they are not interchangeable:
+     *
+     *  - The router serial changed. The ONU behind the old serial is a different
+     *    physical device, so its label has to be released before the new one takes
+     *    the subscriber's name. syncOnuForRouterReplacement() does both halves in
+     *    that order; calling setOnuNameBySn() alone would leave the old ONU still
+     *    labelled for a subscriber who is no longer behind it.
+     *  - The serial is unchanged but the username moved. Only the label needs
+     *    rewriting, on the same ONU.
+     *
+     * Deliberately best-effort and non-fatal. The database change is already
+     * committed and correct; SmartOLT is a downstream label. An unreachable OLT must
+     * not turn a successful save into a 500 for the operator, so every failure is
+     * logged to the SmartOLT channel and swallowed. The nightly
+     * `cron:smartolt-daily-automation` pass re-aligns anything missed here.
+     *
+     * @param array<string, mixed> $oldTechnicalDetails
+     */
+    private function syncSmartOltForTechnicalDetail(
+        string $accountNo,
+        $billingAccount,
+        $technicalDetail,
+        array $oldTechnicalDetails
+    ): void {
+        try {
+            // The model may still hold the pre-rename username by design, so the
+            // committed row is the only trustworthy source for what the name is now.
+            $current = $technicalDetail->fresh();
+
+            if ($current === null) {
+                return;
+            }
+
+            $oldSn   = trim((string) ($oldTechnicalDetails['router_modem_sn'] ?? ''));
+            $newSn   = trim((string) ($current->router_modem_sn ?? ''));
+            $oldUser = trim((string) ($oldTechnicalDetails['username'] ?? ''));
+            $newUser = trim((string) ($current->username ?? ''));
+
+            if ($newSn === '') {
+                // No serial means no ONU to address.
+                return;
+            }
+
+            $smartOlt = app(\App\Services\SmartOltService::class);
+
+            if ($oldSn !== $newSn) {
+                $smartOlt->syncOnuForRouterReplacement(
+                    $accountNo,
+                    $oldSn ?: null,
+                    $newSn,
+                    '[SMARTOLT CUSTOMER EDIT SWAP]'
+                );
+
+                // The replacement helper clears the old ONU and assigns the new one
+                // by account; the label still has to carry the PPPoE username, which
+                // is what the SmartOLT tool and the field technicians match on.
+                if ($newUser !== '') {
+                    $smartOlt->setOnuNameBySn(
+                        $newSn,
+                        $newUser,
+                        $this->smartOltAddressFor($billingAccount),
+                        $this->smartOltContactFor($billingAccount)
+                    );
+                }
+
+                return;
+            }
+
+            if ($newUser !== '' && $oldUser !== $newUser) {
+                $smartOlt->setOnuNameBySn(
+                    $newSn,
+                    $newUser,
+                    $this->smartOltAddressFor($billingAccount),
+                    $this->smartOltContactFor($billingAccount)
+                );
+            }
+        } catch (\Exception $e) {
+            Log::channel('smartoltrelated')->error('[SMARTOLT CUSTOMER EDIT] Sync failed', [
+                'account_no' => $accountNo,
+                'error'      => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * The customer's address as one line, for the ONU's address_or_comment field.
+     *
+     * Memoized per request so the two call sites above do not read the same customer
+     * row twice.
+     */
+    private function smartOltAddressFor($billingAccount): ?string
+    {
+        $customer = $this->smartOltCustomer($billingAccount);
+
+        if ($customer === null) {
+            return null;
+        }
+
+        $address = implode(', ', array_filter([
+            trim((string) ($customer->address ?? '')),
+            trim((string) ($customer->barangay ?? '')),
+            trim((string) ($customer->city ?? '')),
+        ], static fn (string $part): bool => $part !== ''));
+
+        return $address !== '' ? $address : null;
+    }
+
+    private function smartOltContactFor($billingAccount): ?string
+    {
+        $customer = $this->smartOltCustomer($billingAccount);
+
+        return $customer->contact_number_primary ?? null;
+    }
+
+    /** @var object|null|false false means "looked up and not found" */
+    private $smartOltCustomerCache = false;
+
+    private function smartOltCustomer($billingAccount)
+    {
+        if ($this->smartOltCustomerCache !== false) {
+            return $this->smartOltCustomerCache;
+        }
+
+        $this->smartOltCustomerCache = DB::table('customers')
+            ->where('id', $billingAccount->customer_id ?? 0)
+            ->select(['address', 'barangay', 'city', 'contact_number_primary'])
+            ->first();
+
+        return $this->smartOltCustomerCache;
     }
 
     /**

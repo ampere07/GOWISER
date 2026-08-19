@@ -244,7 +244,7 @@ class GowiserDriver implements MetricsDriver
     }
 
     /**
-     * Money actually collected: cancelled and still-pending rows are not
+     * Money actually collected: cancelled, failed, voided, and still-pending rows are not
      * revenue, and counting them is the classic way an executive dashboard
      * ends up disagreeing with finance.
      */
@@ -253,9 +253,9 @@ class GowiserDriver implements MetricsDriver
         return $db->table('transactions')
             ->whereNotNull('payment_date')
             ->whereNotNull('received_payment')
-            ->where(function ($query) {
-                $query->whereNull('status')
-                    ->orWhereNotIn(DB::raw('LOWER(status)'), ['cancelled', 'pending', 'voided']);
-            });
+            ->whereIn(
+                DB::raw("LOWER(TRIM(COALESCE(status, '')))"),
+                ['paid', 'done', 'completed', 'complete', 'success', 'successful', 'approved', 'settled']
+            );
     }
 }

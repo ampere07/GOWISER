@@ -335,6 +335,19 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         { id: 'system-logs', label: 'System Logs', icon: FileText, allowedRoles: ['superadmin'] }
       ]
     },
+    {
+      id: 'tools-group',
+      label: 'Tools',
+      icon: Wrench,
+      allowedRoles: ['superadmin', 'administrator', 'headtech'],
+      children: [
+        { id: 'smartolt-tool', label: 'SmartOLT Tool', icon: Network, allowedRoles: ['superadmin', 'administrator', 'headtech'] },
+        { id: 'mikrotik-radius-tool', label: 'Mikrotik Radius Tool', icon: Router, allowedRoles: ['superadmin', 'administrator', 'headtech'] },
+        // Payment reconciliation settles real money against real accounts, so it is
+        // deliberately not offered to HeadTechnician the way the network tools are.
+        { id: 'xendit-reconcile-tool', label: 'Xendit Reconciliation', icon: CreditCard, allowedRoles: ['superadmin', 'administrator'] }
+      ]
+    },
     { id: 'settings', label: 'Settings', icon: Settings, allowedRoles: ['superadmin'] },
   ];
 

@@ -1742,6 +1742,19 @@ class JobOrderController extends Controller
                 ]
             );
 
+            // Provision the ONU label on SmartOLT.
+            //
+            // Runs on the backend rather than being left to the caller. The web UI
+            // used to fire this itself, which meant an operator closing the tab — or
+            // an approval arriving through the mobile API, which never called it at
+            // all — left the ONU unlabelled and the subscriber unidentifiable in
+            // SmartOLT. Doing it here covers every approval path.
+            //
+            // Post-commit and best-effort by design: the billing account, technical
+            // record and RADIUS credentials are already durable, and an unreachable
+            // OLT must not fail an approval that otherwise succeeded.
+            $this->syncSmartOltOnApproval($jobOrder, $technicalDetail, $customer, $accountNumber);
+
             // Send Welcome SMS
             $this->sendWelcomeSms($customer, $accountNumber, $generatedUsername, $generatedPassword, $application->desired_plan);
 
@@ -2464,6 +2477,68 @@ class JobOrderController extends Controller
     /**
      * Send Welcome SMS notification just like in TransactionController
      */
+    /**
+     * Label the subscriber's ONU in SmartOLT once an approval has committed.
+     *
+     * The name written is the PPPoE username, which is the identifier the SmartOLT
+     * reconciliation tool, the MAC-alignment pass and the field technicians all match
+     * on — so a freshly approved account is recognisable in SmartOLT immediately
+     * rather than at the next nightly automation run.
+     *
+     * Best-effort and never fatal. By the time this runs the billing account,
+     * technical record, RADIUS credentials and agent settlement are all committed;
+     * SmartOLT is a downstream label and an unreachable OLT must not turn a
+     * successful approval into an error for the operator. Every failure is logged to
+     * the SmartOLT channel, and `cron:smartolt-daily-automation` re-aligns anything
+     * that did not land.
+     *
+     * Idempotent: setOnuNameBySn() is a plain assignment, so approving-then-retrying
+     * writes the same name again rather than creating anything.
+     */
+    private function syncSmartOltOnApproval($jobOrder, $technicalDetail, $customer, string $accountNumber): void
+    {
+        try {
+            $sn = trim((string) ($jobOrder->modem_router_sn ?: ($technicalDetail->router_modem_sn ?? '')));
+            $pppoeUser = trim((string) ($technicalDetail->username ?? $jobOrder->pppoe_username ?? ''));
+
+            if ($sn === '' || $pppoeUser === '') {
+                \Log::channel('smartoltrelated')->info('[SMARTOLT JOB ORDER APPROVE] Skipped — no serial or username', [
+                    'job_order_id' => $jobOrder->id,
+                    'account_no'   => $accountNumber,
+                    'has_serial'   => $sn !== '',
+                    'has_username' => $pppoeUser !== '',
+                ]);
+                return;
+            }
+
+            $address = $customer === null ? '' : implode(', ', array_filter([
+                trim((string) ($customer->address ?? '')),
+                trim((string) ($customer->barangay ?? '')),
+                trim((string) ($customer->city ?? '')),
+            ], static fn (string $part): bool => $part !== ''));
+
+            $outcome = app(\App\Services\SmartOltService::class)->setOnuNameBySn(
+                $sn,
+                $pppoeUser,
+                $address !== '' ? $address : null,
+                $customer->contact_number_primary ?? null
+            );
+
+            \Log::channel('smartoltrelated')->info('[SMARTOLT JOB ORDER APPROVE] ' . $outcome, [
+                'job_order_id' => $jobOrder->id,
+                'account_no'   => $accountNumber,
+                'sn'           => $sn,
+                'name'         => $pppoeUser,
+            ]);
+        } catch (\Exception $e) {
+            \Log::channel('smartoltrelated')->error('[SMARTOLT JOB ORDER APPROVE] Sync failed', [
+                'job_order_id' => $jobOrder->id ?? null,
+                'account_no'   => $accountNumber,
+                'error'        => $e->getMessage(),
+            ]);
+        }
+    }
+
     private function sendWelcomeSms($customer, $accountNumber, $pppoeUsername, $pppoePassword, $planName)
     {
         try {

@@ -295,6 +295,115 @@ class Kernel extends ConsoleKernel
                  });
 
         // ===================================================================
+        // SMARTOLT TOOL SUITE
+        // ===================================================================
+        // The unattended nightly SmartOLT pass: refresh the ONU inventory and
+        // statuses, match each ONU's bridge MAC to a live RADIUS session, rename
+        // matched ONUs to their subscriber's username, and unprovision ONUs that
+        // have been dark past the threshold.
+        //
+        // 02:15 sits after the nightly billing and disconnection sweeps have
+        // settled, so an account terminated overnight is already terminated in
+        // the database by the time the cleanup phase reads it.
+        //
+        // Safe if it runs late, twice, or is cut short. Every phase recomputes
+        // what is left to do from current state rather than replaying a cursor:
+        // an ONU already named for its subscriber is skipped and a deleted ONU
+        // is gone from the inventory, so a second run applies nothing. A run
+        // stopped by a SmartOLT quota limit checkpoints in `tool_jobs` and the
+        // next run resumes from there. Deletion additionally requires the ONU to
+        // be dark past the threshold, its account Terminated, no open job order,
+        // and no live RADIUS session — and refuses to run at all when billing or
+        // session state cannot be read.
+        $schedule->command('cron:smartolt-daily-automation')
+                 ->dailyAt('02:15')
+                 ->timezone(config('app.timezone'))
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('SmartOLT daily automation completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('SmartOLT daily automation failed');
+                 });
+
+        // Every minute, because this is what decouples a sweep from the browser
+        // that started it. The tool starts a job and polls its progress; this is
+        // what actually advances it, so closing the tab no longer strands a
+        // four-thousand-ONU sync partway through.
+        //
+        // Safe if it runs late, twice, or alongside an operator with the tool
+        // still open. It starts no work of its own — it only advances rows that
+        // startJob() already created — and each job is claimed with a conditional
+        // UPDATE before any step is applied, so no two drivers can ever run the
+        // same queue index. Every step is checkpointed by index, so a pass killed
+        // mid-slice resumes instead of replaying. A pass is budgeted to finish
+        // inside the minute; anything longer continues on the next tick.
+        $schedule->command('cron:tool-jobs-drain')
+                 ->everyMinute()
+                 ->timezone(config('app.timezone'))
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Tool job drain failed');
+                 });
+
+        // ===================================================================
+        // XENDIT PAYMENT RECONCILIATION
+        // ===================================================================
+        // Uses: XenditReconciliationService
+        // Dependencies: Xendit API
+        //
+        // The safety net under the webhook. Asks Xendit directly about every
+        // payment we created but never saw settle, so a dropped callback no
+        // longer strands a paying customer at PENDING. It only ever moves a row
+        // to QUEUED — 'payments:process' still does the posting — so this
+        // cannot double-credit an account no matter how often it runs.
+        //
+        // Every 5 minutes rather than every 2: the per-row backoff inside the
+        // service is what controls how often any given payment is actually
+        // looked up, and the tightest tier there is 2 minutes.
+        $schedule->command('cron:reconcile-xendit-payments')
+                 ->everyFiveMinutes()
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('Xendit reconciliation completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Xendit reconciliation failed');
+                 });
+
+        // ===================================================================
+        // MIKROTIK RADIUS DAILY RECONCILIATION
+        // ===================================================================
+        // Uses: RadiusReconciliationService
+        // Dependencies: MikroTik User Manager REST
+        // Logs: storage/logs/radiusreconcile/daily-reconcile.log
+        //
+        // 03:15 — an hour after the SmartOLT pass so the two never contend for
+        // the same RouterOS devices, and after the disconnect sweep so the
+        // restriction phase acts on settled billing statuses.
+        //
+        // Safe if it runs late or twice: every mutation compares current state
+        // first and skips when both sides already agree, so a re-run applies
+        // nothing. It creates no records and enqueues nothing, so there is
+        // nothing a repeat run could duplicate. Account creation, deletion and
+        // duplicate resolution are deliberately NOT automated — they stay in the
+        // operator's tool.
+        $schedule->command('cron:radius-reconcile-daily')
+                 ->dailyAt('03:15')
+                 ->timezone(config('app.timezone'))
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('RADIUS daily reconciliation completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('RADIUS daily reconciliation failed');
+                 });
+
+        // ===================================================================
         // TECHNICIAN LIVE LOCATION
         // ===================================================================
         // The stale-location sweep (cron:mark-stale-locations) is invoked directly

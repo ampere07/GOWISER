@@ -4672,8 +4672,8 @@ class GowiserReportsDriver implements ReportsDriver
     /**
      * Money actually collected.
      *
-     * Cancelled and still-pending rows are not revenue, and counting them is the
-     * classic way a dashboard ends up disagreeing with finance. Matches
+     * Cancelled, failed, voided, and still-pending rows are not revenue, and counting
+     * them is the classic way a dashboard ends up disagreeing with finance. Matches
      * GowiserDriver::collectedPayments so the two never diverge.
      */
     private function collectedTransactions(ConnectionInterface $db): Builder
@@ -4681,10 +4681,10 @@ class GowiserReportsDriver implements ReportsDriver
         return $db->table('transactions as t')
             ->whereNotNull('t.date_processed')
             ->whereNotNull('t.received_payment')
-            ->where(function ($query) {
-                $query->whereNull('t.status')
-                    ->orWhereNotIn(DB::raw('LOWER(t.status)'), ['cancelled', 'pending', 'voided']);
-            });
+            ->whereIn(
+                DB::raw("LOWER(TRIM(COALESCE(t.status, '')))"),
+                ['paid', 'done', 'completed', 'complete', 'success', 'successful', 'approved', 'settled']
+            );
     }
 
     // ── Payment portal ───────────────────────────────────────────────────
