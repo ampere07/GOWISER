@@ -309,6 +309,69 @@ class ReportController extends Controller
         ])->deleteFileAfterSend(true);
     }
 
+    /**
+     * POST /api/reports/preview
+     *
+     * Render a PDF for a report that does not exist yet.
+     *
+     * The operator decides whether a schedule is right at the moment they are creating
+     * it, not afterwards, so the preview has to work on the form's current values. The
+     * draft is a transient Report - built, rendered and discarded - so nothing reaches
+     * the `reports` table, no schedule is created, and no recipient is ever mailed by
+     * looking at a layout.
+     *
+     * It deliberately shares ReportPdfService::generate() with the saved-report path
+     * rather than reimplementing a lighter preview: a preview that renders through
+     * different code is a preview of something the operator will not receive.
+     */
+    public function previewDraft(Request $request)
+    {
+        $validated = $request->validate([
+            'report_name' => ['nullable', 'string', 'max:255'],
+            'report_type' => ['required', 'string', Rule::in(ReportDataset::reportTypes())],
+            'date_range'  => ['required', 'string', 'max:64'],
+        ]);
+
+        [$start, $end] = ReportDataset::parseDateRange($validated['date_range']);
+
+        if ($start === null || $end === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Give the reporting period as "YYYY-MM-DD to YYYY-MM-DD".',
+            ], 422);
+        }
+
+        // Never saved. Attributes are assigned directly rather than mass-assigned so
+        // this cannot be widened by whatever happens to be in $fillable later.
+        $draft = new Report();
+        $draft->report_name = $validated['report_name'] ?: 'Untitled report (preview)';
+        $draft->report_type = $validated['report_type'];
+        $draft->date_range  = $start . ' to ' . $end;
+        $draft->created_by  = (string) (optional($request->user())->username
+            ?? optional($request->user())->email_address
+            ?? 'preview');
+
+        try {
+            $path = (new ReportPdfService())->generate($draft);
+        } catch (\Throwable $e) {
+            Log::error('Report draft preview failed', [
+                'report_type' => $validated['report_type'],
+                'date_range'  => $draft->date_range,
+                'error'       => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'PDF generation failed: ' . $e->getMessage(),
+            ], 500);
+        }
+
+        return response()->file($path, [
+            'Content-Type'        => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="preview.pdf"',
+        ])->deleteFileAfterSend(true);
+    }
+
     // ── Internals ─────────────────────────────────────────────────────────────
 
     /** Who to attribute a settings change to. */

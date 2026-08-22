@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, Loader2, MapPin, Search, X, ChevronLeft } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Loader2, MapPin, Search, X, ChevronLeft } from 'lucide-react';
 import AddLcpNapLocationModal from '../modals/AddLcpNapLocationModal';
 import LcpNapLocationDetails from '../components/LcpNapLocationDetails';
 import { GOOGLE_MAPS_API_KEY } from '../config/maps';
+import { mapStyleFor, isDarkThemeActive } from '../config/mapStyles';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getAllLCPNAPsForMap, clearLCPNAPMapCache } from '../services/lcpnapService';
 import apiClient from '../config/api';
@@ -79,6 +80,13 @@ const LcpNapLocation: React.FC = () => {
     }
   });
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Pin-drop: the Add action arms the map instead of opening the form. `pinCoords`
+  // tracks the provisional point under the crosshair; `pinnedCoordinates` is the value
+  // the operator confirmed, handed to the modal read-only.
+  const [isPlacingPin, setIsPlacingPin] = useState(false);
+  const [pinCoords, setPinCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [pinnedCoordinates, setPinnedCoordinates] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState<number>(256);
   const [isResizingSidebar, setIsResizingSidebar] = useState<boolean>(false);
   const [isMapReady, setIsMapReady] = useState<boolean>(false);
@@ -97,6 +105,8 @@ const LcpNapLocation: React.FC = () => {
   const sidebarStartXRef = useRef<number>(0);
   const sidebarStartWidthRef = useRef<number>(0);
   const searchMarkerRef = useRef<google.maps.Marker | null>(null);
+  /** The provisional marker shown while a pin is being placed. */
+  const pinMarkerRef = useRef<google.maps.Marker | null>(null);
   const allMarkersMapRef = useRef<Map<number, google.maps.Marker>>(new Map());
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -382,45 +392,11 @@ const LcpNapLocation: React.FC = () => {
         streetViewControl: true,
         fullscreenControl: true,
         zoomControl: true,
-        styles: [
-          {
-            featureType: 'all',
-            elementType: 'geometry',
-            stylers: [{ color: '#1f2937' }]
-          },
-          {
-            featureType: 'water',
-            elementType: 'geometry',
-            stylers: [{ color: '#0f172a' }]
-          },
-          {
-            featureType: 'road',
-            elementType: 'geometry',
-            stylers: [{ color: '#374151' }]
-          },
-          {
-            featureType: 'poi',
-            stylers: [{ visibility: 'off' }]
-          },
-          {
-            featureType: 'transit',
-            elementType: 'labels',
-            stylers: [{ visibility: 'off' }]
-          },
-          {
-            featureType: 'road',
-            elementType: 'labels.icon',
-            stylers: [{ visibility: 'off' }]
-          },
-          {
-            elementType: 'labels.text.fill',
-            stylers: [{ color: '#9ca3af' }]
-          },
-          {
-            elementType: 'labels.text.stroke',
-            stylers: [{ color: '#111827' }]
-          }
-        ]
+        // Read at init from the same key the isDarkMode state watches, not from that
+        // state: this runs in the Maps script's load callback, outside React's render,
+        // where the closed-over value would be whatever it was when the page mounted.
+        // The effect below keeps it in step from then on.
+        styles: mapStyleFor(isDarkThemeActive()),
       });
 
       infoWindowRef.current = new google.maps.InfoWindow();
@@ -454,6 +430,19 @@ const LcpNapLocation: React.FC = () => {
       setIsMapReady(false);
     }
   };
+
+  /**
+   * Keep the basemap on the app's theme.
+   *
+   * The map is a Google-owned canvas, so a Tailwind class switch does not reach it —
+   * without this, flipping to the light theme left a near-black map inside a white
+   * page. setOptions re-styles the live map in place; there is no remount and no
+   * reload of tiles already cached.
+   */
+  useEffect(() => {
+    if (!isMapReady || !mapInstanceRef.current) return;
+    mapInstanceRef.current.setOptions({ styles: mapStyleFor(isDarkMode) });
+  }, [isDarkMode, isMapReady]);
 
   const parseCoordinates = (coordString: string): { latitude: number; longitude: number } | null => {
     if (!coordString) return null;
@@ -695,6 +684,91 @@ const LcpNapLocation: React.FC = () => {
       setMobileViewMode('map');
     }
   };
+
+  /**
+   * Arm the map instead of opening the form.
+   *
+   * The operator frames the pole on the map and confirms; only then does the form open,
+   * with those coordinates already filled and locked. Typing a lat/lng into a blank form
+   * was the step this replaces.
+   */
+  const startPinPlacement = () => {
+    if (!mapInstanceRef.current) return;
+
+    const center = mapInstanceRef.current.getCenter();
+    if (center) setPinCoords({ lat: center.lat(), lng: center.lng() });
+
+    setSelectedLocation(null);
+    setIsPlacingPin(true);
+    if (isMobile) setMobileViewMode('map');
+  };
+
+  const cancelPinPlacement = () => {
+    setIsPlacingPin(false);
+    setPinCoords(null);
+  };
+
+  /** Lock the point in and hand it to the form. */
+  const confirmPinPlacement = () => {
+    if (!pinCoords) return;
+    setPinnedCoordinates(`${pinCoords.lat.toFixed(6)}, ${pinCoords.lng.toFixed(6)}`);
+    setIsPlacingPin(false);
+    setShowAddModal(true);
+  };
+
+  /**
+   * While placing, the map centre *is* the provisional coordinate — panning moves the
+   * pin under the fixed crosshair, and a tap re-centres on the tapped point so the two
+   * never disagree. Listeners are torn down the moment the mode ends.
+   */
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!isPlacingPin || !map || !window.google?.maps) return;
+
+    const syncFromCenter = () => {
+      const center = map.getCenter();
+      if (center) setPinCoords({ lat: center.lat(), lng: center.lng() });
+    };
+
+    const centerListener = map.addListener('center_changed', syncFromCenter);
+    const clickListener = map.addListener('click', (event: google.maps.MapMouseEvent) => {
+      if (!event.latLng) return;
+      map.panTo(event.latLng);
+      setPinCoords({ lat: event.latLng.lat(), lng: event.latLng.lng() });
+    });
+
+    syncFromCenter();
+
+    return () => {
+      google.maps.event.removeListener(centerListener);
+      google.maps.event.removeListener(clickListener);
+    };
+  }, [isPlacingPin]);
+
+  /** The provisional marker itself, drawn under the crosshair while placing. */
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !window.google?.maps) return;
+
+    if (!isPlacingPin || !pinCoords) {
+      if (pinMarkerRef.current) {
+        pinMarkerRef.current.setMap(null);
+        pinMarkerRef.current = null;
+      }
+      return;
+    }
+
+    if (!pinMarkerRef.current) {
+      pinMarkerRef.current = new google.maps.Marker({
+        position: pinCoords,
+        map,
+        zIndex: 2000,
+        title: 'New LCP/NAP location',
+      });
+    } else {
+      pinMarkerRef.current.setPosition(pinCoords);
+    }
+  }, [isPlacingPin, pinCoords]);
 
   const toggleGroup = (groupName: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -956,8 +1030,10 @@ const LcpNapLocation: React.FC = () => {
                 </h3>
                 {isMobile && (
                   <button
-                    onClick={() => setShowAddModal(true)}
-                    className="p-2 text-white rounded flex items-center justify-center transition-colors"
+                    onClick={startPinPlacement}
+                    disabled={isPlacingPin}
+                    title="Drop a pin on the map to add an LCP/NAP location"
+                    className="p-2 text-white rounded flex items-center justify-center transition-colors disabled:opacity-50"
                     style={{
                       backgroundColor: colorPalette?.primary || '#7c3aed'
                     }}
@@ -1079,8 +1155,10 @@ const LcpNapLocation: React.FC = () => {
 
               {!isMobile && (
                 <button
-                  onClick={() => setShowAddModal(true)}
-                  className="px-4 py-2 text-white rounded flex items-center gap-2 text-sm transition-colors"
+                  onClick={startPinPlacement}
+                  disabled={isPlacingPin}
+                  title="Drop a pin on the map to add an LCP/NAP location"
+                  className="px-4 py-2 text-white rounded flex items-center gap-2 text-sm transition-colors disabled:opacity-50"
                   style={{
                     backgroundColor: colorPalette?.primary || '#7c3aed'
                   }}
@@ -1106,6 +1184,81 @@ const LcpNapLocation: React.FC = () => {
               className="absolute inset-0 w-full h-full z-0"
             />
 
+            {/* Pin-drop crosshair. Fixed to the centre of the viewport and click-through,
+                so the map underneath still pans and zooms normally. */}
+            {isPlacingPin && (
+              <div className="absolute inset-0 z-[600] pointer-events-none flex items-center justify-center">
+                <div className="relative">
+                  <div
+                    className="w-10 h-10 rounded-full border-2 opacity-70"
+                    style={{ borderColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <div
+                    className="absolute left-1/2 top-1/2 w-[2px] h-8 -translate-x-1/2 -translate-y-1/2"
+                    style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <div
+                    className="absolute left-1/2 top-1/2 h-[2px] w-8 -translate-x-1/2 -translate-y-1/2"
+                    style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Floating confirmation bar for the pin-drop. */}
+            {isPlacingPin && (
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[700] w-[min(92%,30rem)]">
+                <div
+                  className={`rounded-xl shadow-2xl border p-3 flex flex-col gap-3 ${
+                    isDarkMode ? 'bg-gray-900/95 border-gray-700' : 'bg-white/95 border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <MapPin
+                      className="h-4 w-4 mt-0.5 flex-shrink-0"
+                      style={{ color: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <p className={`text-sm font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Position the pin
+                      </p>
+                      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        Pan the map or tap a spot, then confirm.
+                      </p>
+                      <p className={`text-xs font-mono mt-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {pinCoords
+                          ? `${pinCoords.lat.toFixed(6)}, ${pinCoords.lng.toFixed(6)}`
+                          : 'Waiting for the map…'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={confirmPinPlacement}
+                      disabled={!pinCoords}
+                      className="flex-1 px-4 py-2 text-white rounded flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
+                      style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                    >
+                      <Check className="h-4 w-4" />
+                      Confirm
+                    </button>
+                    <button
+                      onClick={cancelPinPlacement}
+                      className={`flex-1 px-4 py-2 rounded flex items-center justify-center gap-2 text-sm border transition-colors ${
+                        isDarkMode
+                          ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                          : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      <X className="h-4 w-4" />
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {isLoading && (
               <div className={`absolute inset-0 bg-opacity-75 flex items-center justify-center z-[1000] ${isDarkMode ? 'bg-gray-900' : 'bg-gray-100'
                 }`}>
@@ -1125,8 +1278,16 @@ const LcpNapLocation: React.FC = () => {
 
       <AddLcpNapLocationModal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        onClose={() => {
+          setShowAddModal(false);
+          // Drop the confirmed point on close so the next Add starts from a fresh pin
+          // rather than silently reusing the last one.
+          setPinnedCoordinates(null);
+          setPinCoords(null);
+        }}
         onSave={handleSaveLocation}
+        initialCoordinates={pinnedCoordinates ?? undefined}
+        lockCoordinates={pinnedCoordinates !== null}
       />
 
       {selectedLocation && (

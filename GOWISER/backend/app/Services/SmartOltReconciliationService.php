@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * SmartOLT inventory, optical-power and reconciliation engine.
+ * SmartOLT inventory, bridge-MAC discovery and reconciliation engine.
  *
  * Ported from the standalone `smartolt.php` utility. Everything the standalone tool
  * kept in a private JSON storage folder now lives in two places instead: the ONU
@@ -24,33 +24,30 @@ use Throwable;
  * Endpoint note: the verified SmartOLT surface is
  *   GET  onu/get_all_onus_details            paged ONU inventory
  *   GET  onu/get_onus_statuses               bulk status/last-change
- *   GET  onu/get_onu_full_status_info/{id}   per-ONU detail incl. optical power + MACs
+ *   GET  onu/get_onu_full_status_info/{id}   per-ONU detail; read for the bridge MACs
  *   POST onu/update_location_details/{id}    name / address_or_comment / contact
  *   POST onu/delete/{id}                     permanent unprovision
- * There is no `get_onu_optical_power` or `update_name` endpoint on this API; optical
- * power is read out of the full-status payload and renames go through
- * update_location_details.
+ * There is no `update_name` endpoint on this API — renames go through
+ * update_location_details. The bridge MACs are read out of the full-status payload,
+ * which is the only place SmartOLT exposes them.
  */
 class SmartOltReconciliationService
 {
     /** activity_logs.resource_type for everything this service writes. */
     public const RESOURCE_TYPE = 'smartolt_tool';
 
-    // ---- Optical power thresholds, in dBm ----------------------------------
-    public const RX_OPTIMAL_ABOVE = -24.0;
-    public const RX_CRITICAL_BELOW = -27.0;
-
-    public const SIGNAL_OPTIMAL = 'optimal';
-    public const SIGNAL_WARNING = 'warning';
-    public const SIGNAL_CRITICAL = 'critical';
-    public const SIGNAL_OFFLINE = 'offline';
+    // Optical power is no longer collected. `onu/get_onu_full_status_info/{id}` costs
+    // one call per ONU against the hardest-throttled quota on this API, and reading a
+    // dBm figure out of it bought a colour band nobody acted on while spending the
+    // quota that bridge-MAC discovery needs. The crawl now takes the MAC and nothing
+    // else, which is what every matching pass in this service actually binds on.
 
     // ---- Background job types ----------------------------------------------
     public const JOB_SMARTOLT_SYNC = 'smartolt_sync';
     public const JOB_RADIUS_SCAN = 'radius_scan';
 
     /**
-     * Per-ONU optical power and bridge-MAC crawl.
+     * Per-ONU bridge-MAC crawl.
      *
      * One `onu/get_onu_full_status_info/{id}` call per ONU — the most expensive and
      * hardest-throttled thing this service does, which is why it only ever runs as a
@@ -157,7 +154,7 @@ class SmartOltReconciliationService
     private const PERSISTENT_CACHE_KEYS = ['optical'];
 
     /**
-     * ONUs crawled between flushes of the discovery phase's optical snapshot.
+     * ONUs crawled between flushes of the discovery phase's MAC snapshot.
      *
      * One write per ONU would push the whole snapshot into `smart_olt_cache` on every
      * iteration; one write at the end would lose the run's work if the process were
@@ -291,7 +288,7 @@ class SmartOltReconciliationService
 
     /**
      * Everything the UI needs to render the tool on load: config presence, cache
-     * freshness, inventory counts, signal breakdown and the active job if any.
+     * freshness, inventory counts, the fifteen dashboard metrics and the active job.
      *
      * @return array<string, mixed>
      */
@@ -300,25 +297,27 @@ class SmartOltReconciliationService
         $configured = $this->smartOltConfig() !== null;
         $inventory = $this->cachedInventory();
         $statuses = $this->cachedStatuses();
-        $optical = $this->cachedOptical();
-
-        $signal = [
-            self::SIGNAL_OPTIMAL => 0,
-            self::SIGNAL_WARNING => 0,
-            self::SIGNAL_CRITICAL => 0,
-            self::SIGNAL_OFFLINE => 0,
-        ];
+        $macCache = $this->cachedBridgeMacs();
 
         $statusCounts = [];
         $rows = [];
+        $macCached = 0;
+        $nameNotSet = 0;
 
         foreach ($inventory['items'] as $externalId => $onu) {
             $status = $this->resolveStatus($onu, $statuses);
             $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
 
-            $reading = $optical['items'][$externalId] ?? null;
-            $band = $this->classifySignal($reading['rx_power'] ?? null, $status);
-            $signal[$band]++;
+            if ($this->isPlaceholderName(trim((string) ($onu['name'] ?? '')))) {
+                $nameNotSet++;
+            }
+
+            $entry = $macCache['items'][$externalId] ?? null;
+            $mac = $this->primaryMac($entry);
+
+            if ($mac !== '') {
+                $macCached++;
+            }
 
             if ($includeRows) {
                 $rows[] = [
@@ -335,47 +334,97 @@ class SmartOltReconciliationService
                     'status' => $status,
                     'last_status_change' => $onu['last_status_change'] ?? '',
                     'days_offline' => $this->daysOffline($onu, $statuses),
-                    // Both legs of the PON link. `rx_power` stays the ONU-side alias
-                    // it has always been, so existing readers are unaffected.
-                    'onu_rx' => $reading['onu_rx'] ?? ($reading['rx_power'] ?? null),
-                    'olt_rx' => $reading['olt_rx'] ?? null,
-                    'rx_power' => $reading['rx_power'] ?? null,
-                    'tx_power' => $reading['tx_power'] ?? null,
-                    'signal' => $band,
-                    'signal_checked_at' => $reading['checked_at'] ?? null,
+                    // Colon-delimited for the screen only. Every comparison in this
+                    // service runs on normalizeMac()'s bare uppercase hex.
+                    'mac_address' => $mac,
+                    'mac_checked_at' => is_array($entry) ? ($entry['checked_at'] ?? null) : null,
                 ];
             }
         }
 
+        $inventoryCount = count($inventory['items']);
+
         return [
             'configured' => $configured,
             'sub_domain' => $configured ? $this->smartOltConfig()->sub_domain : null,
-            'inventory_count' => count($inventory['items']),
+            'inventory_count' => $inventoryCount,
             'inventory_synced_at' => $inventory['updated_at'],
             'status_synced_at' => $statuses['updated_at'],
-            'optical_checked' => count($optical['items']),
+            'mac_synced_at' => $macCache['updated_at'],
+            'mac_cached' => $macCached,
+            // Deprecated alias of mac_cached, kept for anything written while the
+            // crawl still reported a count of optical readings.
+            'optical_checked' => $macCached,
             'status_counts' => $statusCounts,
-            'signal_counts' => $signal,
-            'thresholds' => [
-                'optimal_above' => self::RX_OPTIMAL_ABOVE,
-                'critical_below' => self::RX_CRITICAL_BELOW,
-            ],
+            'metrics' => $this->buildMetrics($inventoryCount, $statusCounts, $macCached, $nameNotSet),
             'active_job' => $this->activeJob($organizationId),
             'rows' => $rows,
         ];
     }
 
     /**
-     * Live optical readings for the ONUs the caller names, or for every ONU whose
-     * cached reading has expired.
+     * The fifteen headline figures the dashboard grid renders.
      *
-     * Each ONU costs one API call, so the sweep is capped per request and the caller
-     * repeats until `remaining` reaches zero — the same shape the background jobs use.
+     * Split by cost, deliberately. The first nine come from the inventory, status and
+     * MAC snapshots this call already holds, so they are free. The last six describe
+     * work the alignment, profile and cleanup passes did - each of those contacts the
+     * RADIUS estate and reads the subscriber table - so they are read back from the
+     * compact summary each pass parked, not recomputed on every page poll.
+     *
+     * A figure whose pass has never run is null, not zero: "not computed yet" and
+     * "nothing to do" are different answers and the grid shows which one it has.
+     *
+     * @param array<string, int> $statusCounts
+     * @return array<string, mixed>
+     */
+    private function buildMetrics(int $inventoryCount, array $statusCounts, int $macCached, int $nameNotSet): array
+    {
+        $mac = $this->cachedSummary('mac_alignment');
+        $profile = $this->cachedSummary('profile_preview');
+        $cleanup = $this->cachedSummary('cleanup');
+
+        $macSummary = is_array($mac['summary'] ?? null) ? $mac['summary'] : null;
+        $profileSummary = is_array($profile['summary'] ?? null) ? $profile['summary'] : null;
+        $cleanupSummary = is_array($cleanup['summary'] ?? null) ? $cleanup['summary'] : null;
+
+        return [
+            'inventory' => $inventoryCount,
+            'authorized' => (int) ($statusCounts['online'] ?? 0),
+            'offline' => (int) ($statusCounts['offline'] ?? 0),
+            'los' => (int) ($statusCounts['los'] ?? 0),
+            'pwrfail' => (int) ($statusCounts['pwrfail'] ?? 0),
+            'name_not_set' => $nameNotSet,
+            'named' => max(0, $inventoryCount - $nameNotSet),
+            'mac_cached' => $macCached,
+            'pending_discovery' => max(0, $inventoryCount - $macCached),
+            'radius_active' => $macSummary === null ? null : (int) ($macSummary['sessions'] ?? 0),
+            'matched_sessions' => $macSummary === null ? null : (int) ($macSummary['matched'] ?? 0),
+            'rename_required' => $macSummary === null ? null : (int) ($macSummary['rename_needed'] ?? 0),
+            'already_correct' => $macSummary === null ? null : (int) ($macSummary['aligned'] ?? 0),
+            'address_updates' => $profileSummary === null ? null : (int) ($profileSummary['eligible'] ?? 0),
+            'delete_candidates' => $cleanupSummary === null ? null : (int) ($cleanupSummary['eligible'] ?? 0),
+            'computed_at' => [
+                'mac_alignment' => $mac['updated_at'] ?? null,
+                'profile' => $profile['updated_at'] ?? null,
+                'cleanup' => $cleanup['updated_at'] ?? null,
+            ],
+        ];
+    }
+
+    /**
+     * Discover the bridge MAC behind each ONU the caller names, or behind every ONU
+     * whose MAC has never been read.
+     *
+     * Each ONU costs one `get_onu_full_status_info` call - the hardest-throttled
+     * endpoint on this API - so the sweep is capped per request and the caller repeats
+     * until `remaining` reaches zero, the same shape the background jobs use. The MAC
+     * is cached without expiry (see PERSISTENT_CACHE_KEYS): a MAC behind an ONU does
+     * not change on its own, so re-crawling to rediscover one is pure quota waste.
      *
      * @param array<int, string> $externalIds
      * @return array{success: bool, checked: int, remaining: int, items: array<int, array<string, mixed>>, errors: array<int, string>}
      */
-    public function getOpticalPower(array $externalIds = [], int $limit = 25): array
+    public function discoverBridgeMacs(array $externalIds = [], int $limit = 25): array
     {
         $config = $this->smartOltConfig();
 
@@ -384,12 +433,12 @@ class SmartOltReconciliationService
         }
 
         $inventory = $this->cachedInventory();
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
         $statuses = $this->cachedStatuses();
 
         $targets = $externalIds !== []
             ? array_values(array_intersect($externalIds, array_keys($inventory['items'])))
-            : array_values(array_diff(array_keys($inventory['items']), array_keys($optical['items'])));
+            : array_values(array_diff(array_keys($inventory['items']), array_keys($macCache['items'])));
 
         $remaining = max(0, count($targets) - $limit);
         $targets = array_slice($targets, 0, max(1, $limit));
@@ -407,46 +456,35 @@ class SmartOltReconciliationService
                 }
 
                 $payload = $response['data']['full_status_json'] ?? $response['data'];
-                $reading = $this->extractOptical($payload);
 
-                $optical['items'][$externalId] = [
-                    'onu_rx' => $reading['onu_rx'],
-                    'olt_rx' => $reading['olt_rx'],
-                    // Alias of onu_rx, kept for readers written before olt_rx existed.
-                    'rx_power' => $reading['rx_power'],
-                    'tx_power' => $reading['tx_power'],
-                    'macs' => $reading['macs'],
+                $macCache['items'][$externalId] = [
+                    'macs' => $this->extractBridgeMacs($payload),
                     'checked_at' => now()->toIso8601String(),
                 ];
                 $checked++;
             } catch (Throwable $e) {
                 $errors[] = $externalId . ': ' . $e->getMessage();
-                $this->log('error', 'Optical read failed.', ['external_id' => $externalId, 'error' => $e->getMessage()]);
+                $this->log('error', 'Bridge MAC discovery failed.', ['external_id' => $externalId, 'error' => $e->getMessage()]);
             }
         }
 
-        $optical['updated_at'] = now()->toIso8601String();
-        $this->putCache('optical', $optical);
+        $macCache['updated_at'] = now()->toIso8601String();
+        $this->putCache('optical', $macCache);
 
         $items = [];
         foreach ($targets as $externalId) {
             $onu = $inventory['items'][$externalId] ?? [];
-            $reading = $optical['items'][$externalId] ?? null;
-            $status = $this->resolveStatus($onu, $statuses);
+            $entry = $macCache['items'][$externalId] ?? null;
+            $macs = is_array($entry) && is_array($entry['macs'] ?? null) ? $entry['macs'] : [];
 
             $items[] = [
                 'external_id' => (string) $externalId,
                 'sn' => $onu['sn'] ?? '',
                 'name' => $onu['name'] ?? '',
-                'status' => $status,
-                'onu_rx' => $reading['onu_rx'] ?? ($reading['rx_power'] ?? null),
-                'olt_rx' => $reading['olt_rx'] ?? null,
-                'rx_power' => $reading['rx_power'] ?? null,
-                'tx_power' => $reading['tx_power'] ?? null,
-                // Banding stays on the ONU-side reading: it is the leg that tells a
-                // technician what the subscriber's own equipment is receiving.
-                'signal' => $this->classifySignal($reading['rx_power'] ?? null, $status),
-                'checked_at' => $reading['checked_at'] ?? null,
+                'status' => $this->resolveStatus($onu, $statuses),
+                'mac_address' => $this->primaryMac($entry),
+                'macs' => array_map(fn ($mac): string => $this->formatMac((string) $mac), $macs),
+                'checked_at' => is_array($entry) ? ($entry['checked_at'] ?? null) : null,
             ];
         }
 
@@ -457,6 +495,19 @@ class SmartOltReconciliationService
             'items' => $items,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * @deprecated Renamed to discoverBridgeMacs() when the crawl stopped reading
+     * optical power. The route and the controller action are unchanged, so anything
+     * still calling the old name keeps working.
+     *
+     * @param array<int, string> $externalIds
+     * @return array<string, mixed>
+     */
+    public function getOpticalPower(array $externalIds = [], int $limit = 25): array
+    {
+        return $this->discoverBridgeMacs($externalIds, $limit);
     }
 
     // =========================================================================
@@ -475,7 +526,7 @@ class SmartOltReconciliationService
     public function getAlignmentPreview(?int $organizationId = null): array
     {
         $inventory = $this->cachedInventory();
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
         $statuses = $this->cachedStatuses();
         $subscribers = $this->loadSubscribers($organizationId);
 
@@ -536,7 +587,7 @@ class SmartOltReconciliationService
                 }
 
                 if ($matched === null) {
-                    foreach (($optical['items'][$externalId]['macs'] ?? []) as $mac) {
+                    foreach (($macCache['items'][$externalId]['macs'] ?? []) as $mac) {
                         $key = $this->normalizeMac($mac);
                         if ($key !== '' && isset($byMac[$key])) {
                             $matched = $byMac[$key];
@@ -630,7 +681,7 @@ class SmartOltReconciliationService
     public function getMacAlignmentPreview(?int $organizationId = null): array
     {
         $inventory = $this->cachedInventory();
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
         $statuses = $this->cachedStatuses();
 
         $sessions = $this->radius->activeSessions($organizationId);
@@ -655,7 +706,7 @@ class SmartOltReconciliationService
 
             $currentName = trim((string) ($onu['name'] ?? ''));
             $status = $this->resolveStatus($onu, $statuses);
-            $macs = $optical['items'][$externalId]['macs'] ?? [];
+            $macs = $macCache['items'][$externalId]['macs'] ?? [];
 
             $matched = null;
             $matchedMac = '';
@@ -681,7 +732,7 @@ class SmartOltReconciliationService
                     'external_id' => (string) $externalId,
                     'state' => $state,
                     'radius_username' => '',
-                    'calling_station_id' => $macs === [] ? '' : (string) $macs[0],
+                    'calling_station_id' => $macs === [] ? '' : $this->formatMac((string) $macs[0]),
                     'current_name' => $currentName !== '' ? $currentName : 'not set',
                     'target_name' => '',
                     'sn' => (string) ($onu['sn'] ?? ''),
@@ -715,7 +766,7 @@ class SmartOltReconciliationService
                 'external_id' => (string) $externalId,
                 'state' => $state,
                 'radius_username' => (string) $matched['username'],
-                'calling_station_id' => $matchedMac,
+                'calling_station_id' => $this->formatMac($matchedMac),
                 'current_name' => $currentName !== '' ? $currentName : 'not set',
                 'target_name' => $targetName,
                 'sn' => (string) ($onu['sn'] ?? ''),
@@ -737,6 +788,7 @@ class SmartOltReconciliationService
         ];
 
         $this->putCache('mac_alignment', $result);
+        $this->rememberSummary('mac_alignment', $summary, $result['updated_at']);
 
         return $result;
     }
@@ -767,7 +819,7 @@ class SmartOltReconciliationService
     public function getSnAlignmentPreview(?int $organizationId = null): array
     {
         $inventory = $this->cachedInventory();
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
         $statuses = $this->cachedStatuses();
 
         $sessions = $this->radius->activeSessions($organizationId);
@@ -803,8 +855,13 @@ class SmartOltReconciliationService
 
             $onuSerial = trim((string) ($onu['sn'] ?? ''));
             $status = $this->resolveStatus($onu, $statuses);
-            $macs = $optical['items'][$externalId]['macs'] ?? [];
+            $macs = $macCache['items'][$externalId]['macs'] ?? [];
 
+            // Defaults every row starts from. Rows that override one of these must
+            // use array_merge(), never `$base + [...]`: the union operator keeps the
+            // LEFT value on a duplicate key, so `'eligible' => true` silently lost to
+            // the false below it and no SN row was ever writable - which is what made
+            // every batch action on this tab report "nothing to do".
             $base = [
                 'external_id' => (string) $externalId,
                 'sn' => $onuSerial,
@@ -827,10 +884,10 @@ class SmartOltReconciliationService
             // else is known about it.
             if ($onuSerial === '') {
                 $summary['no_mac']++;
-                $rows[] = $base + [
+                $rows[] = array_merge($base, [
                     'state' => self::SN_NO_MAC,
                     'reason' => 'SmartOLT reports no serial for this ONU — nothing to copy.',
-                ];
+                ]);
                 continue;
             }
 
@@ -853,13 +910,13 @@ class SmartOltReconciliationService
                 $state = $macs === [] ? self::SN_NO_MAC : self::SN_UNMATCHED;
                 $summary[$state === self::SN_NO_MAC ? 'no_mac' : 'unmatched']++;
 
-                $rows[] = $base + [
+                $rows[] = array_merge($base, [
                     'state' => $state,
-                    'calling_station_id' => $macs === [] ? '' : (string) $macs[0],
+                    'calling_station_id' => $macs === [] ? '' : $this->formatMac((string) $macs[0]),
                     'reason' => $state === self::SN_NO_MAC
                         ? 'No MAC has been discovered for this ONU yet — run MAC Discovery first.'
                         : 'No live RADIUS session is using any MAC seen behind this ONU.',
-                ];
+                ]);
                 continue;
             }
 
@@ -869,7 +926,7 @@ class SmartOltReconciliationService
             $subscriber = $byUsername[strtolower($username)] ?? null;
 
             $base = array_merge($base, [
-                'calling_station_id' => $matchedMac,
+                'calling_station_id' => $this->formatMac($matchedMac),
                 'radius_username' => $username,
                 'server_id' => $matched['server_id'],
                 'server_label' => $matched['server_label'],
@@ -877,10 +934,10 @@ class SmartOltReconciliationService
 
             if ($subscriber === null) {
                 $summary['no_subscriber']++;
-                $rows[] = $base + [
+                $rows[] = array_merge($base, [
                     'state' => self::SN_NO_SUBSCRIBER,
                     'reason' => "No billing record carries the PPPoE username '{$username}'.",
-                ];
+                ]);
                 continue;
             }
 
@@ -897,29 +954,29 @@ class SmartOltReconciliationService
             // but the value written is SmartOLT's verbatim.
             if ($billingSn !== '' && $this->normalizeSerial($billingSn) === $this->normalizeSerial($onuSerial)) {
                 $summary['aligned']++;
-                $rows[] = $base + [
+                $rows[] = array_merge($base, [
                     'state' => self::SN_ALIGNED,
                     'reason' => 'Billing already carries this ONU serial.',
-                ];
+                ]);
                 continue;
             }
 
             if ($billingSn === '') {
                 $summary['missing']++;
-                $rows[] = $base + [
+                $rows[] = array_merge($base, [
                     'state' => self::SN_MISSING,
                     'eligible' => true,
                     'reason' => 'The billing record has no router/modem SN — this fills it in.',
-                ];
+                ]);
                 continue;
             }
 
             $summary['mismatch']++;
-            $rows[] = $base + [
+            $rows[] = array_merge($base, [
                 'state' => self::SN_MISMATCH,
                 'eligible' => true,
                 'reason' => "Billing holds a different serial ({$billingSn}) — applying overwrites it.",
-            ];
+            ]);
         }
 
         $result = [
@@ -930,6 +987,7 @@ class SmartOltReconciliationService
         ];
 
         $this->putCache('sn_alignment', $result);
+        $this->rememberSummary('sn_alignment', $summary, $result['updated_at']);
 
         return $result;
     }
@@ -1030,6 +1088,7 @@ class SmartOltReconciliationService
             'updated_at' => now()->toIso8601String(),
         ];
         $this->putCache('profile_preview', $result);
+        $this->rememberSummary('profile_preview', $summary, $result['updated_at']);
 
         return $result;
     }
@@ -1053,7 +1112,7 @@ class SmartOltReconciliationService
         $statuses = $this->cachedStatuses();
         $safety = $this->buildSafetyMap($organizationId);
         // Hoisted: one cache read for the whole sweep, not one per candidate ONU.
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
 
         $summary = ['total' => 0, 'eligible' => 0, 'blocked' => 0];
         $rows = [];
@@ -1081,10 +1140,9 @@ class SmartOltReconciliationService
                 $summary['blocked']++;
             }
 
-            // Both ends of the PON link, from the last optical crawl. Null where this
-            // ONU has never been scanned — the tool offers "Scan MAC / Optical Power"
-            // to fill them, and a null reads as "not measured", never as "0 dBm".
-            $reading = $optical['items'][(string) $externalId] ?? [];
+            // The bridge MAC discovered for this ONU, for the operator reviewing a
+            // decommission list. Empty means "never crawled", not "this ONU has no MAC".
+            $entry = $macCache['items'][(string) $externalId] ?? [];
 
             $rows[] = [
                 'external_id' => (string) $externalId,
@@ -1096,10 +1154,8 @@ class SmartOltReconciliationService
                 'status' => $status,
                 'last_status_change' => $onu['last_status_change'] ?? '',
                 'days_offline' => $days,
-                'onu_rx' => $reading['onu_rx'] ?? ($reading['rx_power'] ?? null),
-                'olt_rx' => $reading['olt_rx'] ?? null,
-                'rx_power' => $reading['rx_power'] ?? null,
-                'optical_checked_at' => $reading['checked_at'] ?? null,
+                'mac_address' => $this->primaryMac($entry),
+                'mac_checked_at' => $entry['checked_at'] ?? null,
                 // Retained, and still authoritative for the unattended nightly pass.
                 // The operator-driven tool shows these as context rather than as a
                 // gate: an operator who has selected a row has already made the call.
@@ -1110,6 +1166,7 @@ class SmartOltReconciliationService
 
         $result = ['summary' => $summary, 'rows' => $rows, 'offline_days' => $offlineDays, 'updated_at' => now()->toIso8601String()];
         $this->putCache('cleanup', $result);
+        $this->rememberSummary('cleanup', $summary, $result['updated_at']);
 
         return $result;
     }
@@ -1978,6 +2035,8 @@ class SmartOltReconciliationService
     }
 
     /**
+     * One ONU per slice: read its full status, keep the bridge MACs, discard the rest.
+     *
      * @param array<string, mixed> $job
      * @return array<string, mixed>
      */
@@ -1988,57 +2047,52 @@ class SmartOltReconciliationService
         $index = (int) ($context['index'] ?? 0);
 
         if ($index >= count($queue)) {
-            return $this->finishJob($job, self::STATUS_COMPLETED, 'Optical power and MAC discovery completed.', [
+            return $this->finishJob($job, self::STATUS_COMPLETED, 'Bridge MAC discovery completed.', [
                 'checked' => (int) ($context['checked'] ?? 0),
                 'with_macs' => (int) ($context['with_macs'] ?? 0),
             ]);
         }
 
         $externalId = (string) $queue[$index];
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
 
         $response = $this->callSmartOlt('GET', 'onu/get_onu_full_status_info/' . rawurlencode($externalId));
 
-        // This is the endpoint SmartOLT throttles hardest — one call per ONU, against
+        // This is the endpoint SmartOLT throttles hardest - one call per ONU, against
         // both a per-minute and a per-hour quota. The index is left pointing at the
         // refused ONU so the resume re-reads it instead of skipping past it.
         if (!$response['success'] && $response['rate_limited']) {
             return $this->pauseForRateLimit(
                 $job,
                 $context,
-                sprintf('Optical discovery stopped at %d of %d.', $index + 1, count($queue)),
+                sprintf('Bridge MAC discovery stopped at %d of %d.', $index + 1, count($queue)),
                 $response['retry_after']
             );
         }
 
         if ($response['success']) {
             $payload = $response['data']['full_status_json'] ?? $response['data'];
-            $reading = $this->extractOptical($payload);
+            $macs = $this->extractBridgeMacs($payload);
 
-            $optical['items'][$externalId] = [
-                'onu_rx' => $reading['onu_rx'],
-                'olt_rx' => $reading['olt_rx'],
-                // Alias of onu_rx, kept for readers written before olt_rx existed.
-                'rx_power' => $reading['rx_power'],
-                'tx_power' => $reading['tx_power'],
-                'macs' => $reading['macs'],
+            $macCache['items'][$externalId] = [
+                'macs' => $macs,
                 'checked_at' => now()->toIso8601String(),
             ];
 
             $context['checked'] = (int) ($context['checked'] ?? 0) + 1;
-            if ($reading['macs'] !== []) {
+            if ($macs !== []) {
                 $context['with_macs'] = (int) ($context['with_macs'] ?? 0) + 1;
             }
 
-            $optical['updated_at'] = now()->toIso8601String();
-            $this->putCache('optical', $optical);
+            $macCache['updated_at'] = now()->toIso8601String();
+            $this->putCache('optical', $macCache);
         }
 
         $context['index'] = $index + 1;
 
         return $this->saveJob($job, [
             'current' => $index + 1,
-            'message' => sprintf('Read optical power %d of %d (%s).', $index + 1, count($queue), $externalId),
+            'message' => sprintf('Discovered bridge MAC %d of %d (%s).', $index + 1, count($queue), $externalId),
             'context' => $context,
         ]);
     }
@@ -2417,7 +2471,7 @@ class SmartOltReconciliationService
             case self::JOB_OPTICAL_SCAN:
             case self::JOB_MAC_DISCOVERY:
                 $inventory = $this->cachedInventory();
-                $optical = $this->cachedOptical();
+                $macCache = $this->cachedBridgeMacs();
                 $requested = is_array($options['external_ids'] ?? null) ? $options['external_ids'] : [];
 
                 // With no explicit target list, only ONUs never read before are
@@ -2431,13 +2485,13 @@ class SmartOltReconciliationService
                 } elseif ($rescan) {
                     $queue = array_keys($inventory['items']);
                 } else {
-                    $queue = array_values(array_diff(array_keys($inventory['items']), array_keys($optical['items'])));
+                    $queue = array_values(array_diff(array_keys($inventory['items']), array_keys($macCache['items'])));
                 }
 
                 return [
                     'context' => ['queue' => $queue, 'index' => 0, 'checked' => 0, 'with_macs' => 0],
                     'total' => count($queue),
-                    'message' => 'Starting optical power and MAC discovery for ' . count($queue) . ' ONU(s).',
+                    'message' => 'Starting bridge MAC discovery for ' . count($queue) . ' ONU(s).',
                 ];
 
             case self::JOB_RENAME:
@@ -2786,7 +2840,7 @@ class SmartOltReconciliationService
     }
 
     /**
-     * Read optical power and bridge MACs for ONUs that have never been crawled.
+     * Discover the bridge MAC of every ONU that has never been crawled.
      *
      * This is the phase the whole persistent MAC store exists for. Every other pass
      * in this service matches an ONU to a subscriber through the bridge MAC sitting
@@ -2795,7 +2849,7 @@ class SmartOltReconciliationService
      * estate nightly to rediscover MACs that were already known made the sweep scale
      * with the size of the estate instead of with the number of new installs.
      *
-     * So the queue is exactly the ONUs the optical snapshot has no entry for. On a
+     * So the queue is exactly the ONUs the MAC snapshot has no entry for. On a
      * settled estate that is empty and this phase makes no calls at all; after a
      * batch of installs it is the size of that batch. An operator who genuinely wants
      * fresh readings for already-crawled ONUs still has the `optical_scan` job with
@@ -2820,16 +2874,16 @@ class SmartOltReconciliationService
         ];
 
         $inventory = $this->cachedInventory();
-        $optical = $this->cachedOptical();
+        $macCache = $this->cachedBridgeMacs();
 
-        // The un-crawled set: in the inventory, absent from the optical snapshot.
-        $queue = array_values(array_diff(array_keys($inventory['items']), array_keys($optical['items'])));
+        // The un-crawled set: in the inventory, absent from the MAC snapshot.
+        $queue = array_values(array_diff(array_keys($inventory['items']), array_keys($macCache['items'])));
         $phase['pending'] = count($queue);
 
         if ($queue === []) {
             $this->log('info', 'MAC discovery had nothing to crawl — every ONU already has a stored reading.', [
                 'inventory' => count($inventory['items']),
-                'stored' => count($optical['items']),
+                'stored' => count($macCache['items']),
             ]);
 
             return $phase;
@@ -2846,7 +2900,7 @@ class SmartOltReconciliationService
         $this->log('info', 'MAC discovery starting for un-crawled ONUs.', [
             'pending' => $phase['pending'],
             'this_run' => count($queue),
-            'stored' => count($optical['items']),
+            'stored' => count($macCache['items']),
             'dry_run' => $dryRun,
         ]);
 
@@ -2856,9 +2910,9 @@ class SmartOltReconciliationService
             return $phase;
         }
 
-        // Readings held back until the next flush. Buffered rather than written
-        // straight into the snapshot so the flush can merge against whatever the
-        // store holds at that moment — see mergeOpticalReadings().
+        // MACs held back until the next flush. Buffered rather than written straight
+        // into the snapshot so the flush can merge against whatever the store holds at
+        // that moment — see mergeBridgeMacs().
         $fresh = [];
 
         foreach ($queue as $externalId) {
@@ -2889,29 +2943,22 @@ class SmartOltReconciliationService
                 }
 
                 $payload = $response['data']['full_status_json'] ?? $response['data'];
-                $reading = $this->extractOptical($payload);
+                $macs = $this->extractBridgeMacs($payload);
 
                 $fresh[$externalId] = [
-                    // Banding is downstream ONU RX only; olt_rx is carried for display
-                    // but never decides the signal band.
-                    'onu_rx' => $reading['onu_rx'],
-                    'olt_rx' => $reading['olt_rx'],
-                    // Alias of onu_rx, kept for readers written before olt_rx existed.
-                    'rx_power' => $reading['rx_power'],
-                    'tx_power' => $reading['tx_power'],
-                    'macs' => $reading['macs'],
+                    'macs' => $macs,
                     'checked_at' => now()->toIso8601String(),
                 ];
 
                 $phase['crawled']++;
                 $result['success']++;
 
-                if ($reading['macs'] !== []) {
+                if ($macs !== []) {
                     $phase['with_macs']++;
                 }
 
                 if (count($fresh) >= self::DISCOVERY_FLUSH_EVERY) {
-                    $this->mergeOpticalReadings($fresh);
+                    $this->mergeBridgeMacs($fresh);
                     $fresh = [];
                 }
             } catch (Throwable $e) {
@@ -2925,7 +2972,7 @@ class SmartOltReconciliationService
             }
         }
 
-        $this->mergeOpticalReadings($fresh);
+        $this->mergeBridgeMacs($fresh);
 
         $this->log('info', 'MAC discovery finished.', $phase);
 
@@ -2933,7 +2980,7 @@ class SmartOltReconciliationService
     }
 
     /**
-     * Fold freshly crawled readings into the stored optical snapshot.
+     * Fold freshly discovered bridge MACs into the stored snapshot.
      *
      * Re-read at flush time rather than writing back the snapshot the caller started
      * from. An operator-driven `optical_scan` can be crawling the same estate at the
@@ -2948,17 +2995,17 @@ class SmartOltReconciliationService
      *
      * @param array<string, array<string, mixed>> $readings
      */
-    private function mergeOpticalReadings(array $readings): void
+    private function mergeBridgeMacs(array $readings): void
     {
         if ($readings === []) {
             return;
         }
 
-        $optical = $this->cachedOptical();
-        $optical['items'] = array_merge($optical['items'], $readings);
-        $optical['updated_at'] = now()->toIso8601String();
+        $macCache = $this->cachedBridgeMacs();
+        $macCache['items'] = array_merge($macCache['items'], $readings);
+        $macCache['updated_at'] = now()->toIso8601String();
 
-        $this->putCache('optical', $optical);
+        $this->putCache('optical', $macCache);
     }
 
     /**
@@ -3667,9 +3714,8 @@ class SmartOltReconciliationService
                     'Status',
                     'Last Status Change',
                     'Days Offline',
-                    'ONU RX (dBm)',
-                    'OLT RX (dBm)',
-                    'Optical Checked At',
+                    'MAC Address',
+                    'MAC Discovered At',
                     'Eligible',
                     'Blockers',
                 ];
@@ -3681,10 +3727,8 @@ class SmartOltReconciliationService
                     $r['status'],
                     $r['last_status_change'],
                     $r['days_offline'],
-                    // Never measured stays blank rather than becoming a 0 dBm reading.
-                    $r['onu_rx'] ?? '',
-                    $r['olt_rx'] ?? '',
-                    $r['optical_checked_at'] ?? '',
+                    $r['mac_address'] ?? '',
+                    $r['mac_checked_at'] ?? '',
                     $r['eligible'] ? 'yes' : 'no',
                     implode(' | ', $r['reasons']),
                 ], $data['rows']);
@@ -3694,7 +3738,7 @@ class SmartOltReconciliationService
             default:
                 $dataset = 'inventory';
                 $state = $this->getState(true, $organizationId);
-                $headers = ['External ID', 'Serial', 'Name', 'OLT', 'Board', 'Port', 'Zone', 'ODB', 'Status', 'Days Offline', 'RX (dBm)', 'TX (dBm)', 'Signal'];
+                $headers = ['External ID', 'Serial', 'Name', 'OLT', 'Board', 'Port', 'Zone', 'ODB', 'Status', 'Days Offline', 'MAC Address', 'MAC Discovered At'];
                 $rows = array_map(static fn(array $r): array => [
                     $r['external_id'],
                     $r['sn'],
@@ -3706,9 +3750,8 @@ class SmartOltReconciliationService
                     $r['odb_name'],
                     $r['status'],
                     $r['days_offline'] ?? '',
-                    $r['rx_power'] ?? '',
-                    $r['tx_power'] ?? '',
-                    $r['signal'],
+                    $r['mac_address'] ?? '',
+                    $r['mac_checked_at'] ?? '',
                 ], $state['rows']);
                 break;
         }
@@ -3849,130 +3892,36 @@ class SmartOltReconciliationService
     }
 
     /**
-     * Pull both optical readings and any MAC addresses out of a full-status payload.
+     * Every bridge MAC anywhere in an ONU's full-status payload.
      *
-     * The payload shape varies by OLT vendor, so the search is a deep scan for the
-     * recognised keys rather than a fixed path.
+     * SmartOLT reports the MACs behind an ONU under different keys depending on the
+     * OLT vendor, so the payload is walked rather than indexed: any string shaped like
+     * a MAC is taken. Order is preserved, because the first one discovered is the one
+     * the matching passes try first and the one the UI shows.
      *
-     * Two readings, not one. A PON link has a reading at each end: `onu_rx` is what
-     * the subscriber's ONU hears from the OLT (the downstream leg) and `olt_rx` is
-     * what the OLT hears back from that ONU (the upstream leg). A dirty connector or
-     * a bent drop usually shows on one leg well before the other, so a technician
-     * needs both to tell a failing subscriber drop from a failing feeder.
-     *
-     * Why the keys are classified before they are matched. The previous unanchored
-     * pattern `(onu_?)?(rx|signal)_?(power|level)?$` also matches the *string*
-     * "olt_rx_power" — it ends in a recognised suffix — so on any vendor whose
-     * payload listed the OLT-side reading first, that value was captured as the ONU
-     * reading and the ONU's own RX was discarded. Every key is now tested for an
-     * explicit OLT-side marker first, and only what is not OLT-side can land in
-     * `onu_rx`.
-     *
-     * `rx_power` is retained as an alias of `onu_rx` because the state payload, the
-     * CSV export and the web tool all already read that key.
-     *
-     * @return array{onu_rx: float|null, olt_rx: float|null, rx_power: float|null, tx_power: float|null, macs: array<int, string>}
+     * @return array<int, string>
      */
-    private function extractOptical(mixed $payload): array
+    private function extractBridgeMacs(mixed $payload): array
     {
-        $onuRx = null;
-        $oltRx = null;
-        $tx = null;
         $macs = [];
 
-        $walk = function (mixed $node) use (&$walk, &$onuRx, &$oltRx, &$tx, &$macs): void {
+        $walk = function (mixed $node) use (&$walk, &$macs): void {
             if (is_array($node)) {
-                foreach ($node as $key => $value) {
-                    if (is_string($key)) {
-                        $lower = strtolower($key);
-
-                        // Which end of the link this key describes, decided before the
-                        // reading is claimed. An OLT-side key can never fall through to
-                        // $onuRx, which is what the old unanchored match allowed.
-                        $isOltSide = preg_match('/(olt|uplink|upstream)|^olt|_olt_|olt_rx/', $lower) === 1;
-
-                        $isRxKey = preg_match('/(^|_)(rx|signal)(_?(power|level|dbm))?$/', $lower) === 1;
-                        $isTxKey = preg_match('/(^|_)tx(_?(power|level|dbm))?$/', $lower) === 1;
-
-                        if ($isRxKey) {
-                            if ($isOltSide) {
-                                $oltRx ??= $this->parseDbm($value);
-                            } else {
-                                $onuRx ??= $this->parseDbm($value);
-                            }
-                        }
-
-                        // TX is only ever read from the ONU side; the OLT's own
-                        // transmit level is a property of the port, not of this ONU.
-                        if ($isTxKey && !$isOltSide) {
-                            $tx ??= $this->parseDbm($value);
-                        }
-                    }
-
-                    if (is_string($value) && preg_match('/^[0-9A-Fa-f]{2}([:\-][0-9A-Fa-f]{2}){5}$/', trim($value))) {
-                        $macs[] = trim($value);
-                    }
-
+                foreach ($node as $value) {
                     $walk($value);
                 }
+
                 return;
             }
 
-            if (is_string($node) && preg_match('/^[0-9A-Fa-f]{2}([:\-][0-9A-Fa-f]{2}){5}$/', trim($node))) {
+            if (is_string($node) && preg_match('/^[0-9A-Fa-f]{2}([:\-][0-9A-Fa-f]{2}){5}$/', trim($node)) === 1) {
                 $macs[] = trim($node);
             }
         };
 
         $walk($payload);
 
-        return [
-            'onu_rx' => $onuRx,
-            'olt_rx' => $oltRx,
-            // Legacy alias, kept because existing consumers read `rx_power`.
-            'rx_power' => $onuRx,
-            'tx_power' => $tx,
-            'macs' => array_values(array_unique($macs)),
-        ];
-    }
-
-    /**
-     * Read a dBm value out of whatever the API returned ("-24.53 dBm", -24.53, "N/A").
-     */
-    private function parseDbm(mixed $value): ?float
-    {
-        if (is_numeric($value)) {
-            return (float) $value;
-        }
-
-        if (!is_string($value)) {
-            return null;
-        }
-
-        if (preg_match('/-?\d+(\.\d+)?/', $value, $matches) === 1) {
-            return (float) $matches[0];
-        }
-
-        return null;
-    }
-
-    /**
-     * Band an RX reading. An ONU that is not up has no meaningful reading.
-     */
-    private function classifySignal(?float $rxPower, string $status): string
-    {
-        if ($rxPower === null || !in_array($status, ['online', 'up'], true)) {
-            return self::SIGNAL_OFFLINE;
-        }
-
-        if ($rxPower > self::RX_OPTIMAL_ABOVE) {
-            return self::SIGNAL_OPTIMAL;
-        }
-
-        if ($rxPower < self::RX_CRITICAL_BELOW) {
-            return self::SIGNAL_CRITICAL;
-        }
-
-        return self::SIGNAL_WARNING;
+        return array_values(array_unique($macs));
     }
 
     // =========================================================================
@@ -4283,11 +4232,74 @@ class SmartOltReconciliationService
     }
 
     /**
+     * The cached bridge-MAC snapshot: `external_id => ['macs' => [...], 'checked_at' => ...]`.
+     *
+     * Still stored under the `optical` cache key, deliberately: that key is one of
+     * PERSISTENT_CACHE_KEYS and is mirrored into `smart_olt_cache`, and renaming it
+     * would orphan every MAC already discovered for a live estate - each of which
+     * costs a throttled API call to earn back.
+     *
      * @return array{items: array<string, array<string, mixed>>, updated_at: string|null}
      */
-    private function cachedOptical(): array
+    private function cachedBridgeMacs(): array
     {
         return $this->getCache('optical');
+    }
+
+    /**
+     * Park a preview's summary under its own small cache key.
+     *
+     * The dashboard metrics need six figures out of passes that produce thousands of
+     * rows. Reading them back off the full preview snapshot would mean decoding that
+     * whole blob on every page poll, so each pass leaves a compact copy here instead.
+     *
+     * @param array<string, int> $summary
+     */
+    private function rememberSummary(string $name, array $summary, ?string $updatedAt = null): void
+    {
+        $this->putCache('summary:' . $name, [
+            'summary' => $summary,
+            'updated_at' => $updatedAt ?? now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Read back what rememberSummary() parked, or an empty array when that pass has
+     * never run. Framework cache first, `smart_olt_cache` second - the same two layers
+     * getCache() uses, without its `items` shape requirement.
+     *
+     * @return array<string, mixed>
+     */
+    private function cachedSummary(string $name): array
+    {
+        $key = 'summary:' . $name;
+        $value = Cache::get(self::CACHE_PREFIX . $key);
+
+        if (is_array($value)) {
+            return $value;
+        }
+
+        try {
+            $row = DB::table('smart_olt_cache')->where('cache_key', $key)->first(['data']);
+
+            if ($row !== null && !empty($row->data)) {
+                $decoded = json_decode($row->data, true);
+
+                if (is_array($decoded)) {
+                    $this->writeCacheLayer($key, $decoded);
+
+                    return $decoded;
+                }
+            }
+        } catch (Throwable $e) {
+            // A metric the dashboard cannot read is a blank card, not a failed page.
+            $this->log('warning', 'smart_olt_cache summary read failed.', [
+                'cache_key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return [];
     }
 
     /**
@@ -4508,9 +4520,56 @@ class SmartOltReconciliationService
         return strtoupper(preg_replace('/[^A-Za-z0-9]/', '', trim($value)) ?? '');
     }
 
+    /**
+     * Strip a MAC to bare uppercase hex - the only form anything in this service
+     * compares on. RouterOS reports `aa:bb:cc:dd:ee:ff` and SmartOLT reports
+     * `AA-BB-CC-DD-EE-FF`; both must resolve to one key or nothing matches.
+     */
     private function normalizeMac(string $value): string
     {
         return strtoupper(preg_replace('/[^A-Fa-f0-9]/', '', trim($value)) ?? '');
+    }
+
+    /**
+     * The colon-delimited MAC this tool shows for an ONU.
+     *
+     * An ONU can bridge more than one MAC. The first discovered is the one every
+     * matching pass tries first, so it is the one displayed. Empty when nothing has
+     * been cached for this ONU yet.
+     */
+    private function primaryMac(mixed $entry): string
+    {
+        $macs = is_array($entry) ? ($entry['macs'] ?? []) : [];
+
+        foreach (is_array($macs) ? $macs : [] as $mac) {
+            $formatted = $this->formatMac((string) $mac);
+
+            if ($formatted !== '') {
+                return $formatted;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Colon-delimited MAC for display: XX:XX:XX:XX:XX:XX.
+     *
+     * Display only, and applied once at the edge. Every comparison in this service
+     * runs on normalizeMac()'s bare uppercase hex, so SmartOLT's `AA-BB-CC-DD-EE-FF`
+     * and RouterOS's `aa:bb:cc:dd:ee:ff` resolve to one key no matter which side
+     * reported them. Anything that is not twelve hex digits is passed through
+     * untouched rather than silently blanked.
+     */
+    private function formatMac(string $value): string
+    {
+        $bare = $this->normalizeMac($value);
+
+        if (strlen($bare) !== 12) {
+            return trim($value);
+        }
+
+        return implode(':', str_split($bare, 2));
     }
 
     /**

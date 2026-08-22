@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Loader2, Plus, AlertCircle, CalendarDays, Clock, Mail, Info } from 'lucide-react';
+import { Loader2, Plus, AlertCircle, CalendarDays, Clock, Mail, Info, Eye, X } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import apiClient from '../config/api';
+import { reportService } from '../services/reportService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -113,11 +114,58 @@ const MONTHS = [
     'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const QUICK_RANGES = [
-    { label: 'Today', days: 1 },
-    { label: 'Last 7 days', days: 7 },
-    { label: 'Last 30 days', days: 30 },
-    { label: 'Last 90 days', days: 90 },
+/**
+ * A reporting-period preset.
+ *
+ * `resolve` returns the inclusive calendar bounds rather than a day count, because
+ * "this month" and "last month" are not fixed-length windows. The distinction is not
+ * cosmetic: the resulting span becomes the report's period LENGTH, which
+ * Report::nextAutomaticWindow() reuses for every later automatic send. A monthly report
+ * captured as "1st to today" would advance in short windows for ever after.
+ *
+ * Every bound is a local calendar date. The backend stamps 00:00:00 on the start and
+ * 23:59:59 on the end, so a selected day is always counted whole at both edges.
+ */
+interface QuickRange {
+    label: string;
+    resolve: () => { from: Date; to: Date };
+}
+
+/** The current date plus the previous `days - 1`, so `days` counts whole days inclusively. */
+const rollingDays = (days: number): { from: Date; to: Date } => {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(to.getDate() - (days - 1));
+    return { from, to };
+};
+
+const QUICK_RANGES: QuickRange[] = [
+    { label: 'Today', resolve: () => rollingDays(1) },
+    { label: 'Last 7 days', resolve: () => rollingDays(7) },
+    { label: 'Last 30 days', resolve: () => rollingDays(30) },
+    { label: 'Last 90 days', resolve: () => rollingDays(90) },
+    {
+        // Day 0 of the NEXT month is the last day of this one, which gets February and
+        // every 30-day month right without a table of month lengths.
+        label: 'This month',
+        resolve: () => {
+            const now = new Date();
+            return {
+                from: new Date(now.getFullYear(), now.getMonth(), 1),
+                to: new Date(now.getFullYear(), now.getMonth() + 1, 0),
+            };
+        },
+    },
+    {
+        label: 'Last month',
+        resolve: () => {
+            const now = new Date();
+            return {
+                from: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+                to: new Date(now.getFullYear(), now.getMonth(), 0),
+            };
+        },
+    },
 ];
 
 const EMPTY_FORM: FormData = {
@@ -410,10 +458,8 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
         });
     };
 
-    const handleRangeSelect = (days: number) => {
-        const to = new Date();
-        const from = new Date();
-        from.setDate(to.getDate() - (days - 1));
+    const handleRangeSelect = (range: QuickRange) => {
+        const { from, to } = range.resolve();
 
         setFormData(prev => ({
             ...prev,
@@ -424,6 +470,65 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
         clearError('date_from');
         clearError('date_to');
     };
+
+    // ── Live PDF preview ───────────────────────────────────────────────────────
+
+    /**
+     * Object URL of the rendered draft, or null when nothing has been previewed.
+     *
+     * Held in state rather than derived so the pane keeps showing the last render
+     * while the operator edits, instead of blanking on every keystroke.
+     */
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+
+    /**
+     * A blob URL is a live reference into the tab's memory, and a report PDF is not
+     * small. Released whenever it is replaced and again on unmount, so opening the
+     * modal repeatedly does not accumulate documents nobody is looking at.
+     */
+    useEffect(() => () => { reportService.releasePreview(previewUrl); }, [previewUrl]);
+
+    /**
+     * Render the form's current values, without creating anything.
+     *
+     * Only the three fields the document is built from are required, so an operator
+     * can look at the layout before deciding a schedule or recipients.
+     */
+    const handlePreview = useCallback(async () => {
+        if (!formData.report_type) {
+            setPreviewError('Choose a report type first.');
+            return;
+        }
+        if (!formData.date_from || !formData.date_to) {
+            setPreviewError('Set the reporting period first.');
+            return;
+        }
+
+        setPreviewLoading(true);
+        setPreviewError(null);
+
+        try {
+            const url = await reportService.previewDraft({
+                report_name: formData.report_name || undefined,
+                report_type: formData.report_type,
+                date_range: `${formData.date_from} to ${formData.date_to}`,
+            });
+            // Replacing, so the one being dropped is released here rather than waiting
+            // for the effect above to run on the next change.
+            setPreviewUrl(prev => { reportService.releasePreview(prev); return url; });
+        } catch (err: any) {
+            setPreviewError(err?.message || 'The preview could not be generated.');
+        } finally {
+            setPreviewLoading(false);
+        }
+    }, [formData.report_type, formData.date_from, formData.date_to, formData.report_name]);
+
+    const closePreview = useCallback(() => {
+        setPreviewUrl(prev => { reportService.releasePreview(prev); return null; });
+        setPreviewError(null);
+    }, []);
 
     const periodDays = useMemo(
         () => periodLengthInDays(formData.date_from, formData.date_to),
@@ -436,10 +541,13 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
         const today = toLocalISODate(new Date());
         if (formData.date_to !== today) return null;
 
+        // Matched on BOTH ends. Comparing only the start made "This month" and any
+        // rolling range that happened to begin on the 1st indistinguishable, so the
+        // wrong chip lit up.
         return QUICK_RANGES.find(range => {
-            const from = new Date();
-            from.setDate(new Date().getDate() - (range.days - 1));
-            return formData.date_from === toLocalISODate(from);
+            const { from, to } = range.resolve();
+            return formData.date_from === toLocalISODate(from)
+                && formData.date_to === toLocalISODate(to);
         })?.label ?? null;
     }, [formData.date_from, formData.date_to]);
 
@@ -715,6 +823,20 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
+                            {/* Preview renders the document the recipient would get,
+                                through the same service, without creating anything. */}
+                            <button
+                                type="button"
+                                onClick={handlePreview}
+                                disabled={loading || previewLoading}
+                                title="Render this report as a PDF without creating it"
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2 ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                            >
+                                {previewLoading
+                                    ? <Loader2 size={14} className="animate-spin" />
+                                    : <Eye size={14} />}
+                                Preview
+                            </button>
                             <button
                                 type="button"
                                 onClick={onClose}
@@ -737,6 +859,42 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
 
                     {/* Body */}
                     <div className="flex-1 overflow-y-auto p-6 space-y-5">
+
+                        {/* Live PDF preview. Shown only once something has been rendered,
+                            so the form is not permanently half a screen narrower. */}
+                        {(previewUrl || previewError) && (
+                            <div className={`rounded-lg border ${isDarkMode ? 'border-gray-700 bg-gray-900/50' : 'border-gray-200 bg-gray-50'}`}>
+                                <div className={`flex items-center justify-between px-3 py-2 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                                    <span className={`text-xs font-medium flex items-center gap-1.5 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                        <Eye size={12} /> PDF preview
+                                        <span className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>
+                                            &mdash; not saved
+                                        </span>
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={closePreview}
+                                        className={`p-1 rounded ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}`}
+                                        aria-label="Close preview"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+
+                                {previewError ? (
+                                    <p className="px-3 py-4 text-xs text-red-500 flex items-start gap-2">
+                                        <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                                        {previewError}
+                                    </p>
+                                ) : (
+                                    <iframe
+                                        src={previewUrl ?? undefined}
+                                        title="Report PDF preview"
+                                        className="w-full h-[420px] rounded-b-lg"
+                                    />
+                                )}
+                            </div>
+                        )}
 
                         {/* Report Name */}
                         <div>
@@ -928,7 +1086,7 @@ const AddReportModal: React.FC<AddReportModalProps> = ({ isOpen, onClose, onSave
                                         <button
                                             key={range.label}
                                             type="button"
-                                            onClick={() => handleRangeSelect(range.days)}
+                                            onClick={() => handleRangeSelect(range)}
                                             className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${active
                                                 ? 'text-white'
                                                 : isDarkMode

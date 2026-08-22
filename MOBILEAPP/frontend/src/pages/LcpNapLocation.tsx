@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, useWindowDimensions, ActivityIndicator, TextInput, StyleSheet, Modal, Alert, ScrollView } from 'react-native';
-import { MapPin, Search, Plus, Navigation } from 'lucide-react-native';
+import { MapPin, Search, Plus, Navigation, Check, X } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCurrentPosition, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 import MapView, { Marker, Circle, UrlTile } from 'react-native-maps';
@@ -178,6 +178,11 @@ const LcpNapLocation: React.FC = () => {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Pin-drop: the Add action arms the map instead of opening the form.
+  const [isPlacingPin, setIsPlacingPin] = useState(false);
+  const [pinCoords, setPinCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [pinnedCoordinates, setPinnedCoordinates] = useState<string | null>(null);
   const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
   const [isSearchingSuggestions, setIsSearchingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -432,6 +437,35 @@ const LcpNapLocation: React.FC = () => {
       .map(x => x.m);
   }, [markers, selectedLcpNapId, lcpNapGroups, debouncedSearch, mapCenter, pinLimit, currentRegion, searchedPlacePin]);
 
+
+  // ---- Pin-drop placement ------------------------------------------------
+
+  /**
+   * Arm the map instead of opening the form.
+   *
+   * The technician frames the pole on the map and confirms; only then does the form
+   * open, with those coordinates already filled and locked. Typing a lat/lng into a
+   * blank form was the step this replaces.
+   */
+  const startPinPlacement = useCallback(() => {
+    setPinCoords({ latitude: mapCenter.latitude, longitude: mapCenter.longitude });
+    setSelectedLocation(null);
+    setIsPlacingPin(true);
+  }, [mapCenter]);
+
+  const cancelPinPlacement = useCallback(() => {
+    setIsPlacingPin(false);
+    setPinCoords(null);
+  }, []);
+
+  /** Lock the point in and hand it to the form. */
+  const confirmPinPlacement = useCallback(() => {
+    if (!pinCoords) return;
+    setPinnedCoordinates(`${pinCoords.latitude.toFixed(6)}, ${pinCoords.longitude.toFixed(6)}`);
+    setIsPlacingPin(false);
+    setShowAddModal(true);
+  }, [pinCoords]);
+
   const handleLcpNapSelect = useCallback((id: number | string) => {
     setSelectedLcpNapId(id);
     const target = id === 'all' ? markers : lcpNapGroups.find(g => g.lcpnap_id === id)?.locations || [];
@@ -591,6 +625,21 @@ const LcpNapLocation: React.FC = () => {
                   setCurrentRegion(r);
                   setCurrentDelta(r.latitudeDelta);
                   setMapCenter({ latitude: r.latitude, longitude: r.longitude });
+                  // While placing, the map centre *is* the provisional coordinate, so
+                  // panning moves the pin under the fixed crosshair.
+                  if (isPlacingPin) setPinCoords({ latitude: r.latitude, longitude: r.longitude });
+                }}
+                onPress={e => {
+                  // A tap re-centres on the tapped point so crosshair and pin agree.
+                  if (!isPlacingPin || !e.nativeEvent?.coordinate) return;
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  setPinCoords({ latitude, longitude });
+                  mapRef.current?.animateToRegion({
+                    latitude,
+                    longitude,
+                    latitudeDelta: pendingRegionRef.current.latitudeDelta,
+                    longitudeDelta: pendingRegionRef.current.longitudeDelta,
+                  }, 250);
                 }}
                 mapType="none"
                 showsPointsOfInterest={false}
@@ -617,6 +666,17 @@ const LcpNapLocation: React.FC = () => {
                   // @ts-ignore
                   zIndex={-1}
                 />
+
+                {/* Provisional pin, drawn under the crosshair while placing. */}
+                {isPlacingPin && pinCoords && (
+                  <Marker
+                    coordinate={pinCoords}
+                    title="New LCP/NAP location"
+                    pinColor={primaryColor}
+                    tracksViewChanges={false}
+                    zIndex={2000}
+                  />
+                )}
 
                 {userLocation && <Circle center={userLocation} radius={100} fillColor="rgba(59, 130, 246, 0.1)" strokeColor="rgba(59, 130, 246, 0.4)" strokeWidth={2} />}
 
@@ -691,8 +751,51 @@ const LcpNapLocation: React.FC = () => {
               </>
             )}
 
+            {/* Pin-drop crosshair. Fixed to the centre of the map and click-through, so
+                the map underneath still pans and zooms normally. */}
+            {isPlacingPin && (
+              <View style={styles.crosshairOverlay} pointerEvents="none">
+                <View style={[styles.crosshairRing, { borderColor: primaryColor }]} />
+                <View style={[styles.crosshairVertical, { backgroundColor: primaryColor }]} />
+                <View style={[styles.crosshairHorizontal, { backgroundColor: primaryColor }]} />
+              </View>
+            )}
+
+            {/* Floating confirmation bar for the pin-drop. */}
+            {isPlacingPin && (
+              <View style={styles.pinBar}>
+                <View style={styles.pinBarHeader}>
+                  <MapPin size={16} color={primaryColor} />
+                  <View style={styles.pinBarText}>
+                    <Text style={styles.pinBarTitle}>Position the pin</Text>
+                    <Text style={styles.pinBarHint}>Pan the map or tap a spot, then confirm.</Text>
+                    <Text style={styles.pinBarCoords}>
+                      {pinCoords
+                        ? `${pinCoords.latitude.toFixed(6)}, ${pinCoords.longitude.toFixed(6)}`
+                        : 'Waiting for the map…'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.pinBarActions}>
+                  <Pressable
+                    onPress={confirmPinPlacement}
+                    disabled={!pinCoords}
+                    style={[styles.pinBarButton, { backgroundColor: primaryColor, opacity: pinCoords ? 1 : 0.5 }]}
+                  >
+                    <Check size={16} color="white" />
+                    <Text style={styles.pinBarButtonText}>Confirm</Text>
+                  </Pressable>
+                  <Pressable onPress={cancelPinPlacement} style={[styles.pinBarButton, styles.pinBarCancel]}>
+                    <X size={16} color="#374151" />
+                    <Text style={[styles.pinBarButtonText, { color: '#374151' }]}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
             <View style={styles.mapActionButtons}>
-              <Pressable onPress={() => setShowAddModal(true)} style={[styles.mapActionButton, { backgroundColor: primaryColor }]}>
+              <Pressable onPress={startPinPlacement} style={[styles.mapActionButton, { backgroundColor: primaryColor }]}>
                 <Plus size={24} color="white" />
               </Pressable>
               {/* Centre-on-me is hidden if location services are ever switched off again; search
@@ -723,9 +826,18 @@ const LcpNapLocation: React.FC = () => {
 
       <AddLcpNapLocationModal
         isOpen={showAddModal}
-        onClose={() => { setShowAddModal(false); setEditLocation(null); }}
+        onClose={() => {
+          setShowAddModal(false);
+          setEditLocation(null);
+          // The pin is consumed by the form; dropping it here means reopening Add starts
+          // a fresh placement rather than silently reusing the last point.
+          setPinnedCoordinates(null);
+          setPinCoords(null);
+        }}
         onSave={() => loadLocations()}
         editData={editLocation}
+        initialCoordinates={pinnedCoordinates ?? undefined}
+        lockCoordinates={pinnedCoordinates !== null}
       />
 
       {selectedLocation && (
@@ -768,6 +880,20 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1, position: 'relative' },
   map: { ...StyleSheet.absoluteFillObject },
   pausedMap: { alignItems: 'center', justifyContent: 'center' },
+  crosshairOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', zIndex: 600 },
+  crosshairRing: { width: 40, height: 40, borderRadius: 20, borderWidth: 2, opacity: 0.7 },
+  crosshairVertical: { position: 'absolute', width: 2, height: 32 },
+  crosshairHorizontal: { position: 'absolute', height: 2, width: 32 },
+  pinBar: { position: 'absolute', left: 16, right: 16, bottom: 24, backgroundColor: '#ffffff', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', padding: 12, zIndex: 700, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 6 },
+  pinBarHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  pinBarText: { flex: 1, marginLeft: 8 },
+  pinBarTitle: { fontSize: 14, fontWeight: '600', color: '#111827' },
+  pinBarHint: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  pinBarCoords: { fontSize: 12, color: '#374151', marginTop: 4, fontVariant: ['tabular-nums'] },
+  pinBarActions: { flexDirection: 'row', marginTop: 12 },
+  pinBarButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 8 },
+  pinBarCancel: { marginLeft: 8, borderWidth: 1, borderColor: '#d1d5db', backgroundColor: '#ffffff' },
+  pinBarButtonText: { color: 'white', fontSize: 14, fontWeight: '600', marginLeft: 6 },
   mapActionButtons: { position: 'absolute', bottom: 100, right: 24, alignItems: 'center' },
   mapActionButton: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 },
   loaderOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', zIndex: 10 },

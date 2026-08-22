@@ -240,6 +240,81 @@ class ReportDataset
             'money'        => [],
             'group_by'     => 'work_status',
         ],
+
+        'pullout movement' => [
+            'union'        => true,
+            // For a union these name ALIASES in the combined result, not columns on a
+            // base table - the date filter is applied per-branch, before the combine.
+            'date_column'  => 'pullout_at',
+            'order_column' => 'pullout_at',
+            // pullout_at is not unique, so the sort is not a total order on its own.
+            // Without a tiebreaker the LIMIT/OFFSET chunking the CSV export uses can
+            // repeat or drop rows across page boundaries.
+            'tiebreakers'  => ['account_no'],
+            'columns'      => [
+                'account_no', 'subscriber_name', 'pullout_reason', 'assigned_tech',
+                'router_modem_sn', 'pullout_at', 'status_transition',
+            ],
+            'numeric'      => [],
+            'money'        => [],
+            'group_by'     => 'status_transition',
+            'sources' => [
+                [
+                    'label'       => 'Pullout',
+                    'table'       => ['service_orders'],
+                    // The moment the order MOVED. service_orders has no
+                    // status_changed_at in any deployment, so updated_at is the
+                    // closest true transition stamp; end_time and created_at only
+                    // stand in where it is absent.
+                    'date_column' => ['updated_at', 'end_time', 'created_at'],
+                    // Restricts the branch to pullout work. Bound, never interpolated.
+                    'where_raw'   => [
+                        'sql' => "(LOWER(COALESCE(`concern`, '')) LIKE ?"
+                               . " OR LOWER(COALESCE(`concern`, '')) LIKE ?"
+                               . " OR LOWER(COALESCE(`repair_category`, '')) LIKE ?)",
+                        'bindings' => ['%pullout%', '%pull out%', '%pullout%'],
+                        'requires' => ['concern'],
+                    ],
+                    'map' => [
+                        'account_no'      => ['column' => ['account_no']],
+                        // service_orders stores no subscriber name. Correlated rather
+                        // than joined because the dataset contract is one table per
+                        // branch; it is bounded by the PDF row cap and by the date
+                        // filter, and account_no is indexed on billing_accounts.
+                        'subscriber_name' => [
+                            'expr'     => "(SELECT TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, '')))"
+                                        . " FROM billing_accounts ba"
+                                        . " JOIN customers c ON c.id = ba.customer_id"
+                                        . " WHERE ba.account_no = `service_orders`.`account_no` LIMIT 1)",
+                            'requires' => ['account_no'],
+                            'column'   => ['account_no'],
+                        ],
+                        'pullout_reason'  => [
+                            'expr'     => "COALESCE(NULLIF(`concern_remarks`, ''), NULLIF(`support_remarks`, ''), `concern`)",
+                            'requires' => ['concern_remarks', 'support_remarks', 'concern'],
+                            'column'   => ['concern_remarks', 'support_remarks', 'concern'],
+                        ],
+                        'assigned_tech'   => [
+                            'expr'     => "COALESCE(NULLIF(`visit_by_user`, ''), NULLIF(`technicians`, ''), NULLIF(`assigned_email`, ''))",
+                            'requires' => ['visit_by_user', 'technicians', 'assigned_email'],
+                            'column'   => ['visit_by_user', 'assigned_email'],
+                        ],
+                        // The serial that came back off the wall.
+                        'router_modem_sn' => ['column' => ['old_router_modem_sn', 'router_modem_sn']],
+                        'pullout_at'      => ['column' => ['updated_at', 'end_time', 'created_at']],
+                        // "For Visit -> Done". Built from the two columns that actually
+                        // move; `status` is 'unused' on nearly every pullout row and
+                        // would have made this column meaningless.
+                        'status_transition' => [
+                            'expr'     => "CONCAT(COALESCE(NULLIF(`support_status`, ''), 'Pending'), ' -> ',"
+                                        . " COALESCE(NULLIF(`visit_status`, ''), 'Pending'))",
+                            'requires' => ['support_status', 'visit_status'],
+                            'column'   => ['visit_status', 'support_status'],
+                        ],
+                    ],
+                ],
+            ],
+        ],
     ];
 
     /** Report types that are aggregate rather than record-listing. */
@@ -365,6 +440,10 @@ class ReportDataset
                 'available'   => $available,
                 'map'         => $source['map'],
                 'date_column' => self::firstExistingColumn($source['date_column'], $available),
+                // Optional branch restriction, e.g. "only pullout service orders".
+                // Dropped when the columns it names are absent, so schema drift
+                // narrows a report to nothing visible rather than throwing.
+                'where_raw'   => self::branchFilter($source['where_raw'] ?? null, $available),
             ];
         }
 
@@ -435,6 +514,13 @@ class ReportDataset
         foreach ($dataset['sources'] as $source) {
             $branch = DB::table($source['table'])
                 ->select(self::branchSelects($source, $aliases, $dataset['types'] ?? []));
+
+            // Applied inside the branch, before the combine, so it narrows this
+            // source only. Bindings are passed to whereRaw rather than being
+            // interpolated into the SQL.
+            if (!empty($source['where_raw'])) {
+                $branch->whereRaw($source['where_raw']['sql'], $source['where_raw']['bindings']);
+            }
 
             if ($start && $end && $source['date_column']) {
                 $branch->whereBetween(
@@ -539,6 +625,33 @@ class ReportDataset
         }
 
         return 'NULL';
+    }
+
+    /**
+     * Validate an optional branch filter against the live schema.
+     *
+     * Returns null when the filter names a column this deployment does not have.
+     * Dropping the restriction would be worse than dropping the filter - an
+     * unfiltered branch would report every service order as a pullout - so the
+     * caller treats null as "this source cannot be filtered" and the dataset
+     * simply yields nothing rather than yielding the wrong thing.
+     *
+     * @param array{sql: string, bindings: array, requires?: array}|null $filter
+     * @return array{sql: string, bindings: array}|null
+     */
+    private static function branchFilter(?array $filter, array $available): ?array
+    {
+        if ($filter === null) {
+            return null;
+        }
+
+        foreach ($filter['requires'] ?? [] as $column) {
+            if (!isset($available[$column])) {
+                return null;
+            }
+        }
+
+        return ['sql' => $filter['sql'], 'bindings' => $filter['bindings'] ?? []];
     }
 
     private static function firstExistingTable(array $candidates): ?string

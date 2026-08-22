@@ -143,6 +143,8 @@ export interface BillingDetailRecord extends BillingRecord {
   relatedApprovedTransactions?: string;
   relatedAttachments?: string;
   logs?: string;
+  /** Raw document URL, kept alongside houseFrontPicture for the attachment viewer. */
+  houseFrontPictureUrl?: string;
 }
 
 export interface OnlineStatusRecord {
