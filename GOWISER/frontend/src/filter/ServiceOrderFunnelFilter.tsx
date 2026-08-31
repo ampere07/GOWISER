@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import apiClient from '../config/api';
 import { planService } from '../services/planService';
+import { dedupeConcerns } from '../utils/concernAliases';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -202,7 +203,9 @@ const ServiceOrderFunnelFilter: React.FC<ServiceOrderFunnelFilterProps> = ({
             setNewLcpnaps([...soRes.data.data.new_lcpnaps].sort((a, b) => String(a).localeCompare(String(b))));
             setRouterModels([...soRes.data.data.router_models].sort((a, b) => String(a).localeCompare(String(b))));
             setUsageTypes([...soRes.data.data.usage_types].sort((a, b) => String(a).localeCompare(String(b))));
-            setConcerns([...(soRes.data.data.concerns || [])].sort((a, b) => String(a).localeCompare(String(b))));
+            // Aliased concerns are folded together here, so the list offers one option
+            // per real concern rather than two that each return half the rows.
+            setConcerns(dedupeConcerns(soRes.data.data.concerns || []));
           }
         } catch (err) {
           console.error('Failed to fetch checklist data:', err);

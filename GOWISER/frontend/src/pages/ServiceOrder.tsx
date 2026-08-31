@@ -13,6 +13,7 @@ import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
 import { getUserDisplayName, resolveUserDisplayName } from '../utils/userDisplay';
 import { User } from '../types/api';
+import { concernsMatch } from '../utils/concernAliases';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -880,6 +881,12 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                 // the sole evidence of where the job is.
                 return address.includes(filterVal);
               });
+              if (!isMatch) { matchesFunnel = false; break; }
+            } else if (key === 'concern') {
+              // "For Pullout" and "Pullout" are one concern and the filter offers a
+              // single option for them, so the row has to be compared through the same
+              // alias — an exact match would return only half of them.
+              const isMatch = typedFilter.value.some((opt: string) => concernsMatch(orderValue, opt));
               if (!isMatch) { matchesFunnel = false; break; }
             } else {
               const isMatch = typedFilter.value.some((opt: string) => {

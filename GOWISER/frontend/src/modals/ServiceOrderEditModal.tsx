@@ -2302,8 +2302,11 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 label="Concern"
                 value={formData.concern}
                 onSelect={(val) => handleInputChange('concern', val)}
-                options={[{ concern_name: 'None' }, ...concerns]}
+                // Concern is a required field, so 'None' was never a valid answer — it is
+                // not a sentinel anywhere either, just an extra entry prepended to the list.
+                options={concerns}
                 optionLabelKey="concern_name"
+                placeholderOption="Select Concern"
                 isDarkMode={isDarkMode}
                 error={errors.concern}
                 required
