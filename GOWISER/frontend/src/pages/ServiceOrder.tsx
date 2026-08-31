@@ -39,7 +39,14 @@ const STATUS_CATEGORIES = [
   { id: 'failed', name: 'Failed' },
   { id: 'inprogress', name: 'In Progress' },
   { id: 'forvisit', name: 'For Visit' },
-  { id: 'open', name: 'Open' }
+  { id: 'open', name: 'Open' },
+  { id: 'cancelled', name: 'Cancelled' },
+  // Catch-all for a support status this list does not name, rendered only when it
+  // actually holds rows — the same treatment (Unspecified) gets above, and for the
+  // same reason: a status with nowhere to sit was previously dropped from the branch
+  // counts entirely, so Prepaid + Postpaid came to less than the All Service Orders
+  // total and those rows could not be reached from the sidebar at all.
+  { id: 'other', name: '(Other)' }
 ];
 
 // Mirrors BillingAccount::PREPAID_ALIASES on the backend: production has held 'Pre Paid',
@@ -59,7 +66,10 @@ const resolveStatusCategory = (supportStatus?: string): string => {
   if (s === 'in-progress' || s === 'in progress') return 'inprogress';
   if (s === 'for-visit' || s === 'for visit') return 'forvisit';
   if (s === 'pending' || s === 'open') return 'open';
-  return '';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  // Never '': every service order must land in some bucket, or it disappears from
+  // the counts while still being included in the total above them.
+  return 'other';
 };
 
 const resolveVisitKey = (visitStatus?: string): string => {
@@ -277,6 +287,11 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
+
+  // Download options. The button used to export immediately; it now opens a chooser
+  // so the plain row export and the concern summary can live side by side.
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -906,11 +921,12 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       const genNode = tree[resolveBillingType(so.generationType)];
       const catNode = genNode.statuses[resolveStatusCategory(so.supportStatus)];
 
-      // An unrecognised support status has no bucket to sit in, so it is left out of the
-      // branch counts entirely — matching how the old flat status list behaved.
-      if (!catNode) return;
-
+      // The billing type is counted first and unconditionally: its badge has to equal
+      // the number of rows clicking it produces, and that must hold even if a status
+      // somehow resolves to a category that is not in the list.
       genNode.count++;
+
+      if (!catNode) return;
       catNode.count++;
 
       const visitKey = resolveVisitKey(so.visitStatus);
@@ -937,7 +953,9 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
           id: `gen:${g.id}`,
           name: g.name,
           count: tree[g.id].count,
-          statuses: STATUS_CATEGORIES.map(c => ({
+          statuses: STATUS_CATEGORIES
+            .filter(c => c.id !== 'other' || tree[g.id].statuses[c.id].count > 0)
+            .map(c => ({
             id: `gen:${g.id}:status:${c.id}`,
             statusId: c.id,
             name: c.name,
@@ -995,10 +1013,6 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
               if (matchedBrgy !== brgyName) return false;
             }
           }
-        } else {
-          // A billing-type row on its own still excludes orders whose support status has no
-          // bucket, so its badge matches the number of rows the click actually produces.
-          if (resolveStatusCategory(serviceOrder.supportStatus) === '') return false;
         }
         return true;
       }
@@ -1411,7 +1425,11 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     }
   };
 
-  const handleExport = () => {
+  /**
+   * The row-per-service-order export. Unchanged — it is what the Download button
+   * has always produced, and is still the default choice in the chooser.
+   */
+  const exportDefaultCsv = () => {
     if (!filteredServiceOrders || filteredServiceOrders.length === 0) return;
 
     const exportColumns = allColumns
@@ -1452,6 +1470,106 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     };
 
     exportToCSV('service_orders_export', exportColumns, filteredServiceOrders, getExportValue);
+  };
+
+  /** Label used when a service order records no concern or no status. */
+  const UNSPECIFIED = 'Unspecified';
+
+  /**
+   * Counts of service orders per concern, broken down by support status.
+   *
+   * Built from filteredServiceOrders, the same set the default export uses, so the
+   * report always describes what is on screen — a report that ignored the active
+   * filters would quietly disagree with the table beside it.
+   *
+   * Support status rather than visit status: it is the lifecycle the question is
+   * about (Resolved / Pending / In Progress / Cancelled), whereas visit status only
+   * records how a single visit went.
+   */
+  const concernReport = useMemo(() => {
+    const rows = filteredServiceOrders || [];
+
+    const byConcern = new Map<string, Map<string, number>>();
+    const statusesSeen = new Set<string>();
+
+    for (const so of rows) {
+      const concern = (so.concern || '').trim() || UNSPECIFIED;
+      const status = (so.supportStatus || '').trim() || UNSPECIFIED;
+
+      if (!byConcern.has(concern)) byConcern.set(concern, new Map());
+      const statuses = byConcern.get(concern)!;
+      statuses.set(status, (statuses.get(status) || 0) + 1);
+      statusesSeen.add(status);
+    }
+
+    const groups = Array.from(byConcern.entries())
+      .map(([concern, statuses]) => ({
+        concern,
+        // Largest first, so the dominant status for a concern reads first; ties
+        // fall back to the status name for a stable order between exports.
+        statuses: Array.from(statuses.entries())
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([status, count]) => ({ status, count })),
+        total: Array.from(statuses.values()).reduce((sum, n) => sum + n, 0),
+      }))
+      .sort((a, b) => a.concern.localeCompare(b.concern));
+
+    return {
+      groups,
+      grandTotal: groups.reduce((sum, g) => sum + g.total, 0),
+      statusCount: statusesSeen.size,
+    };
+  }, [filteredServiceOrders]);
+
+  /**
+   * The concern summary as CSV, through the same exportToCSV the row export uses so
+   * both files share one escaping and filename convention.
+   *
+   * Flat Concern/Status/Count rows with a Total line per concern rather than an
+   * indented tree: it opens correctly in a spreadsheet and can be pivoted, which an
+   * indented layout cannot.
+   */
+  const exportConcernReport = () => {
+    if (concernReport.groups.length === 0) return;
+
+    const reportRows: Array<{ concern: string; status: string; count: number | string }> = [];
+
+    concernReport.groups.forEach((group, index) => {
+      // A blank line between groups, so the concerns read as separate blocks.
+      if (index > 0) reportRows.push({ concern: '', status: '', count: '' });
+
+      // The concern is named once, on its own line, rather than repeated beside
+      // every status — the statuses below it are already understood to belong to it.
+      reportRows.push({ concern: group.concern, status: '', count: '' });
+
+      group.statuses.forEach(({ status, count }) => {
+        reportRows.push({ concern: '', status, count });
+      });
+
+      reportRows.push({ concern: '', status: 'Total', count: group.total });
+    });
+
+    reportRows.push({ concern: '', status: '', count: '' });
+    reportRows.push({ concern: 'OVERALL TOTAL', status: '', count: concernReport.grandTotal });
+
+    exportToCSV(
+      'service_orders_concern_report',
+      [
+        { key: 'concern', label: 'Concern' },
+        { key: 'status', label: 'Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      reportRows,
+      (row, key) => (row as any)[key]
+    );
+  };
+
+  /** Runs whichever mode the chooser is on, then closes it. */
+  const handleConfirmDownload = () => {
+    if (downloadMode === 'report') exportConcernReport();
+    else exportDefaultCsv();
+
+    setIsDownloadModalOpen(false);
   };
 
   return (
@@ -1948,9 +2066,15 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                   )}
                 </div>
                 <button
-                  onClick={handleExport}
+                  onClick={() => {
+                    // Always reopens on the default choice: the chooser should not
+                    // remember that the last export was a report and silently give a
+                    // different file to the next person who clicks Download.
+                    setDownloadMode('default');
+                    setIsDownloadModalOpen(true);
+                  }}
                   disabled={isLoading || filteredServiceOrders.length === 0}
-                  title="Export to CSV"
+                  title="Download"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
                   style={{
                     backgroundColor: '#ffffff',
@@ -2351,6 +2475,107 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         }}
         currentFilters={activeFilters}
       />
+
+      {/* ── Download options ─────────────────────────────────────────────── */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
+            // The backdrop closes the chooser; a click inside it must not.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Download
+              </h2>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-3">
+              {[
+                {
+                  value: 'default' as const,
+                  title: 'Default Download',
+                  description: `All ${filteredServiceOrders.length.toLocaleString()} service order${filteredServiceOrders.length === 1 ? '' : 's'} currently shown, one row each.`,
+                },
+                {
+                  value: 'report' as const,
+                  title: 'Data Report',
+                  description: concernReport.groups.length > 0
+                    ? `Counts grouped by concern and status — ${concernReport.groups.length} concern${concernReport.groups.length === 1 ? '' : 's'}, ${concernReport.grandTotal.toLocaleString()} record${concernReport.grandTotal === 1 ? '' : 's'} in total.`
+                    : 'No service orders to summarise.',
+                },
+              ].map(option => {
+                const isSelected = downloadMode === option.value;
+                // The report needs at least one grouped row; the default export needs
+                // at least one service order. Either way, offering a choice that would
+                // produce an empty file is worse than showing it as unavailable.
+                const isDisabled = option.value === 'report' && concernReport.groups.length === 0;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 p-4 rounded-lg border transition-all ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'bg-gray-900/40' : 'bg-white'}`}
+                    style={{
+                      borderColor: isSelected
+                        ? (colorPalette?.primary || '#7c3aed')
+                        : (isDarkMode ? '#374151' : '#e5e7eb'),
+                      backgroundColor: isSelected
+                        ? hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.15 : 0.06)
+                        : undefined,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadMode"
+                      value={option.value}
+                      checked={isSelected}
+                      disabled={isDisabled}
+                      onChange={() => setDownloadMode(option.value)}
+                      className="mt-1 h-4 w-4 flex-shrink-0"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {option.title}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {option.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className={`flex justify-end gap-3 px-6 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isDarkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDownload}
+                disabled={downloadMode === 'report' && concernReport.groups.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SessionExpiredModal 
         isOpen={showSessionExpired} 

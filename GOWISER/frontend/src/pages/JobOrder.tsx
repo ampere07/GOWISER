@@ -196,6 +196,11 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
   const [technicianEmail, setTechnicianEmail] = useState<string | undefined>(undefined);
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
+
+  // Download options. The button used to export immediately; it now opens a chooser
+  // so the plain row export and the onsite-status summary can live side by side.
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const [dateInstalledFrom, setDateInstalledFrom] = useState<string>('');
   const [dateInstalledTo, setDateInstalledTo] = useState<string>('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -1712,7 +1717,11 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
     }
   };
 
-  const handleExport = () => {
+  /**
+   * The row-per-job-order export. Unchanged — it is what the Download button has
+   * always produced, and is still the default choice in the chooser.
+   */
+  const exportDefaultCsv = () => {
     if (!sortedJobOrders || sortedJobOrders.length === 0) return;
 
     const exportColumns = allColumns
@@ -1732,6 +1741,65 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
     };
 
     exportToCSV('job_orders_export', exportColumns, sortedJobOrders, getExportValue);
+  };
+
+  /** Label used when a job order records no onsite status. */
+  const UNSPECIFIED = 'Unspecified';
+
+  /**
+   * Counts of job orders per onsite status.
+   *
+   * Built from sortedJobOrders, the same set the default export uses, so the report
+   * always describes what is on screen — a report that ignored the active filters
+   * would quietly disagree with the table beside it.
+   */
+  const onsiteStatusReport = useMemo(() => {
+    const rows = sortedJobOrders || [];
+    const counts = new Map<string, number>();
+
+    for (const jo of rows) {
+      const status = String(jo.Onsite_Status || jo.onsite_status || '').trim() || UNSPECIFIED;
+      counts.set(status, (counts.get(status) || 0) + 1);
+    }
+
+    // Largest first, ties broken by name so repeated exports are identical.
+    const statuses = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([status, count]) => ({ status, count }));
+
+    return { statuses, total: statuses.reduce((sum, s) => sum + s.count, 0) };
+  }, [sortedJobOrders]);
+
+  /**
+   * The onsite-status summary as CSV, through the same exportToCSV the row export
+   * uses so both files share one escaping and filename convention.
+   */
+  const exportOnsiteStatusReport = () => {
+    if (onsiteStatusReport.statuses.length === 0) return;
+
+    const reportRows: Array<{ status: string; count: number | string }> = [
+      ...onsiteStatusReport.statuses,
+      { status: '', count: '' },
+      { status: 'TOTAL', count: onsiteStatusReport.total },
+    ];
+
+    exportToCSV(
+      'job_orders_onsite_status_report',
+      [
+        { key: 'status', label: 'Onsite Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      reportRows,
+      (row, key) => (row as any)[key]
+    );
+  };
+
+  /** Runs whichever mode the chooser is on, then closes it. */
+  const handleConfirmDownload = () => {
+    if (downloadMode === 'report') exportOnsiteStatusReport();
+    else exportDefaultCsv();
+
+    setIsDownloadModalOpen(false);
   };
 
   const renderCellDisplay = (jobOrder: JobOrder, columnKey: string) => {
@@ -2348,7 +2416,12 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                   )}
                 </div>
                 <button
-                  onClick={handleExport}
+                  onClick={() => {
+                    // Always reopens on the default choice, so a previous report
+                    // selection cannot silently hand the next click a different file.
+                    setDownloadMode('default');
+                    setIsDownloadModalOpen(true);
+                  }}
                   disabled={isLoading || sortedJobOrders.length === 0}
                   title="Export to CSV"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
@@ -2807,6 +2880,106 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
         }}
         currentFilters={activeFilters}
       />
+
+      {/* ── Download options ─────────────────────────────────────────────── */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
+            // The backdrop closes the chooser; a click inside it must not.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Download
+              </h2>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-3">
+              {[
+                {
+                  value: 'default' as const,
+                  title: 'Default Download',
+                  description: `All ${sortedJobOrders.length.toLocaleString()} job order${sortedJobOrders.length === 1 ? '' : 's'} currently shown, one row each.`,
+                },
+                {
+                  value: 'report' as const,
+                  title: 'Data Report',
+                  description: onsiteStatusReport.statuses.length > 0
+                    ? `Counts grouped by onsite status — ${onsiteStatusReport.statuses.length} status${onsiteStatusReport.statuses.length === 1 ? '' : 'es'}, ${onsiteStatusReport.total.toLocaleString()} record${onsiteStatusReport.total === 1 ? '' : 's'} in total.`
+                    : 'No job orders to summarise.',
+                },
+              ].map(option => {
+                const isSelected = downloadMode === option.value;
+                // Offering a choice that would produce an empty file is worse than
+                // showing it as unavailable.
+                const isDisabled = option.value === 'report' && onsiteStatusReport.statuses.length === 0;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 p-4 rounded-lg border transition-all ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'bg-gray-900/40' : 'bg-white'}`}
+                    style={{
+                      borderColor: isSelected
+                        ? (colorPalette?.primary || '#7c3aed')
+                        : (isDarkMode ? '#374151' : '#e5e7eb'),
+                      backgroundColor: isSelected
+                        ? hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.15 : 0.06)
+                        : undefined,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadMode"
+                      value={option.value}
+                      checked={isSelected}
+                      disabled={isDisabled}
+                      onChange={() => setDownloadMode(option.value)}
+                      className="mt-1 h-4 w-4 flex-shrink-0"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {option.title}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {option.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className={`flex justify-end gap-3 px-6 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isDarkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDownload}
+                disabled={downloadMode === 'report' && onsiteStatusReport.statuses.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SessionExpiredModal 
         isOpen={showSessionExpired} 
