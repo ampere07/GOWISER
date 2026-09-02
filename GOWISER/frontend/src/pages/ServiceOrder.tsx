@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { FileText, X, Columns3, ArrowUp, ArrowDown, Menu, Filter, RefreshCw, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Download } from 'lucide-react';
+import { FileText, X, Columns3, ArrowUp, ArrowDown, Menu, Filter, RefreshCw, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Download, Layers } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import ServiceOrderDetails from '../components/ServiceOrderDetails';
 import ServiceOrderFunnelFilter, { allColumns as filterColumns } from '../filter/ServiceOrderFunnelFilter';
@@ -14,6 +14,10 @@ import { userService } from '../services/userService';
 import { getUserDisplayName, resolveUserDisplayName } from '../utils/userDisplay';
 import { User } from '../types/api';
 import { concernsMatch } from '../utils/concernAliases';
+import { useViewOptions } from '../hooks/useViewOptions';
+import type { GroupableColumn } from '../services/viewOptionsService';
+import ViewOptionsModal from '../components/tools/ViewOptionsModal';
+import GroupTree from '../components/tools/GroupTree';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -708,6 +712,8 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'emailAddress': return item.emailAddress;
       case 'fullAddress': return item.fullAddress ?? (item as any).full_address ?? '';
       case 'plan': return item.plan;
+      case 'username': return item.username ?? (item as any).username ?? '';
+      case 'pppoePassword': return item.pppoePassword ?? (item as any).pppoe_password ?? '';
       case 'lcp': return item.lcp;
       case 'nap': return item.nap;
       case 'port': return item.port;
@@ -722,8 +728,8 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'visitStatus': return item.visitStatus;
       case 'timestamp': return item.timestamp;
       case 'dateInstalled': return item.dateInstalled;
-      case 'modifiedBy': return item.modifiedBy ?? (item as any).updated_by_user ?? '';
-      case 'modifiedDate': return item.modifiedDate ?? (item as any).updated_at ?? '';
+      case 'modifiedBy': return item.modifiedBy ?? (item as any).updated_by_user ?? (item as any).Updated_By_User ?? '';
+      case 'modifiedDate': return item.modifiedDate ?? item.rawUpdatedAt ?? (item as any).updated_at ?? (item as any).Updated_At ?? '';
       // Sorted by what the cell shows, so these mirror renderCellValue.
       case 'assignedEmail': return resolveUserDisplayName(item.assignedEmail, userDirectory, '-');
       case 'requestedBy': return resolveUserDisplayName(item.requestedBy, userDirectory);
@@ -843,15 +849,26 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
           }
           else if (typedFilter.type === 'date') {
             if (orderValue) {
-              const dateValue = new Date(orderValue).getTime();
+              const normalizeDate = (d: any, isEnd: boolean = false) => {
+                if (!d) return NaN;
+                let s = String(d).trim().replace(' ', 'T');
+                if (s.length === 10) {
+                  s = isEnd ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+                } else if (s.length === 16) {
+                  s = isEnd ? `${s}:59.999` : `${s}:00`;
+                }
+                return new Date(s).getTime();
+              };
+
+              const dateValue = normalizeDate(orderValue);
               if (!isNaN(dateValue)) {
                 if (typedFilter.from) {
-                  const fromDate = new Date(typedFilter.from).getTime();
-                  if (dateValue < fromDate) { matchesFunnel = false; break; }
+                  const fromDate = normalizeDate(typedFilter.from, false);
+                  if (!isNaN(fromDate) && dateValue < fromDate) { matchesFunnel = false; break; }
                 }
                 if (typedFilter.to) {
-                  const toDate = new Date(typedFilter.to).getTime();
-                  if (dateValue > toDate + 86400000) { matchesFunnel = false; break; }
+                  const toDate = normalizeDate(typedFilter.to, true);
+                  if (!isNaN(toDate) && dateValue > toDate) { matchesFunnel = false; break; }
                 }
               } else {
                 matchesFunnel = false; break;
@@ -904,6 +921,89 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
 
     return filtered;
   }, [serviceOrders, searchQuery, activeFilters, userRole, roleId, getVal, currentUserOrgId]);
+
+  const groupableColumns: Array<GroupableColumn<ServiceOrder>> = useMemo(
+    () => [
+      {
+        key: 'billingType',
+        label: 'Billing Type',
+        value: (row) => {
+          const type = resolveBillingType(row.generationType);
+          return type === 'prepaid' ? 'Prepaid' : type === 'postpaid' ? 'Postpaid' : '(Unspecified)';
+        },
+      },
+      {
+        key: 'supportStatus',
+        label: 'Support Status',
+        value: (row) => row.supportStatus || '(Blank)',
+      },
+      {
+        key: 'visitStatus',
+        label: 'Visit Status',
+        value: (row) => row.visitStatus || '(Blank)',
+      },
+      {
+        key: 'assignedEmail',
+        label: 'Assigned Tech',
+        value: (row) => resolveUserDisplayName(row.assignedEmail, userDirectory, '(Unassigned)'),
+      },
+      {
+        key: 'concern',
+        label: 'Concern',
+        value: (row) => row.concern || '(Blank)',
+      },
+      {
+        key: 'repairCategory',
+        label: 'Repair Category',
+        value: (row) => row.repairCategory || '(Blank)',
+      },
+      {
+        key: 'barangay',
+        label: 'Barangay',
+        value: (row) => row.barangay || '(Blank)',
+      },
+      {
+        key: 'city',
+        label: 'City',
+        value: (row) => row.city || '(Blank)',
+      },
+      {
+        key: 'region',
+        label: 'Region',
+        value: (row) => row.region || '(Blank)',
+      },
+      {
+        key: 'requestedBy',
+        label: 'Requested By',
+        value: (row) => resolveUserDisplayName(row.requestedBy, userDirectory, '(Blank)'),
+      },
+      {
+        key: 'modifiedBy',
+        label: 'Modified By',
+        value: (row) => resolveUserDisplayName(row.modifiedBy, userDirectory, '(Blank)'),
+      },
+    ],
+    [userDirectory]
+  );
+
+  const grouping = useViewOptions('service_orders', groupableColumns, globalFilteredServiceOrders);
+  const [isViewOptionsModalOpen, setIsViewOptionsModalOpen] = useState(false);
+
+  // Invalidate selected location when group levels change
+  const groupSignature = grouping.options.groupBy.join('|');
+  useEffect(() => {
+    setSelectedLocation('all');
+  }, [groupSignature]);
+
+  const sortSignature = JSON.stringify(grouping.sortRules);
+  useEffect(() => {
+    if (!grouping.loaded || grouping.sortRules.length === 0) return;
+    const first = grouping.sortRules[0];
+    if (first) {
+      setSortColumn(first.key);
+      setSortDirection(first.direction);
+    }
+  }, [grouping.loaded, sortSignature]);
 
   const locationItems = useMemo(() => {
     const tree: Record<string, {
@@ -994,37 +1094,39 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
   }, [globalFilteredServiceOrders, barangays]);
 
   const filteredServiceOrders = useMemo(() => {
-    let filtered = globalFilteredServiceOrders.filter(serviceOrder => {
-      if (selectedLocation === 'all') return true;
+    let filtered = grouping.isGrouped
+      ? grouping.filterByGroup(globalFilteredServiceOrders, selectedLocation)
+      : globalFilteredServiceOrders.filter(serviceOrder => {
+          if (selectedLocation === 'all') return true;
 
-      // Node ids are the path down the sidebar tree:
-      // gen:<billingType>[:status:<category>[:visit:<visitKey>[:brgy:<barangay>]]]
-      if (selectedLocation.startsWith('gen:')) {
-        const parts = selectedLocation.split(':');
+          // Node ids are the path down the sidebar tree:
+          // gen:<billingType>[:status:<category>[:visit:<visitKey>[:brgy:<barangay>]]]
+          if (selectedLocation.startsWith('gen:')) {
+            const parts = selectedLocation.split(':');
 
-        if (resolveBillingType(serviceOrder.generationType) !== parts[1]) return false;
+            if (resolveBillingType(serviceOrder.generationType) !== parts[1]) return false;
 
-        if (parts.length > 2 && parts[2] === 'status') {
-          if (resolveStatusCategory(serviceOrder.supportStatus) !== parts[3]) return false;
+            if (parts.length > 2 && parts[2] === 'status') {
+              if (resolveStatusCategory(serviceOrder.supportStatus) !== parts[3]) return false;
 
-          if (parts.length > 4 && parts[4] === 'visit') {
-            if (resolveVisitKey(serviceOrder.visitStatus) !== parts[5]) return false;
+              if (parts.length > 4 && parts[4] === 'visit') {
+                if (resolveVisitKey(serviceOrder.visitStatus) !== parts[5]) return false;
 
-            if (parts.length > 6 && parts[6] === 'brgy') {
-              const brgyName = parts[7];
-              const address = (serviceOrder.fullAddress || '').toLowerCase();
-              let matchedBrgy = 'Unknown';
-              const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
-              if (foundBrgy) matchedBrgy = foundBrgy.barangay;
+                if (parts.length > 6 && parts[6] === 'brgy') {
+                  const brgyName = parts[7];
+                  const address = (serviceOrder.fullAddress || '').toLowerCase();
+                  let matchedBrgy = 'Unknown';
+                  const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
+                  if (foundBrgy) matchedBrgy = foundBrgy.barangay;
 
-              if (matchedBrgy !== brgyName) return false;
+                  if (matchedBrgy !== brgyName) return false;
+                }
+              }
             }
+            return true;
           }
-        }
-        return true;
-      }
-      return false;
-    });
+          return false;
+        });
 
     filtered.sort((a, b) => {
       // 1. Prioritize 'timestamp' as requested, fallback to 'createdAt'
@@ -1052,8 +1154,8 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         // Special handling for date columns to ensure accurate chronological sorting
         const dateFields = ['timestamp', 'modifiedDate', 'dateInstalled', 'startTime', 'endTime', 'modified_at', 'created_at', 'rawUpdatedAt'];
         if (dateFields.includes(sortColumn)) {
-          const timeA = aValue ? new Date(aValue).getTime() : 0;
-          const timeB = bValue ? new Date(bValue).getTime() : 0;
+          const timeA = aValue ? new Date(String(aValue).replace(' ', 'T')).getTime() : 0;
+          const timeB = bValue ? new Date(String(bValue).replace(' ', 'T')).getTime() : 0;
           
           if (!isNaN(timeA) && !isNaN(timeB)) {
             if (timeA !== timeB) {
@@ -1074,7 +1176,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     }
 
     return filtered;
-  }, [globalFilteredServiceOrders, selectedLocation, sortColumn, sortDirection, barangays, getVal]);
+  }, [globalFilteredServiceOrders, grouping, selectedLocation, sortColumn, sortDirection, barangays, getVal]);
 
   // Derived paginated records
   const paginatedServiceOrders = useMemo(() => {
@@ -1632,8 +1734,24 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                 {locationItems.total}
               </span>
             </button>
-            {/* Billing Type Level */}
-            {locationItems.items.map((billingType) => {
+            {grouping.isGrouped ? (
+              <GroupTree
+                nodes={grouping.tree}
+                selectedId={selectedLocation}
+                onSelect={(id) => {
+                  setSelectedLocation(id);
+                  if (isMobile) {
+                    setMobileViewMode('list');
+                  }
+                }}
+                expanded={expandedLocations}
+                onToggleExpand={toggleLocationExpansion}
+                isDarkMode={isDarkMode}
+                accent={colorPalette?.primary || '#7c3aed'}
+              />
+            ) : (
+              /* Billing Type Level */
+              locationItems.items.map((billingType) => {
               const isBillingTypeExpanded = expandedLocations.has(billingType.id);
 
               const getStatusColor = (val: string) => {
@@ -1828,12 +1946,35 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                   })}
                 </div>
               );
-            })}
+            })
+          )}
           </div>
 
-          {/* View Records Button for mobile */}
-          {isMobile && (
-            <div className={`p-4 border-t flex-shrink-0 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+          {/* View Options & Mobile controls */}
+          <div className={`p-3 border-t flex-shrink-0 space-y-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+            <button
+              onClick={() => setIsViewOptionsModalOpen(true)}
+              title="Group by one or more columns, set the sort order, and colour each value"
+              className={`w-full flex items-center justify-center gap-2 py-2 px-3 rounded border text-xs font-medium transition-colors ${
+                isDarkMode
+                  ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              View Options
+              {grouping.levels.length > 0 && (
+                <span
+                  className="text-[10px] font-bold px-1.5 rounded text-white"
+                  style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                >
+                  {grouping.levels.length}
+                </span>
+              )}
+            </button>
+
+            {/* View Records Button for mobile */}
+            {isMobile && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1844,8 +1985,8 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
               >
                 View Records
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Resize Handle for desktop */}
           {!isMobile && (
@@ -2583,6 +2724,21 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
           </div>
         </div>
       )}
+
+      {/* View Options Modal */}
+      <ViewOptionsModal
+        isOpen={isViewOptionsModalOpen}
+        onClose={() => setIsViewOptionsModalOpen(false)}
+        isDarkMode={isDarkMode}
+        colorPalette={colorPalette}
+        title="Service Orders"
+        columns={groupableColumns}
+        options={grouping.options}
+        distinctValues={grouping.distinctValues}
+        colorFor={grouping.colorFor}
+        onSave={grouping.save}
+        onReset={grouping.reset}
+      />
 
       <SessionExpiredModal 
         isOpen={showSessionExpired} 

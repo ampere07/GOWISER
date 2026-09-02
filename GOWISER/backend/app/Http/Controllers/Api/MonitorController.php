@@ -835,15 +835,17 @@ class MonitorController extends Controller
                     // counting $allTasks directly would let an abandoned task from weeks ago
                     // inflate today's figure. Tasks with no start_time are excluded: they are
                     // assigned but never begun, so nothing was done.
-                    $tasksInWindow = $allTasks->filter(function ($t) use ($viewStart, $timeBound) {
+                    $completedTaskStatuses = ['done', 'completed', 'resolved'];
+                    $tasksInWindow = $allTasks->filter(function ($t) use ($viewStart, $timeBound, $completedTaskStatuses) {
                         if (empty($t->start_time)) {
                             return false;
                         }
                         try {
                             $taskStart = \Carbon\Carbon::parse($t->start_time, 'Asia/Manila');
+                            $isCompleted = in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
                             $taskEnd = $t->end_time
                                 ? \Carbon\Carbon::parse($t->end_time, 'Asia/Manila')
-                                : $timeBound->copy();
+                                : ($isCompleted ? $taskStart->copy() : $timeBound->copy());
                         } catch (\Throwable $ex) {
                             return false;
                         }
@@ -860,7 +862,6 @@ class MonitorController extends Controller
                     // to `status` by the queries above. 'resolved' and 'completed' are accepted
                     // next to 'done' so a status written in either vocabulary still counts.
                     // 'failed' never reaches here — $allTasks drops it.
-                    $completedTaskStatuses = ['done', 'completed', 'resolved'];
                     $completedInWindow = $tasksInWindow->filter(function ($t) use ($completedTaskStatuses) {
                         return in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
                     });
@@ -937,7 +938,10 @@ class MonitorController extends Controller
                     $availableTimeStr = "{$aHours}h {$aMins}m";
 
                     // 3. Status Logic
-                    $workingTask = $allTasks->filter(function($t) { return !empty($t->start_time) && empty($t->end_time); })->last();
+                    $workingTask = $allTasks->filter(function($t) use ($completedTaskStatuses) {
+                        $isCompleted = in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
+                        return !empty($t->start_time) && empty($t->end_time) && !$isCompleted;
+                    })->last();
                     $isPullout = false;
                     if ($workingTask) {
                         $status = 'Working';

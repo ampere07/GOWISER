@@ -877,6 +877,59 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
+            // ── Technician availability guard ─────────────────────────────────
+            // Keep start_time/end_time consistent so a technician is never left
+            // flagged as "busy" on a job that has effectively ended.
+            //   • Reassigning the order (assigned_email changed) resets both timers
+            //     — the new technician starts fresh.
+            //   • Once a STARTED job leaves the "In Progress" state (support_status
+            //     Failed, or any visit_status other than In Progress) it must carry
+            //     an end_time.
+            // start_time/end_time are stored as Asia/Manila wall-clock to match the
+            // mobile timer, so we stamp Manila time here — bare now() is UTC here.
+            $assignedEmailChanged = array_key_exists('assigned_email', $data)
+                && (string) $data['assigned_email'] !== (string) ($serviceOrder->assigned_email ?? '');
+
+            if ($assignedEmailChanged) {
+                $data['start_time'] = null;
+                $data['end_time']   = null;
+            } else {
+                $effectiveSupport = strtolower(trim((string) ($request->has('support_status')
+                    ? $request->input('support_status')
+                    : ($serviceOrder->support_status ?? ''))));
+                $effectiveVisit = strtolower(trim((string) ($request->has('visit_status')
+                    ? $request->input('visit_status')
+                    : ($serviceOrder->visit_status ?? ''))));
+
+                $visitInProgress = in_array($effectiveVisit, ['in progress', 'in-progress', 'inprogress'], true);
+                $leftInProgress  = ($effectiveSupport === 'failed' || $effectiveSupport === 'resolved')
+                    || ($effectiveVisit !== '' && !$visitInProgress);
+
+                // Auto-synchronize visit_status when support_status moves to terminal and visit_status was not explicitly given
+                if ($effectiveSupport === 'failed' && !array_key_exists('visit_status', $data) && $visitInProgress) {
+                    $data['visit_status'] = 'Failed';
+                } elseif ($effectiveSupport === 'resolved' && !array_key_exists('visit_status', $data) && $visitInProgress) {
+                    $data['visit_status'] = null;
+                }
+
+                $startTimePresent = array_key_exists('start_time', $data)
+                    ? !empty($data['start_time'])
+                    : !empty($serviceOrder->start_time);
+                // A payload that mentions end_time (a real timestamp OR an explicit
+                // null to (re)open the timer, as the mobile start/restart does) is
+                // authoritative — never override it.
+                $callerManagesEndTime = array_key_exists('end_time', $data);
+
+                if ($leftInProgress && $startTimePresent && !$callerManagesEndTime && empty($serviceOrder->end_time)) {
+                    $data['end_time'] = \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s');
+                }
+
+                if ($effectiveVisit === 'done' && !array_key_exists('date_installed', $data) && empty($serviceOrder->date_installed)) {
+                    $data['date_installed'] = $data['end_time'] ?? ($serviceOrder->end_time ?? \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s'));
+                }
+            }
+            // ──────────────────────────────────────────────────────────────────
+
             // A service order coming back from Failed or Reschedule is a NEW visit, so the
             // timings the previous attempt left on the row are cleared. Folded into $data so
             // the reset lands in the same UPDATE as the status change and is picked up by the
@@ -1185,14 +1238,15 @@ class ServiceOrderApiController extends Controller
 
             // Trigger Migration if repair category is 'Migrate', 'Relocate', or 'Transfer LCP/NAP/PORT' and visit status is 'Done'
             $migrationStatus = null;
-            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port'];
+            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port', 'transfer lcp nap port', 'transfer lcp nap vlan', 'transfer lcp / nap / port', 'update vlan'];
             if (in_array($repairCategory, $relocateCategories) && $visitStatus === 'done' && !$isAlreadyMigrationDone) {
                 $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
                 if ($billingAccount) {
                     \Log::info('Triggering auto-migration for Service Order', [
-                        'account_no' => $serviceOrder->account_no
+                        'account_no' => $serviceOrder->account_no,
+                        'repair_category' => $repairCategory
                     ]);
-                    $migrationStatus = $this->attemptMigration($billingAccount, $repairCategory, $updatedByUser, $organizationId);
+                    $migrationStatus = $this->attemptMigration($billingAccount, $repairCategory, $updatedByUser, $organizationId, $serviceOrder, $request);
 
                     // Update job_orders table with new LCPNAP, port, and vlan for relocation categories
                     $newLcpnap = $request->input('new_lcpnap');
@@ -2122,29 +2176,38 @@ class ServiceOrderApiController extends Controller
         }
     }
 
-    private function attemptMigration($billingAccount, $repairCategory = null, $updatedByUser = 'System', ?int $organizationId = null): string
-    {
+    private function attemptMigration(
+        $billingAccount,
+        $repairCategory = null,
+        $updatedByUser = 'System',
+        ?int $organizationId = null,
+        $serviceOrder = null,
+        ?Request $request = null
+    ): string {
         try {
             $accountNo = $billingAccount->account_no;
 
-            \Log::info('[API SERVICE ORDER MIGRATION] Force starting for account: ' . $accountNo);
+            \Log::info('[API SERVICE ORDER MIGRATION] Starting credential migration for account: ' . $accountNo, [
+                'repair_category' => $repairCategory,
+                'updated_by' => $updatedByUser
+            ]);
 
-            // Get data for username generation
+            // Get customer & technical details
             $fullInfo = DB::table('billing_accounts')
                 ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
                 ->leftJoin('technical_details', 'billing_accounts.id', '=', 'technical_details.account_id')
                 ->where('billing_accounts.account_no', $accountNo)
                 ->select(
-                'customers.first_name',
-                'customers.middle_initial',
-                'customers.last_name',
-                'customers.contact_number_primary as mobile_number',
-                'customers.desired_plan',
-                'technical_details.lcp',
-                'technical_details.nap',
-                'technical_details.port',
-                'technical_details.username as pppoe_username'
-            )
+                    'customers.first_name',
+                    'customers.middle_initial',
+                    'customers.last_name',
+                    'customers.contact_number_primary as mobile_number',
+                    'customers.desired_plan',
+                    'technical_details.lcp',
+                    'technical_details.nap',
+                    'technical_details.port',
+                    'technical_details.username as pppoe_username'
+                )
                 ->first();
 
             $oldUsername = $fullInfo->pppoe_username ?? null;
@@ -2156,92 +2219,97 @@ class ServiceOrderApiController extends Controller
 
             \Log::info('[API SERVICE ORDER MIGRATION] Found old username: ' . $oldUsername);
 
-            // SPECIAL CASE: Transfer LCP/NAP/PORT, Migrate & Reactivation
-            $normalizedCategory = $repairCategory ? strtolower(trim($repairCategory)) : '';
-            if ($normalizedCategory === 'transfer lcp/nap/port' || $normalizedCategory === 'migrate') {
-                \Log::info("[API SERVICE ORDER] Handling {$repairCategory} via updateCredentials (rename in place)");
+            // Determine LCP, NAP, PORT from request, service order, or fallback to fullInfo
+            $newLcp = $request?->input('new_lcp') ?? $request?->input('lcp') ?? $serviceOrder?->new_lcp ?? null;
+            $newNap = $request?->input('new_nap') ?? $request?->input('nap') ?? $serviceOrder?->new_nap ?? null;
+            $newPort = $request?->input('new_port') ?? $request?->input('port') ?? $serviceOrder?->new_port ?? null;
+            $newLcpNap = $request?->input('new_lcpnap') ?? $serviceOrder?->new_lcpnap ?? null;
 
-                // 1. Generate new username (keep existing password)
-                $pppoeService = new PppoeUsernameService();
-                $customerData = (array)$fullInfo;
-                $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $lcp = $newLcp;
+            $nap = $newNap;
 
-                \Log::info("[API SERVICE ORDER] Renaming username: '{$oldUsername}' -> '{$newUsername}'");
-
-                // 2. Update Credentials with retry (3 attempts, then queue)
-                $credParams = [
-                    'accountNumber' => $accountNo,
-                    'username' => $oldUsername,
-                    'newUsername' => $newUsername,
-                    'newPassword' => null,
-                    'updatedBy' => $updatedByUser
-                ];
-                $radiusSuccess = false;
-                $lastRadiusError = '';
-                for ($attempt = 1; $attempt <= 2; $attempt++) {
-                    try {
-                        $radiusOps = app(ManualRadiusOperationsService::class);
-                        $credResult = $radiusOps->updateCredentials($credParams);
-                        if (($credResult['status'] ?? '') === 'success') {
-                            $radiusSuccess = true;
-                            \Log::info("[API SERVICE ORDER] Username renamed successfully on attempt {$attempt}");
-                            break;
-                        }
-                        $lastRadiusError = $credResult['message'] ?? 'Operation returned failure';
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 failed: {$lastRadiusError}");
-                    } catch (\Exception $radEx) {
-                        $lastRadiusError = $radEx->getMessage();
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 exception: {$lastRadiusError}");
-                    }
-                    if ($attempt < 2) sleep(1);
+            if ((empty($lcp) || empty($nap)) && !empty($newLcpNap)) {
+                $lcpnapData = DB::table('lcpnap_locations')
+                    ->where('lcpnap_name', trim($newLcpNap))
+                    ->orWhere('id', trim($newLcpNap))
+                    ->first();
+                if ($lcpnapData) {
+                    $lcp = $lcp ?: trim($lcpnapData->lcp ?? '');
+                    $nap = $nap ?: trim($lcpnapData->nap ?? '');
                 }
-                if ($radiusSuccess) {
-                    return 'success';
-                }
-                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All 3 attempts failed. Queuing for retry.');
-                $this->trackRadiusQueue([
-                    'organization_id' => $organizationId ?? null,
-                    'source_type' => 'service_order',
-                    'source_id' => 0,
-                    'account_no' => $accountNo,
-                    'operation' => 'update_credentials',
-                    'params' => $credParams,
-                    'last_error' => $lastRadiusError,
-                    'created_by' => $updatedByUser,
-                ]);
-                return 'radius_failed';
             }
 
-            // Generate new username using the same logic as JobOrderController
-            $pppoeService = new PppoeUsernameService();
-            $customerData = (array)$fullInfo;
-            $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $lcp = $lcp ?: ($fullInfo->lcp ?? '');
+            $nap = $nap ?: ($fullInfo->nap ?? '');
+            $port = $newPort ?: ($fullInfo->port ?? '');
 
-            \Log::info('[API SERVICE ORDER MIGRATION] Generated new username', [
-                'old' => $oldUsername,
-                'new' => $newUsername
+            // Determine technician completion timestamp
+            $completionTimestamp = $request?->input('end_time')
+                ?: ($serviceOrder?->end_time
+                ?: ($request?->input('date_installed')
+                ?: ($serviceOrder?->date_installed
+                ?: \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s'))));
+
+            // Ensure timestamp has time portion
+            if (strlen(trim((string)$completionTimestamp)) <= 10) {
+                try {
+                    $completionTimestamp = \Carbon\Carbon::parse($completionTimestamp)
+                        ->setTimeFrom(\Carbon\Carbon::now('Asia/Manila'))
+                        ->format('Y-m-d H:i:s');
+                } catch (\Throwable $ex) {
+                    $completionTimestamp = \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s');
+                }
+            }
+
+            $customerData = [
+                'first_name' => $fullInfo->first_name ?? '',
+                'middle_initial' => $fullInfo->middle_initial ?? '',
+                'last_name' => $fullInfo->last_name ?? '',
+                'mobile_number' => $fullInfo->mobile_number ?? '',
+                'desired_plan' => $fullInfo->desired_plan ?? '',
+                'lcp' => trim($lcp ?? ''),
+                'nap' => trim($nap ?? ''),
+                'port' => trim($port ?? ''),
+                'date_installed' => $completionTimestamp,
+                'custom_password' => $request?->input('custom_password') ?? null,
+                'tech_input_username' => $request?->input('tech_input_username') ?? null,
+            ];
+
+            $pppoeService = new PppoeUsernameService();
+            $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $newPassword = $pppoeService->generatePassword($customerData);
+
+            \Log::info('[API SERVICE ORDER MIGRATION] Generated new credentials', [
+                'old_username' => $oldUsername,
+                'new_username' => $newUsername,
+                'password_length' => strlen($newPassword),
+                'completion_timestamp' => $completionTimestamp,
+                'lcp' => $lcp,
+                'nap' => $nap,
+                'port' => $port,
             ]);
 
-            if ($oldUsername === $newUsername) {
-                \Log::info('[API SERVICE ORDER MIGRATION SKIP] Username did not change');
-                return 'no_change';
+            $normalizedCategory = $repairCategory ? strtolower(trim(str_replace(['/', '_'], ' ', $repairCategory))) : '';
+            $targetCategories = ['relocate', 'relocate router', 'transfer lcp nap vlan', 'transfer lcp nap port', 'migrate', 'update vlan'];
+            $isTargetRadiusCategory = false;
+            foreach ($targetCategories as $tc) {
+                if (str_contains($normalizedCategory, $tc) || $normalizedCategory === $tc) {
+                    $isTargetRadiusCategory = true;
+                    break;
+                }
             }
 
-            // RADIUS RENAME LOGIC — same approach as Transfer LCP/NAP/PORT:
-            // updateCredentials does disable → kill session → PATCH name → re-enable in place.
-            // No delete + recreate — that was wiping the user and breaking the connection.
-            $targetCategories = ['relocate', 'relocate router', 'transfer lcp nap vlan'];
-
-            if (in_array($normalizedCategory, $targetCategories)) {
-                \Log::info("[API SERVICE ORDER] Handling {$normalizedCategory} via updateCredentials (rename in place)");
+            if ($isTargetRadiusCategory || $oldUsername !== $newUsername) {
+                \Log::info("[API SERVICE ORDER] Handling {$repairCategory} via updateCredentials (rename in place with new password)");
 
                 $credParams = [
                     'accountNumber' => $accountNo,
                     'username' => $oldUsername,
                     'newUsername' => $newUsername,
-                    'newPassword' => null,
+                    'newPassword' => $newPassword,
                     'updatedBy' => $updatedByUser
                 ];
+
                 $radiusSuccess = false;
                 $lastRadiusError = '';
                 for ($attempt = 1; $attempt <= 2; $attempt++) {
@@ -2250,25 +2318,27 @@ class ServiceOrderApiController extends Controller
                         $credResult = $radiusOps->updateCredentials($credParams);
                         if (($credResult['status'] ?? '') === 'success') {
                             $radiusSuccess = true;
-                            \Log::info("[API SERVICE ORDER MIGRATION] Username renamed on attempt {$attempt}");
+                            \Log::info("[API SERVICE ORDER MIGRATION] Credentials updated successfully on attempt {$attempt}");
                             break;
                         }
                         $lastRadiusError = $credResult['message'] ?? 'Operation returned failure';
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 failed: {$lastRadiusError}");
+                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/2 failed: {$lastRadiusError}");
                     } catch (\Exception $radEx) {
                         $lastRadiusError = $radEx->getMessage();
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 exception: {$lastRadiusError}");
+                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/2 exception: {$lastRadiusError}");
                     }
                     if ($attempt < 2) sleep(1);
                 }
+
                 if ($radiusSuccess) {
                     return 'success';
                 }
-                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All 3 attempts failed. Queuing for retry.');
+
+                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All attempts failed. Queuing for retry.');
                 $this->trackRadiusQueue([
                     'organization_id' => $organizationId ?? null,
                     'source_type' => 'service_order',
-                    'source_id' => 0,
+                    'source_id' => $serviceOrder->id ?? 0,
                     'account_no' => $accountNo,
                     'operation' => 'update_credentials',
                     'params' => $credParams,
@@ -2276,34 +2346,35 @@ class ServiceOrderApiController extends Controller
                     'created_by' => $updatedByUser,
                 ]);
                 return 'radius_failed';
-            }
-            else {
-                // For other categories, DB-only update (no RADIUS change needed)
+            } else {
+                // For other categories, DB-only update
                 \Log::info('[API SERVICE ORDER MIGRATION PROCEED] Updating database credentials (DB ONLY) for ' . $oldUsername);
 
                 DB::table('technical_details')
                     ->where('account_id', $billingAccount->id)
                     ->update([
-                    'username' => $newUsername,
-                    'updated_at' => now(),
-                    'updated_by' => $updatedByUser
-                ]);
+                        'username' => $newUsername,
+                        'updated_at' => now(),
+                        'updated_by' => $updatedByUser
+                    ]);
 
-                DB::table('job_orders')
-                    ->where('account_id', $billingAccount->id)
-                    ->update([
+                $joUpdate = [
                     'pppoe_username' => $newUsername,
                     'username' => $newUsername,
                     'updated_at' => now()
-                ]);
+                ];
+                if (!empty($newPassword)) {
+                    $joUpdate['pppoe_password'] = $newPassword;
+                }
+
+                DB::table('job_orders')
+                    ->where('account_id', $billingAccount->id)
+                    ->update($joUpdate);
 
                 \Log::info('[API SERVICE ORDER MIGRATION SUCCESS] DB Only migration completed');
                 return 'success';
             }
-
-
-        }
-        catch (\Exception $e) {
+        } catch (\Exception $e) {
             \Log::error('[API SERVICE ORDER MIGRATION EXCEPTION] ' . $e->getMessage());
             return 'exception';
         }

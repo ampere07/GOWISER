@@ -1909,6 +1909,15 @@ class AutoDisconnectService
 
             // Monthly fee comes from the account's plan price.
             $monthlyFee = floatval($billingAccount->plan->price ?? 0);
+            if ($monthlyFee <= 0 && !empty($billingAccount->customer?->desired_plan)) {
+                $desiredPlan = (string) $billingAccount->customer->desired_plan;
+                $extractedName = $this->extractPlanName($desiredPlan);
+                $fallbackPlan = DB::table('plan_list')->where('plan_name', $extractedName)->first();
+                if ($fallbackPlan && floatval($fallbackPlan->price) > 0) {
+                    $monthlyFee = floatval($fallbackPlan->price);
+                }
+            }
+
             if ($monthlyFee <= 0) {
                 $this->writeLog("  [SKIP] Monthly fee (plan price) unavailable or zero");
                 $skipped++;
@@ -2117,6 +2126,26 @@ class AutoDisconnectService
                 $this->writeLog("[LOCK] Failed to release lock: " . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Extract clean plan name from customers.desired_plan string
+     */
+    protected function extractPlanName(string $desiredPlan): string
+    {
+        // First handle " - " separator (e.g., "50Mbps - P800.00" -> "50Mbps")
+        if (strpos($desiredPlan, ' - ') !== false) {
+            $parts = explode(' - ', $desiredPlan);
+            $desiredPlan = trim($parts[0]);
+        }
+
+        // Then handle space separator (e.g., "SWIFT 1000" -> "SWIFT")
+        if (strpos($desiredPlan, ' ') !== false) {
+            $parts = explode(' ', $desiredPlan);
+            return trim($parts[0]);
+        }
+
+        return trim($desiredPlan);
     }
 }
 
