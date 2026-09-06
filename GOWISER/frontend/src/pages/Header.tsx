@@ -19,8 +19,8 @@ interface HeaderProps {
 /**
  * How each notification kind presents itself.
  *
- * Lookup tables rather than nested ternaries: the feed has grown to four kinds and
- * adding a fifth should be one row here, not another branch in three places.
+ * Lookup tables rather than nested ternaries: the feed has grown to five kinds and
+ * adding a sixth should be one row here, not another branch in three places.
  * `application` is the fallback because it is the oldest kind and the only one that
  * an older payload can arrive without a `type` at all.
  */
@@ -32,6 +32,12 @@ const NOTIFICATION_BADGES: Record<string, { label: string; className: string }> 
   service_order_done: {
     label: 'Service Done',
     className: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  // Rose, not the sky of a plain completed visit: this one moved money onto a
+  // customer's balance and is worth picking out of a run of finished visits.
+  service_order_charge_claimed: {
+    label: 'Charge Claimed',
+    className: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400',
   },
   // Amber: the one kind that asks the reader to decide something rather than
   // reporting something that already happened.
@@ -63,6 +69,27 @@ const ATTENTION_ROWS: { key: keyof NavBadgeCounts; label: string; section: strin
   { key: 'transaction', label: 'Transactions', section: 'transaction-list' },
 ];
 
+/**
+ * Identity of a feed row, for dedupe and for React keys.
+ *
+ * Kind AND id, because ids are only unique within a kind — one service order
+ * legitimately produces both a `service_order_done` and a
+ * `service_order_charge_claimed` row carrying its own id, and an id-only key
+ * would silently discard the second one as a duplicate of the first.
+ */
+const notificationKeyFor = (notification: Pick<AppNotification, 'id' | 'type'>) =>
+  `${notification.type || 'application'}-${notification.id}`;
+
+/** Toast severity per kind. 'info' is the fallback for anything unmapped. */
+const TOAST_TONES: Record<string, 'info' | 'success' | 'warning' | 'error'> = {
+  job_order_done: 'success',
+  // Warning, not success: a claimed charge is money added to a customer's balance
+  // and may want a second look, so it should not read as a job well done.
+  service_order_charge_claimed: 'warning',
+};
+
+const toastToneFor = (type?: string) => TOAST_TONES[type || ''] ?? 'info';
+
 const badgeLabelFor = (type?: string) => NOTIFICATION_BADGES[type || 'application']?.label ?? 'Notification';
 const badgeStyleFor = (type?: string) =>
   (NOTIFICATION_BADGES[type || 'application'] ?? NOTIFICATION_BADGES.application).className;
@@ -75,6 +102,12 @@ const summaryFor = (notification: AppNotification): string => {
     case 'service_order_done':
       // The concern, so what the visit was about is visible without opening it.
       return notification.plan_name ? `Visit done · ${notification.plan_name}` : 'Completed service visit';
+    case 'service_order_charge_claimed':
+      // Amount and claimant: the two things checked before deciding whether the
+      // charge needs a second look. plan_name carries the formatted amount.
+      return notification.technician
+        ? `Service charge ${notification.plan_name} · ${notification.technician}`
+        : `Service charge ${notification.plan_name}`;
     case 'transaction_revert':
       // The amount, so the size of what is being undone is visible without opening it.
       return `Revert requested · ${notification.plan_name}`;
@@ -98,7 +131,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
   const notificationRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
   const previousCountRef = useRef(0);
-  const previousNotificationIdsRef = useRef<Set<number>>(new Set());
+  const previousNotificationIdsRef = useRef<Set<string>>(new Set());
   const [toastNotification, setToastNotification] = useState<AppNotification | null>(null);
 
   const convertGoogleDriveUrl = (url: string): string => {
@@ -260,15 +293,15 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }
 
     // Check if we already have this notification to avoid duplicates
-    if (previousNotificationIdsRef.current.has(notification.id)) {
+    if (previousNotificationIdsRef.current.has(notificationKeyFor(notification))) {
       return;
     }
 
     setNotifications(prev => {
       // Avoid duplicates again just in case of race conditions
-      if (prev.some(n => n.id === notification.id)) return prev;
+      if (prev.some(n => notificationKeyFor(n) === notificationKeyFor(notification))) return prev;
       const updated = [notification, ...prev].slice(0, 15);
-      previousNotificationIdsRef.current = new Set(updated.map(n => n.id));
+      previousNotificationIdsRef.current = new Set(updated.map(notificationKeyFor));
       return updated;
     });
 
@@ -305,17 +338,45 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
       });
     };
 
+    /**
+     * A technician claimed a service charge.
+     *
+     * The socket payload is already the same shape the consolidated feed returns,
+     * so `title`/`message` are taken as sent rather than rebuilt here — the desktop
+     * notification then reads identically whether it arrived over the socket or was
+     * found by the polling fallback.
+     */
+    const handleServiceChargeUpdate = (data: any) => {
+      handleNewNotification({
+        id: data.id,
+        type: 'service_order_charge_claimed',
+        customer_name: data.customer_name,
+        plan_name: data.plan_name,
+        technician: data.technician ?? null,
+        timestamp: data.timestamp || Date.now(),
+        formatted_date: data.formatted_date || 'Just now',
+        title: data.title || 'Service Charge Claimed',
+        message: data.message || `${data.customer_name} - ${data.plan_name}`
+      });
+    };
+
     const appChannel = pusher.subscribe('applications');
     const jobChannel = pusher.subscribe('job-orders');
+    // 'service-charges', not the shared 'service-orders': other pages unsubscribe
+    // that one on unmount, which would silently drop this binding.
+    const serviceChannel = pusher.subscribe('service-charges');
 
     appChannel.bind('new-application', handleSocketUpdate);
     jobChannel.bind('job-order-done', handleJobDoneUpdate);
+    serviceChannel.bind('service-charge-claimed', handleServiceChargeUpdate);
 
     return () => {
       appChannel.unbind('new-application', handleSocketUpdate);
       jobChannel.unbind('job-order-done', handleJobDoneUpdate);
+      serviceChannel.unbind('service-charge-claimed', handleServiceChargeUpdate);
       pusher.unsubscribe('applications');
       pusher.unsubscribe('job-orders');
+      pusher.unsubscribe('service-charges');
     };
   }, []);
 
@@ -340,7 +401,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           previousCountRef.current = filteredData.length;
           setUnreadCount(filteredData.length);
           setNotifications(filteredData);
-          previousNotificationIdsRef.current = new Set(filteredData.map(n => n.id));
+          previousNotificationIdsRef.current = new Set(filteredData.map(notificationKeyFor));
         }
       } catch (error) {
         console.error('[Fetch] Failed to fetch initial notifications:', error);
@@ -367,7 +428,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
             return !isCleared;
           });
 
-          const newNotifications = filteredData.filter(n => !previousNotificationIdsRef.current.has(n.id));
+          const newNotifications = filteredData.filter(n => !previousNotificationIdsRef.current.has(notificationKeyFor(n)));
 
           if (newNotifications.length > 0) {
             newNotifications.forEach(n => handleNewNotification(n));
@@ -375,7 +436,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
             // If no new ones, just sync the counts and list in case something was removed (though rare)
             setUnreadCount(filteredData.length);
             setNotifications(filteredData);
-            previousNotificationIdsRef.current = new Set(filteredData.map(n => n.id));
+            previousNotificationIdsRef.current = new Set(filteredData.map(notificationKeyFor));
           }
         }
       } catch (error) {
@@ -518,7 +579,8 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
 
     if (notification.type === 'job_order_done') {
       onNavigate('job-order', String(notification.id));
-    } else if (notification.type === 'service_order_done') {
+    } else if (notification.type === 'service_order_done' || notification.type === 'service_order_charge_claimed') {
+      // Both point at the same record — the charge is a field on the service order.
       onNavigate('service-order', String(notification.id));
     } else if (notification.type === 'transaction_revert') {
       onNavigate('transactions-revert', String(notification.id));
@@ -837,7 +899,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                 ) : (
                   notifications.map((notification) => (
                     <div
-                      key={`${notification.type}-${notification.id}`}
+                      key={notificationKeyFor(notification)}
                       onClick={() => handleNotificationClick(notification)}
                       className={`p-4 border-b ${isDarkMode ? 'border-gray-700 hover:bg-gray-750' : 'border-gray-200 hover:bg-gray-50'
                         } transition-colors cursor-pointer`}
@@ -878,7 +940,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           isVisible={true}
           title={toastNotification.title || (toastNotification.type === 'job_order_done' ? 'Job Order Completed' : 'New Application Received')}
           message={toastNotification.message || `${toastNotification.customer_name} - ${toastNotification.plan_name}`}
-          type={toastNotification.type === 'job_order_done' ? 'success' : 'info'}
+          type={toastToneFor(toastNotification.type)}
           onClose={() => setToastNotification(null)}
           onClick={() => {
             setToastNotification(null);

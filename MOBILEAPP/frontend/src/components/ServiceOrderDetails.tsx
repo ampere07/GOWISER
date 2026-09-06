@@ -494,8 +494,32 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     AsyncStorage.setItem(FIELD_ORDER_KEY, JSON.stringify(fieldOrder));
   }, [fieldOrder]);
 
+  const isTechnician = useMemo(
+    () => userRole?.toLowerCase() === 'technician' || String(userRoleId) === '2',
+    [userRole, userRoleId]
+  );
+
+  // Technicians lose edit access once support has marked the order Resolved.
+  const isLockedForTechnician = useMemo(() => {
+    if (!isTechnician) return false;
+    const supportStatus = (
+      (serviceOrder as any).supportStatus ||
+      (serviceOrder as any).support_status ||
+      ''
+    ).toLowerCase().trim();
+    return supportStatus === 'resolved';
+  }, [isTechnician, serviceOrder]);
+
   const handleEditClick = useCallback(() => {
-    if (userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2') {
+    if (isLockedForTechnician) {
+      Alert.alert(
+        'Editing Locked',
+        'This service order has been marked Resolved and can no longer be edited.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    if (isTechnician) {
       if (!isStarted) {
         Alert.alert(
           'Action Required',
@@ -506,7 +530,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
       }
     }
     setIsEditModalOpen(true);
-  }, [isStarted, userRole, userRoleId]);
+  }, [isStarted, isTechnician, isLockedForTechnician]);
 
   const handleCloseEditModal = useCallback(() => setIsEditModalOpen(false), []);
   const handleSaveEdit = useCallback(() => {
@@ -954,7 +978,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
             </Pressable>
           )}
 
-          {userRole !== 'agent' && userRoleId !== 4 && ['in progress', 'reschedule'].includes(serviceOrder.visitStatus?.toLowerCase().trim() || '') && (
+          {userRole !== 'agent' && userRoleId !== 4 && !isLockedForTechnician && ['in progress', 'reschedule'].includes(serviceOrder.visitStatus?.toLowerCase().trim() || '') && (
             <Pressable style={[styles.headerButton, { backgroundColor: colorPalette?.primary || '#7c3aed' }]} onPress={handleEditClick}>
               <Edit width={16} height={16} color="#ffffff" style={styles.headerButtonIcon} />
               <Text style={styles.headerButtonText}>Edit</Text>

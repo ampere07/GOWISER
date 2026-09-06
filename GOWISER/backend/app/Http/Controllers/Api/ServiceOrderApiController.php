@@ -1277,6 +1277,8 @@ class ServiceOrderApiController extends Controller
 
             $updatedServiceOrder = DB::table('service_orders')->where('id', $id)->first();
 
+            $this->broadcastServiceChargeClaimed($serviceOrder, $updatedServiceOrder);
+
             // Compare and log changes to customers, billing_accounts, and technical_details
             $newCustomer = DB::selectOne("SELECT * FROM customers WHERE account_no = ?", [$accountRef]);
             $newBilling = DB::selectOne("SELECT * FROM billing_accounts WHERE account_no = ?", [$accountRef]);
@@ -1463,6 +1465,82 @@ class ServiceOrderApiController extends Controller
                 'message' => 'Failed to log blocked transfer',
                 'error'   => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Announce a service charge the moment a technician claims one.
+     *
+     * Fires on the transition, not on every save: either the visit just completed
+     * carrying a charge, or a charge appeared/changed on a visit that was already
+     * Done. Without the second case a technician who marks the visit Done first and
+     * fills the amount in afterwards would never announce the claim; without the
+     * change comparison every later edit to an unrelated field would re-announce it.
+     *
+     * Compared as floats because service_charge arrives as a decimal string from
+     * the driver — '500.00' and '500' are the same claim and must not look like a
+     * change. Wrapped in its own try/catch for the same reason broadcastJobOrderDone
+     * is: a broadcast transport that is down must not fail the technician's save.
+     */
+    private function broadcastServiceChargeClaimed($before, $after): void
+    {
+        try {
+            if (!$after) {
+                return;
+            }
+
+            $chargeBefore = (float) ($before->service_charge ?? 0);
+            $chargeAfter = (float) ($after->service_charge ?? 0);
+            $wasDone = ($before->visit_status ?? null) === 'Done';
+            $isDone = ($after->visit_status ?? null) === 'Done';
+
+            if (!$isDone || $chargeAfter <= 0) {
+                return;
+            }
+
+            // Half a centavo: the column is decimal(10,2), so anything smaller is
+            // float representation noise rather than a real change to the claim.
+            if ($wasDone && abs($chargeAfter - $chargeBefore) < 0.005) {
+                return;
+            }
+
+            // Same shape the consolidated feed emits, so a row arriving over the
+            // socket and the same row arriving from a later poll are interchangeable.
+            $customer = DB::table('billing_accounts')
+                ->leftJoin('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->where('billing_accounts.account_no', $after->account_no)
+                ->select('customers.first_name', 'customers.last_name')
+                ->first();
+
+            $customerName = $customer
+                ? trim(($customer->first_name ?? '') . ' ' . ($customer->last_name ?? ''))
+                : '';
+
+            $technician = trim((string) ($after->visit_by_user ?? ''));
+            $amount = '₱ ' . number_format($chargeAfter, 2);
+
+            event(new \App\Events\ServiceChargeClaimed([
+                'id' => $after->id,
+                'type' => 'service_order_charge_claimed',
+                'customer_name' => $customerName ?: ($after->account_no ?? 'Unknown account'),
+                'plan_name' => $amount,
+                'technician' => $technician !== '' ? $technician : null,
+                'title' => 'Service Charge Claimed',
+                'message' => ($technician !== '' ? $technician : 'A technician')
+                    . " claimed a {$amount} service charge on service order #{$after->id}",
+                'timestamp' => now()->timestamp,
+                'formatted_date' => now()->format('Y-m-d h:i:s A'),
+                'organization_id' => $after->organization_id ?? null,
+            ]));
+
+            Log::info('Real-time broadcast sent for Service Charge Claimed', [
+                'service_order_id' => $after->id,
+                'service_charge' => $chargeAfter,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Failed to broadcast Service Charge Claimed via Soketi', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

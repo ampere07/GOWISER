@@ -4,7 +4,7 @@
     "slug": "gowiser",
     "owner": "gowiserphs-team",
     "scheme": "gowiser-app",
-    "version": "2.5.60",
+    "version": "2.5.61",
     "orientation": "portrait",
     "icon": "./assets/applogo.png",
     "userInterfaceStyle": "light",

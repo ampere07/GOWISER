@@ -160,7 +160,60 @@ class ConsolidatedNotificationController extends Controller
                     ];
                 });
 
-            // 4. Pending transaction reverts — SUPERADMIN ONLY.
+            // 4. Service charges claimed on a completed visit.
+            //
+            // Deliberately its own kind rather than folded into service_order_done
+            // above: that entry reports the visit finished, this one reports money a
+            // technician added to the customer's balance. A charge is reviewable in a
+            // way a completed visit is not, so it is named as a charge instead of
+            // being something you only discover by opening every finished order.
+            // A charged order therefore produces both entries, on purpose.
+            //
+            // '> 0' rather than a null check: the mobile edit modal posts
+            // parseFloat('0.00') for a field the technician never touched, so
+            // whereNotNull would announce practically every completed visit.
+            $serviceChargeClaims = DB::table('service_orders')
+                ->leftJoin('billing_accounts', 'service_orders.account_no', '=', 'billing_accounts.account_no')
+                ->leftJoin('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->where('service_orders.visit_status', 'Done')
+                ->where('service_orders.service_charge', '>', 0)
+                ->orderBy('service_orders.updated_at', 'desc')
+                ->limit($limit)
+                ->select(
+                    'service_orders.id',
+                    'service_orders.updated_at',
+                    'service_orders.account_no',
+                    'service_orders.service_charge',
+                    'service_orders.visit_by_user',
+                    'customers.first_name',
+                    'customers.last_name'
+                )
+                ->get()
+                ->map(function ($order) {
+                    $updatedAt = Carbon::parse($order->updated_at);
+                    $name = trim(($order->first_name ?? '') . ' ' . ($order->last_name ?? ''));
+                    // visit_by_user is the technician who attended, not whoever last
+                    // saved the row — the claim belongs to the person on site.
+                    $technician = trim((string) ($order->visit_by_user ?? ''));
+                    $amount = '₱ ' . number_format((float) $order->service_charge, 2);
+
+                    return [
+                        'id' => $order->id,
+                        'type' => 'service_order_charge_claimed',
+                        'customer_name' => $name !== '' ? $name : ($order->account_no ?? 'Unknown account'),
+                        // The amount, so the size of the claim is visible without opening it.
+                        'plan_name' => $amount,
+                        'technician' => $technician !== '' ? $technician : null,
+                        'title' => 'Service Charge Claimed',
+                        'message' => ($technician !== '' ? $technician : 'A technician')
+                            . " claimed a {$amount} service charge on service order #{$order->id}",
+                        'timestamp' => $updatedAt->timestamp,
+                        'formatted_date' => $updatedAt->format('Y-m-d h:i:s A'),
+                        'raw_date' => $updatedAt->toIso8601String(),
+                    ];
+                });
+
+            // 5. Pending transaction reverts — SUPERADMIN ONLY.
             //
             // A revert undoes money that was already posted, so only the role that can
             // action one is told about it. Gated on role_id 7 explicitly and failing
@@ -212,7 +265,7 @@ class ConsolidatedNotificationController extends Controller
                 : collect();
 
             // Merge and Sort
-            $all = $applications->concat($jobCompeltions)->concat($serviceCompletions)->concat($reverts)
+            $all = $applications->concat($jobCompeltions)->concat($serviceCompletions)->concat($serviceChargeClaims)->concat($reverts)
                 ->sortByDesc('timestamp')
                 ->take($limit)
                 ->values();
