@@ -816,6 +816,21 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
+            // ── Service charge: apply once, and only once ────────────────────
+            //
+            // Two different transitions each mean "the work is finished and the
+            // customer owes for it": support_status reaching Resolved, and
+            // visit_status reaching Done. A service order normally passes through
+            // BOTH, on separate saves — the technician closes the visit as Done,
+            // then support marks the order Resolved — so each one fired its own
+            // balance update and the customer was billed the same charge twice.
+            //
+            // service_charge_status is the record of that: 'added' once the money has
+            // moved, null before. It is not in $allowedFields and not on the model's
+            // $fillable, so no request can set or clear it — unlike `status`, which the
+            // edit modal posts back on every save and a stale form could reset.
+            $serviceChargeApplied = strtolower(trim((string) ($serviceOrder->service_charge_status ?? ''))) === 'added';
+
             $shouldAddServiceCharge = false;
             $statusChanged = false;
 
@@ -831,7 +846,14 @@ class ServiceOrderApiController extends Controller
                 Log::info('Visit status changed to Done, will add service charge to account balance');
             }
 
-            if ($shouldAddServiceCharge && $statusChanged && $request->has('service_charge')) {
+            if ($serviceChargeApplied && $shouldAddServiceCharge) {
+                Log::info('Service charge already posted for this service order; skipping duplicate balance update.', [
+                    'service_order_id' => $id,
+                    'account_no' => $serviceOrder->account_no,
+                ]);
+            }
+
+            if ($shouldAddServiceCharge && $statusChanged && !$serviceChargeApplied && $request->has('service_charge')) {
                 $serviceCharge = floatval($request->input('service_charge'));
                 if ($serviceCharge > 0) {
                     $billingAccount = DB::table('billing_accounts')
@@ -867,9 +889,14 @@ class ServiceOrderApiController extends Controller
                             ]);
                         }
 
+                        // The new marker, and the legacy one it replaces: `status` is
+                        // still written so anything reading it keeps seeing what it
+                        // always saw, but service_charge_status is what the guard above
+                        // consults.
+                        $data['service_charge_status'] = 'added';
                         $data['status'] = 'used';
 
-                        Log::info("Updated account balance from {$currentBalance} to {$newBalance} (added service charge: {$serviceCharge}). Status changed to 'used'.");
+                        Log::info("Updated account balance from {$currentBalance} to {$newBalance} (added service charge: {$serviceCharge}). service_charge_status marked 'added'.");
                     }
                     else {
                         Log::warning('Billing account not found for account_no: ' . $serviceOrder->account_no);
