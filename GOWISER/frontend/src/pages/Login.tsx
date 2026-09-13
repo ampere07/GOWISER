@@ -4,6 +4,7 @@ import { UserData } from '../types/api';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { trackPixelEvent } from '../utils/metaPixel';
 
 interface LoginProps {
   onLogin: (userData: UserData) => void;
@@ -109,6 +110,21 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           organization: response.data.user.organization
         };
         setShowForceLoginModal(false);
+
+        /*
+         * Meta Pixel — fired only where the server has actually authenticated the
+         * credentials: status 'success' carrying the user record. A 401, a 403
+         * suspension and the 409 force-login prompt all land in the catch below
+         * instead, so none of them report a login.
+         *
+         * Deliberately NOT in App.tsx's handleLogin or its session-restore branch:
+         * that path re-runs from cached authData on every page refresh, which would
+         * count each reload as a fresh sign-in.
+         */
+        trackPixelEvent('Login', {}, {
+          eventID: `login-${userData.id}-${Date.now()}`,
+        });
+
         onLogin(userData);
       } else {
         setError('Login failed. Please try again.');

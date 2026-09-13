@@ -4,6 +4,7 @@ import LocationMap from './Map/LocationMap';
 import CameraFileInput from './Form/CameraFileInput';
 import TermsModal from './TermsModal';
 import SearchableSelect from './Form/SearchableSelect';
+import { trackPixelEvent } from '../utils/metaPixel';
 
 interface Region {
   id: number;
@@ -716,6 +717,30 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
           throw new Error(errorMessages.join('\n'));
         }
         throw new Error(errorData.message || 'Failed to submit application');
+      }
+
+      /*
+       * Meta Pixel conversion — fired only once the application is actually in the
+       * database. ApplicationController::store returns 201 with the saved row (and
+       * its DB-assigned id) solely after $application->save() and DB::commit(); a
+       * 422 validation failure or a 500 rollback never carries an id. Requiring the
+       * id therefore means no event is reported for a submission that was not saved.
+       *
+       * Parsing is wrapped: a malformed body must not turn a submission the server
+       * did save into an error alert for the applicant.
+       */
+      let applicationId: number | undefined;
+      try {
+        const result = await response.json();
+        applicationId = result?.application?.id;
+      } catch (parseError) {
+        console.warn('Could not read saved application id from response:', parseError);
+      }
+
+      if (applicationId) {
+        trackPixelEvent('CompleteRegistration', {}, {
+          eventID: `application-${applicationId}`,
+        });
       }
 
       setShowSuccessModal(true);
