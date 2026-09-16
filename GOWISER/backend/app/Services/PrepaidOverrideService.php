@@ -719,6 +719,11 @@ class PrepaidOverrideService
         $account->updated_by = $actor->id ?? $account->updated_by;
         $account->save();
 
+        // When an override extends the period of an expired account past today and reconnects it,
+        // any pending pullout service order for equipment retrieval is now void.
+        app(PulloutServiceOrderCloser::class)
+            ->closeIfSettled($accountNo, 0.0, 'prepaid override');
+
         Log::info('[PREPAID OVERRIDE] Customer reconnected — period extended past today', [
             'account_no' => $accountNo,
             'username' => $username,

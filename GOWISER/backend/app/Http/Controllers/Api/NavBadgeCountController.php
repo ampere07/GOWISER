@@ -33,6 +33,7 @@ class NavBadgeCountController extends Controller
         'job_order' => ['Done', 'Approved', 'Failed', 'Cancelled', 'Completed'],
         // Service Order support: 'In Progress' and 'For Visit' are the open states.
         'service_order' => ['Resolved', 'Failed', 'Cancelled'],
+        'service_order_visit' => ['Done', 'Completed', 'Complete', 'Failed', 'Cancelled', 'Canceled'],
         // Work Order: 'Pending' and 'In Progress' are the open states.
         'work_order' => ['Completed', 'Done', 'Failed', 'Cancelled'],
     ];
@@ -57,6 +58,12 @@ class NavBadgeCountController extends Controller
 
                 'service_order' => $this->countWhere('service_orders', $organizationId, function (Builder $q) {
                     $this->notIn($q, 'support_status', self::TERMINAL['service_order']);
+                    $q->where(function (Builder $sub) {
+                        $sub->where(DB::raw('LOWER(TRIM(COALESCE(support_status, "")))'), '!=', 'for visit')
+                            ->orWhereNull('visit_status')
+                            ->orWhereRaw("TRIM(visit_status) = ''")
+                            ->orWhereNotIn(DB::raw('LOWER(TRIM(visit_status))'), array_map('strtolower', self::TERMINAL['service_order_visit']));
+                    });
                 }),
 
                 // work_order, singular — see App\Models\WorkOrder::$table.
