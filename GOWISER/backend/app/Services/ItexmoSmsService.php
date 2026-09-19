@@ -16,7 +16,36 @@ class ItexmoSmsService
 
     public function __construct()
     {
-        $this->config = SmsConfig::first();
+        // Ordered explicitly: SmsConfigController allows two rows (one per gateway) and an
+        // unordered first() left it to the storage engine which credentials the cron would use.
+        $this->config = SmsConfig::orderBy('id')->first();
+    }
+
+    /**
+     * One line naming the gateway credentials in use, for run logs.
+     *
+     * Worth logging because the two-row config plus a single first() is exactly how a run ends up
+     * posting one gateway's API key and sender name to the other gateway — which the provider
+     * rejects, with nothing in the old logs to show why. The key is masked: these logs are shared.
+     */
+    public function describeActiveConfig(): string
+    {
+        if (!$this->config) {
+            return 'no SMS configuration row found';
+        }
+
+        $code = (string) ($this->config->code ?? '');
+        $masked = $code === ''
+            ? '(empty)'
+            : str_repeat('*', max(0, strlen($code) - 4)) . substr($code, -4);
+
+        return sprintf(
+            'config #%s provider=%s sender=%s apikey=%s',
+            $this->config->id,
+            $this->config->provider ?? 'itexmo',
+            $this->config->sender !== null && $this->config->sender !== '' ? $this->config->sender : '(empty)',
+            $masked
+        );
     }
 
     public function send(array $data): array
@@ -82,6 +111,15 @@ class ItexmoSmsService
         }
     }
 
+    /**
+     * Send one message through Semaphore.
+     *
+     * Semaphore reports a rejected send as a FIELD-KEYED object — {"sendername":["..."]},
+     * {"apikey":["..."]} — not the {"error": "..."} shape this method used to look for. Every
+     * such rejection therefore fell through to a bare "returned HTTP <code>" and the provider's
+     * own explanation was discarded. describeHttpFailure() now flattens whatever came back and
+     * the raw body is logged, so the reason reaches both the log and sms_queue.error_message.
+     */
     protected function sendSemaphore(string $contactNo, string $message, array $data = []): array
     {
         $payload = [
@@ -91,73 +129,212 @@ class ItexmoSmsService
             'sendername' => $this->config->sender
         ];
 
-        try {
-            $apiUrl = 'https://api.semaphore.co/api/v4/messages';
-            $attempt = 0;
-            $response = null;
-            $httpCode = 0;
+        $apiUrl = 'https://api.semaphore.co/api/v4/messages';
+        $attempt = 0;
+        $lastError = 'Semaphore API was never called';
 
+        try {
             do {
                 $attempt++;
-                try {
-                    $ch = curl_init();
-                    curl_setopt($ch, CURLOPT_URL, $apiUrl);
-                    curl_setopt($ch, CURLOPT_POST, 1);
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($payload));
-                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                    curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeoutSeconds);
-                    
-                    $response = curl_exec($ch);
-                    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    curl_close($ch);
 
-                    if ($httpCode >= 200 && $httpCode < 300) {
-                        Log::info('Semaphore SMS sent successfully', [
-                            'contact_no' => $contactNo,
-                            'message_length' => strlen($message)
-                        ]);
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $apiUrl);
+                curl_setopt($ch, CURLOPT_POST, 1);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($payload));
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeoutSeconds);
 
-                        $this->logSms($contactNo, $message, 'semaphore', $response, $data);
+                $response = curl_exec($ch);
+                $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                // Never read before, so a TLS/DNS/timeout failure used to surface as
+                // "returned HTTP unknown" with no indication that curl itself had failed.
+                $curlError = (string) curl_error($ch);
+                curl_close($ch);
 
-                        return [
-                            'success' => true,
-                            'message' => 'SMS sent successfully via Semaphore',
-                            'response' => $response
-                        ];
-                    }
+                // A 2xx is NOT proof of acceptance. Semaphore answers a rejected send with
+                // HTTP 200 and a validation body — {"number":["The number format is invalid."]} —
+                // and treating any 2xx as success marked 212 queue rows 'sent' for messages that
+                // reached nobody. Delivery is only claimed when the body carries a message_id.
+                if ($httpCode >= 200 && $httpCode < 300
+                    && !$this->semaphoreAccepted(is_string($response) ? $response : null)) {
+                    $lastError = $this->describeHttpFailure(
+                        $httpCode,
+                        is_string($response) ? $response : null,
+                        ''
+                    );
 
-                    // Check for specific error message in response
-                    if ($response) {
-                        $responseData = json_decode($response, true);
-                        if (is_array($responseData) && isset($responseData['error'])) {
-                            throw new Exception($responseData['error']);
-                        }
-                    }
+                    Log::warning('Semaphore accepted the request but rejected the message', [
+                        'contact_no' => $contactNo,
+                        'attempt' => $attempt,
+                        'http_code' => $httpCode,
+                        'response_body' => is_string($response) ? mb_substr($response, 0, 1000) : null,
+                    ]);
 
-                    if ($attempt < $this->maxRetries) {
-                        sleep(2);
-                    }
-                } catch (Exception $e) {
-                    if ($attempt >= $this->maxRetries) {
-                        throw $e;
-                    }
+                    // The payload itself was refused; an identical retry earns an identical refusal.
+                    break;
+                }
+
+                if ($httpCode >= 200 && $httpCode < 300) {
+                    Log::info('Semaphore SMS sent successfully', [
+                        'contact_no' => $contactNo,
+                        'message_length' => strlen($message)
+                    ]);
+
+                    $this->logSms($contactNo, $message, 'semaphore', $response, $data);
+
+                    return [
+                        'success' => true,
+                        'message' => 'SMS sent successfully via Semaphore',
+                        'response' => $response
+                    ];
+                }
+
+                $lastError = $this->describeHttpFailure(
+                    $httpCode,
+                    is_string($response) ? $response : null,
+                    $curlError
+                );
+
+                Log::warning('Semaphore SMS attempt failed', [
+                    'contact_no' => $contactNo,
+                    'attempt' => $attempt,
+                    'http_code' => $httpCode,
+                    'curl_error' => $curlError,
+                    'sender_name' => $this->config->sender,
+                    'response_body' => is_string($response) ? mb_substr($response, 0, 1000) : null,
+                ]);
+
+                // A 4xx is the request itself being refused — wrong API key, unregistered sender
+                // name, malformed number. Retrying resends an identical payload for an identical
+                // answer, so stop rather than spend two more sleeps and timeouts of the cron's run.
+                // An exhausted balance arrives as a 500 but is just as final, and just as pointless
+                // to retry: no amount of waiting puts credits back on the account mid-run.
+                if (($httpCode >= 400 && $httpCode < 500) || $this->isAccountLevelFailure($lastError)) {
+                    break;
+                }
+
+                if ($attempt < $this->maxRetries) {
                     sleep(2);
                 }
             } while ($attempt < $this->maxRetries);
 
-            throw new Exception('Semaphore API returned HTTP ' . ($httpCode ?: 'unknown'));
+            throw new Exception($lastError);
 
         } catch (Exception $e) {
             Log::error('Semaphore SMS sending failed', [
                 'contact_no' => $contactNo,
+                'sender_name' => $this->config->sender,
+                'attempts' => $attempt,
                 'error' => $e->getMessage()
             ]);
 
             return [
                 'success' => false,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                // Signals "stop the run", not "this message failed" — see SmsQueueService.
+                'account_blocked' => $this->isAccountLevelFailure($e->getMessage()),
             ];
         }
+    }
+
+    /**
+     * Is this failure a property of the ACCOUNT rather than of the message?
+     *
+     * An empty balance or a disabled account refuses every message identically, so there is
+     * nothing to be gained by trying the next one — and a great deal to lose: each queue row that
+     * is attempted burns one of its three attempts and is then marked failed for good, so a single
+     * cron run against a zero-balance gateway can bury an entire day of notifications.
+     */
+    private function isAccountLevelFailure(string $error): bool
+    {
+        $error = strtolower($error);
+
+        foreach (['balance', 'insufficient', 'credits', 'not enough'] as $needle) {
+            if (str_contains($error, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Did Semaphore actually accept the message, as opposed to merely answering the request?
+     *
+     * A successful post returns a list of message objects, each carrying a message_id. A refusal
+     * returns a field-keyed validation object under the same 200 status, which is why HTTP code
+     * alone cannot be trusted here.
+     */
+    private function semaphoreAccepted(?string $body): bool
+    {
+        if ($body === null || trim($body) === '') {
+            return false;
+        }
+
+        $decoded = json_decode($body, true);
+
+        if (!is_array($decoded)) {
+            return false;
+        }
+
+        foreach ($decoded as $entry) {
+            if (is_array($entry) && isset($entry['message_id'])) {
+                return true;
+            }
+        }
+
+        return isset($decoded['message_id']);
+    }
+
+    /**
+     * Turn a failed Semaphore response into something a human can act on.
+     *
+     * The field name in a validation reply is usually the whole diagnosis — "sendername" means an
+     * unregistered sender, "apikey" means the wrong credentials — so keys are kept alongside their
+     * messages. A genuine 5xx tends to carry an HTML error page instead, which is stripped to a
+     * short excerpt rather than dropped, because an empty body and a server fault are different
+     * problems and the old message could not tell them apart.
+     */
+    private function describeHttpFailure(int $httpCode, ?string $body, string $curlError): string
+    {
+        $status = $httpCode > 0 ? 'HTTP ' . $httpCode : 'no HTTP response';
+
+        if ($curlError !== '') {
+            return 'Semaphore API request failed (' . $status . '): ' . $curlError;
+        }
+
+        $body = $body === null ? '' : trim($body);
+
+        if ($body === '') {
+            return 'Semaphore API returned ' . $status . ' with an empty body';
+        }
+
+        $decoded = json_decode($body, true);
+
+        if (is_array($decoded)) {
+            $parts = [];
+            $flatten = function ($value, string $label) use (&$flatten, &$parts): void {
+                if (is_array($value)) {
+                    foreach ($value as $key => $item) {
+                        $flatten($item, is_string($key) ? $key : $label);
+                    }
+                    return;
+                }
+
+                if (is_scalar($value) && trim((string) $value) !== '') {
+                    $parts[] = $label !== '' ? $label . ': ' . $value : (string) $value;
+                }
+            };
+            $flatten($decoded, '');
+
+            if ($parts !== []) {
+                return 'Semaphore API returned ' . $status . ' - ' . implode('; ', array_unique($parts));
+            }
+        }
+
+        $excerpt = trim(preg_replace('/\s+/', ' ', strip_tags($body)));
+
+        return 'Semaphore API returned ' . $status . ' - ' . mb_substr($excerpt, 0, 300);
     }
 
     public function sendBlast(array $data): array

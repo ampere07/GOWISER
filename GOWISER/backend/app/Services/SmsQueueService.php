@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\SmsQueue;
 use App\Services\ItexmoSmsService;
+use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,9 @@ class SmsQueueService
      * forever, and a message that reliably crashes the worker would block the queue behind it.
      */
     protected const MAX_ATTEMPTS = 3;
+
+    /** Tag every line of the run log carries, mirroring AutoDisconnectService. */
+    private string $logName = 'SMS_Queue';
 
     protected ItexmoSmsService $smsService;
 
@@ -139,6 +143,8 @@ class SmsQueueService
             ->get();
 
         if ($jobs->isEmpty()) {
+            // Deliberately silent. This runs inside cron:process-email-queue, every minute —
+            // banner-logging an empty queue would bury the real runs under ~1,400 lines a day.
             return [
                 'processed' => 0,
                 'sent' => 0,
@@ -146,6 +152,19 @@ class SmsQueueService
                 'skipped' => 0,
             ];
         }
+
+        $logFile = 'sms_queue_' . Carbon::now()->format('Y-m-d') . '.log';
+        $log = fn (string $message) => $this->writeLog($message, $logFile);
+        $startTime = Carbon::now();
+
+        $log("");
+        $log("╔════════════════════════════════════════════════════════════════╗");
+        $log("║              STARTING SMS QUEUE PROCESSING                     ║");
+        $log("╚════════════════════════════════════════════════════════════════╝");
+        $log("Start Time: " . $startTime->format('Y-m-d H:i:s'));
+        $log("Gateway   : " . $this->smsService->describeActiveConfig());
+        $log("Pending   : {$jobs->count()} message(s), batch size {$batchSize}, max attempts " . self::MAX_ATTEMPTS);
+        $log("");
 
         Log::info('Processing SMS queue', ['count' => $jobs->count()]);
 
@@ -170,6 +189,7 @@ class SmsQueueService
             if ($claimed === 0) {
                 // Another worker took this row between the read and the claim.
                 $stats['skipped']++;
+                $log("[SKIP] Queue #{$job->id} - claimed by another worker");
                 continue;
             }
 
@@ -186,18 +206,47 @@ class SmsQueueService
                 'reference_id' => (string) $job->id,
             ]);
 
+            // The gateway itself cannot send — an empty balance, a disabled account. Marking this
+            // row failed and moving on would walk the whole batch into 'failed' at one attempt
+            // each, for a reason that has nothing to do with any of the messages. Give the claim
+            // back instead and stop: the rows stay pending, with their attempts intact, and go out
+            // on the next run once the account can send again.
+            if (!empty($result['account_blocked'])) {
+                SmsQueue::where('id', $job->id)
+                    ->where('attempts', $attemptsAtRead + 1)
+                    ->update(['attempts' => $attemptsAtRead, 'updated_at' => now()]);
+
+                $stats['processed']--;
+                $stats['aborted'] = true;
+                $stats['abort_reason'] = $result['error'] ?? 'gateway unavailable';
+
+                $log("");
+                $log("[ABORT] Gateway cannot send - run stopped, remaining messages left pending");
+                $log("        Reason: " . $stats['abort_reason']);
+                Log::error('SMS queue run aborted: gateway cannot send', [
+                    'id' => $job->id,
+                    'error' => $stats['abort_reason'],
+                ]);
+
+                break;
+            }
+
             if ($result['success']) {
                 $job->markAsSent();
                 $stats['sent']++;
+                $log("[SENT] Queue #{$job->id} - Account: {$job->account_no} - To: {$job->contact_no}");
                 Log::info('SMS sent from queue', ['id' => $job->id, 'account_no' => $job->account_no]);
             } else {
-                $job->markAsFailed($result['error'] ?? 'Unknown error');
+                $error = $result['error'] ?? 'Unknown error';
+                $job->markAsFailed($error);
                 $stats['failed']++;
+                $log("[FAIL] Queue #{$job->id} - Account: {$job->account_no} - To: {$job->contact_no} - Attempt {$job->attempts}/" . self::MAX_ATTEMPTS);
+                $log("       Reason: {$error}");
                 Log::error('SMS failed from queue', [
                     'id' => $job->id,
                     'account_no' => $job->account_no,
                     'attempts' => $job->attempts,
-                    'error' => $result['error'] ?? 'Unknown error',
+                    'error' => $error,
                 ]);
             }
 
@@ -205,7 +254,42 @@ class SmsQueueService
             usleep(200000);
         }
 
+        $endTime = Carbon::now();
+        $log("");
+        $log("Processed : {$stats['processed']}  Sent: {$stats['sent']}  Failed: {$stats['failed']}  Skipped: {$stats['skipped']}");
+        if (!empty($stats['aborted'])) {
+            $log("Status    : ABORTED - messages left pending for the next run");
+        }
+        $log("End Time  : " . $endTime->format('Y-m-d H:i:s') . " (" . $startTime->diffInSeconds($endTime) . "s)");
+        $log("╚════════════════════════════════════════════════════════════════╝");
+
         return $stats;
+    }
+
+    /**
+     * Append one line to the SMS queue run log.
+     *
+     * Mirrors AutoDisconnectService::writeLog: its own dated file under storage/logs/smsqueue, plus
+     * a copy on the default channel. The queue previously reported only aggregate counts into the
+     * shared emailqueue log, so a failing send left no record of which number or which reason.
+     *
+     * @param string $fileName Log file to append to, relative to storage/logs/smsqueue.
+     */
+    private function writeLog(string $message, string $fileName = 'sms_queue.log'): void
+    {
+        $timestamp = Carbon::now()->format('Y-m-d H:i:s');
+        $logMessage = "[{$timestamp}] [{$this->logName}] {$message}";
+
+        $logDir = storage_path('logs/smsqueue');
+        $logFile = $logDir . '/' . $fileName;
+
+        if (!file_exists($logDir)) {
+            mkdir($logDir, 0755, true);
+        }
+
+        file_put_contents($logFile, $logMessage . PHP_EOL, FILE_APPEND);
+
+        Log::channel('single')->info("[{$this->logName}] {$message}");
     }
 
     /**
