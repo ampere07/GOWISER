@@ -8,6 +8,7 @@ import GlobalSearch from './globalfunctions/GlobalSearch';
 import { getUserDisplayName } from '../utils/userDisplay';
 import pusher from '../services/pusherService';
 import SessionExpiredModal from '../components/SessionExpiredModal';
+import { usePermissions } from '../hooks/usePermissions';
 
 const hexToRgba = (hex: string, opacity: number) => {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -26,8 +27,6 @@ const VIEWER_ROLES = ['superadmin', 'administrator'];
  * for free service days is not the person who grants them. An administrator can watch the queue;
  * only a superadmin decides it — the same split the Transaction Revert module uses.
  */
-const APPROVER_ROLES = ['superadmin'];
-const APPROVER_ROLE_IDS = ['7'];
 
 const STATUS_FILTERS = ['all', 'pending', 'processed', 'rejected'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -38,6 +37,7 @@ interface PrepaidOverrideProps {
 }
 
 const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId }) => {
+    const { can } = usePermissions();
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const { overrideRequests, isLoading, error, fetchOverrideRequests, fetchUpdates } = usePrepaidOverrideStore();
 
@@ -53,7 +53,6 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(25);
     const [userRoleName, setUserRoleName] = useState<string>('');
-    const [userRoleId, setUserRoleId] = useState<string>('');
 
     const [showSessionExpired, setShowSessionExpired] = useState(false);
 
@@ -77,7 +76,6 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
             try {
                 const parsed = JSON.parse(authData);
                 setUserRoleName((parsed.role_name || '').toLowerCase());
-                setUserRoleId(String(parsed.role_id || ''));
             } catch (e) {}
         }
     }, []);
@@ -273,7 +271,9 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
         }
     };
 
-    const canDecide = APPROVER_ROLES.includes(userRoleName) || APPROVER_ROLE_IDS.includes(userRoleId);
+    // Approving or rejecting a request: prepaid-override.approve (SuperAdmin
+    // among the seeded roles).
+    const canDecide = can('prepaid-override.approve');
 
     const PaginationControls = () => {
         if (totalPages <= 1) return null;

@@ -53,18 +53,25 @@ export const useInventoryContext = () => {
 
 interface InventoryProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the item list on mount. False for a user the API would
+     * not serve it to (see SHELL_PREFETCH_KEYS); the categories, open to any
+     * signed-in user, are still loaded. An explicit refresh from a screen
+     * fetches both, as before.
+     */
+    prefetchItems?: boolean;
 }
 
-export const InventoryProvider: React.FC<InventoryProviderProps> = ({ children }) => {
+export const InventoryProvider: React.FC<InventoryProviderProps> = ({ children, prefetchItems = true }) => {
     const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
     const [dbCategories, setDbCategories] = useState<InventoryCategory[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-    const fetchInventoryData = useCallback(async (force = false, silent = false) => {
-        // Only skip if not forced AND both items and categories already exist
-        if (!force && inventoryItems.length > 0 && dbCategories.length > 0) {
+    const fetchInventoryData = useCallback(async (force = false, silent = false, includeItems = true) => {
+        // Only skip if not forced AND everything wanted already exists
+        if (!force && (!includeItems || inventoryItems.length > 0) && dbCategories.length > 0) {
             return;
         }
 
@@ -74,20 +81,24 @@ export const InventoryProvider: React.FC<InventoryProviderProps> = ({ children }
 
         try {
             const [inventoryResponse, categoriesResponse] = await Promise.all([
-                apiClient.get<ApiResponse<InventoryItem[]> | InventoryItem[]>('/inventory'),
+                includeItems
+                    ? apiClient.get<ApiResponse<InventoryItem[]> | InventoryItem[]>('/inventory')
+                    : Promise.resolve(null),
                 apiClient.get<ApiResponse<InventoryCategory[]> | InventoryCategory[]>('/inventory-categories')
             ]);
 
-            const invResData = inventoryResponse.data;
             const catResData = categoriesResponse.data;
 
             // Robust check for Inventory Items
-            if (Array.isArray(invResData)) {
-                setInventoryItems(invResData);
-            } else if (invResData?.success) {
-                setInventoryItems(invResData.data || []);
-            } else {
-                setError(invResData?.message || 'Failed to fetch inventory data');
+            if (inventoryResponse) {
+                const invResData = inventoryResponse.data;
+                if (Array.isArray(invResData)) {
+                    setInventoryItems(invResData);
+                } else if (invResData?.success) {
+                    setInventoryItems(invResData.data || []);
+                } else {
+                    setError(invResData?.message || 'Failed to fetch inventory data');
+                }
             }
 
             // Robust check for Categories
@@ -118,11 +129,11 @@ export const InventoryProvider: React.FC<InventoryProviderProps> = ({ children }
     }, [fetchInventoryData]);
 
     useEffect(() => {
-        // Initial fetch if empty
-        if (inventoryItems.length === 0 || dbCategories.length === 0) {
-            fetchInventoryData(false, false);
+        // Initial fetch if empty (the item list only when prefetchItems)
+        if ((prefetchItems && inventoryItems.length === 0) || dbCategories.length === 0) {
+            fetchInventoryData(false, false, prefetchItems);
         }
-    }, [fetchInventoryData, inventoryItems.length, dbCategories.length]);
+    }, [fetchInventoryData, inventoryItems.length, dbCategories.length, prefetchItems]);
 
     return (
         <InventoryContext.Provider

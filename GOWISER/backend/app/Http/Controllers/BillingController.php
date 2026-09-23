@@ -79,6 +79,9 @@ class BillingController extends Controller
                 }
             }
 
+            // One query for every agent-id referral on the page.
+            \App\Support\AgentReferral::prime($billingAccounts->map(fn ($ba) => optional($ba->customer)->referred_by));
+
             $billingData = $billingAccounts->map(function ($billingAccount) use ($transactions, $portalLogs) {
                 $customer = $billingAccount->customer;
                 $technicalDetail = $billingAccount->technicalDetails->first();
@@ -125,7 +128,8 @@ class BillingController extends Controller
                     'Region' => $customer ? $customer->region : null,
                     'Address_Coordinates' => $customer ? $customer->address_coordinates : null,
                     'Housing_Status' => $customer ? $customer->housing_status : null,
-                    'Referred_By' => $customer ? $customer->referred_by : null,
+                    'Referred_By' => \App\Support\AgentReferral::displayName($customer ? $customer->referred_by : null),
+                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent($customer ? $customer->referred_by : null),
                     'Desired_Plan' => $customer ? $customer->desired_plan : null,
                     'house_front_picture_url' => $customer ? $customer->house_front_picture_url : null,
                     'proof_of_billing_url' => $customer ? $customer->proof_of_billing_url : null,
@@ -148,7 +152,8 @@ class BillingController extends Controller
                     'VLAN' => $technicalDetail ? $technicalDetail->vlan : null,
                     'LCPNAP' => $technicalDetail ? $technicalDetail->lcpnap : null,
                     'Usage_Type' => $technicalDetail ? $technicalDetail->usage_type : null,
-                    'Referred_By' => $customer ? $customer->referred_by : null,
+                    'Referred_By' => \App\Support\AgentReferral::displayName($customer ? $customer->referred_by : null),
+                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent($customer ? $customer->referred_by : null),
                     'Second_Contact_Number' => $customer ? $customer->contact_number_secondary : null,
                     'Status' => $billingAccount->billing_status_id == 1 ? 'Active' : ($billingAccount->billingStatus ? $billingAccount->billingStatus->status_name : 'Inactive'),
                     'Modified_By' => $customer ? $customer->updated_by : null,
@@ -275,7 +280,8 @@ class BillingController extends Controller
                 'Region' => $customer ? $customer->region : null,
                 'Address_Coordinates' => $customer ? $customer->address_coordinates : null,
                 'Housing_Status' => $customer ? $customer->housing_status : null,
-                'Referred_By' => $customer ? $customer->referred_by : null,
+                'Referred_By' => \App\Support\AgentReferral::displayName($customer ? $customer->referred_by : null),
+                'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent($customer ? $customer->referred_by : null),
                 'Desired_Plan' => $customer ? $customer->desired_plan : null,
                 'house_front_picture_url' => $customer ? $customer->house_front_picture_url : null,
                 'proof_of_billing_url' => $customer ? $customer->proof_of_billing_url : null,
@@ -298,7 +304,8 @@ class BillingController extends Controller
                 'VLAN' => $technicalDetail ? $technicalDetail->vlan : null,
                 'LCPNAP' => $technicalDetail ? $technicalDetail->lcpnap : null,
                 'Usage_Type' => $technicalDetail ? $technicalDetail->usage_type : null,
-                'Referred_By' => $customer ? $customer->referred_by : null,
+                'Referred_By' => \App\Support\AgentReferral::displayName($customer ? $customer->referred_by : null),
+                'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent($customer ? $customer->referred_by : null),
                 'Second_Contact_Number' => $customer ? $customer->contact_number_secondary : null,
                 'Status' => $billingAccount->billing_status_id == 1 ? 'Active' : ($billingAccount->billingStatus ? $billingAccount->billingStatus->status_name : 'Inactive'),
                 'Modified_By' => $customer ? $customer->updated_by : null,

@@ -15,6 +15,8 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../config/api';
+import { userService } from '../services/userService';
+import { referredByEcho } from '../utils/referredByField';
 
 interface AddApplicationModalProps {
   isOpen: boolean;
@@ -88,6 +90,36 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
+
+  // The agent roster, so a name typed into the box below can be stored as that
+  // agent's id rather than as the text. Free text that matches nobody — a team
+  // name, "Walk in" — is stored exactly as typed, which is most of this column.
+  const [agents, setAgents] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+    const fetchAgents = async () => {
+      try {
+        const response = await userService.getUsersByRole('agent');
+        if (cancelled) return;
+        if (response.success && response.data) {
+          setAgents(response.data);
+          return;
+        }
+        const byId = await userService.getUsersByRoleId(4);
+        if (!cancelled && byId.success && byId.data) setAgents(byId.data);
+      } catch {
+        // A roster that will not load only costs the name-to-id upgrade; the
+        // typed text is still stored, which is what happened before it existed.
+        if (!cancelled) setAgents([]);
+      }
+    };
+
+    fetchAgents();
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   const primary = colorPalette?.primary || '#7c3aed';
 
@@ -169,7 +201,10 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
         location: formData.location?.trim() || '',
         desired_plan: formData.desired_plan.trim(),
         promo: formData.promo?.trim() || '',
-        referred_by: formData.referred_by?.trim() || '',
+        // Untouched, this writes back the id the record was loaded with; typed
+        // over, a name belonging to one agent becomes their id and anything
+        // else is stored as it reads.
+        referred_by: referredByEcho(editingApplication, formData.referred_by || '', agents) || '',
         status: formData.status,
         terms_and_conditions: formData.terms_and_conditions,
         government_valid_id: formData.government_valid_id?.trim() || '',

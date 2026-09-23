@@ -39,6 +39,7 @@ import { getCustomerDetail, CustomerDetailData } from '../services/customerDetai
 import { BillingDetailRecord } from '../types/billing';
 import { exportToCSV } from '../utils/exportUtils';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
+import { usePermissions } from '../hooks/usePermissions';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const isDarkMode = false;
@@ -269,7 +270,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   const [userRole, setUserRole] = useState('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -324,15 +324,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         const userData = JSON.parse(raw);
         setUserRole(userData.role || '');
         setRoleId(userData.role_id || null);
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try { perms = JSON.parse(userData.permissions); } catch { perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean); }
-          }
-        }
-        setUserPermissions(perms);
       } catch {}
     });
   }, []);
@@ -361,11 +352,9 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // ─── Permissions ───────────────────────────────────────────────────────────
 
-  const hasPermission = useCallback((permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7) return true;
-    return userPermissions.includes(permission);
-  }, [userRole, roleId, userPermissions]);
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
+  const { can: hasPermission } = usePermissions();
 
   // ─── User org ──────────────────────────────────────────────────────────────
 

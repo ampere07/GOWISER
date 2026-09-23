@@ -138,6 +138,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           full_name: response.data.user.full_name,
           role: response.data.user.role,
           role_id: response.data.user.role_id,
+          // The role's effective permission keys and landing page, as the server
+          // resolved them. Read by config/permissions for a custom role; a seeded
+          // role is answered from the table there.
+          permissions: response.data.user.permissions || null,
+          home: response.data.user.home || null,
           organization: response.data.user.organization
         };
         if (response.data.token) {

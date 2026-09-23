@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Editor } from '@tinymce/tinymce-react';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface EmailTemplateData {
   Template_Code: string;
@@ -37,6 +38,11 @@ interface ModalConfig {
 }
 
 const EmailTemplates: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('email-templates');
+
   const [templates, setTemplates] = useState<EmailTemplateData[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplateData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -205,11 +211,13 @@ const EmailTemplates: React.FC = () => {
   };
 
   const handleStartEdit = () => {
+    if (!actions.canEdit) return;
     setIsEditing(true);
     setIsCreating(false);
   };
 
   const handleStartCreate = () => {
+    if (!actions.canCreate) return;
     setIsCreating(true);
     setIsEditing(false);
     setSelectedTemplate(null);
@@ -313,6 +321,7 @@ const EmailTemplates: React.FC = () => {
   };
 
   const handleDelete = async (templateCode: string) => {
+    if (!actions.canDelete) return;
     setModal({
       isOpen: true,
       type: 'confirm',
@@ -506,6 +515,7 @@ const EmailTemplates: React.FC = () => {
           <div className="flex items-center justify-between mb-4">
             <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>Email Templates</h2>
+            {actions.canCreate && (
             <button
               onClick={handleStartCreate}
               className="px-3 py-1.5 text-white text-sm rounded transition-colors"
@@ -524,6 +534,7 @@ const EmailTemplates: React.FC = () => {
             >
               New
             </button>
+            )}
           </div>
         </div>
 
@@ -1004,12 +1015,14 @@ const EmailTemplates: React.FC = () => {
                 )}
                 {canEdit && !isEditing && (
                   <>
+                    {actions.canEdit && (
                     <button
                       onClick={handleStartEdit}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
                     >
                       Edit
                     </button>
+                    )}
                     <button
                       onClick={() => selectedTemplate && handleToggleActive(selectedTemplate)}
                       className={`px-4 py-2 text-white text-sm rounded transition-colors ${selectedTemplate?.Is_Active
@@ -1019,12 +1032,14 @@ const EmailTemplates: React.FC = () => {
                     >
                       {selectedTemplate?.Is_Active ? 'Deactivate' : 'Activate'}
                     </button>
+                    {actions.canDelete && (
                     <button
                       onClick={() => selectedTemplate && handleDelete(selectedTemplate.Template_Code)}
                       className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
                     >
                       Delete
                     </button>
+                    )}
                   </>
                 )}
               </div>

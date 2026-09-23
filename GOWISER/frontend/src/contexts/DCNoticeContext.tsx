@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { dcNoticeService, DCNotice } from '../services/dcNoticeService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface DCNoticeContextType {
     dcNoticeRecords: DCNotice[];
@@ -113,13 +114,22 @@ export const DCNoticeProvider: React.FC<DCNoticeProviderProps> = ({ children }) 
         await fetchDCNoticeRecords(true, true);
     }, [fetchDCNoticeRecords]);
 
+    // This provider wraps the whole signed-in app, so the prefetch below would
+    // run for every role. Only a role that can open DC Notice (the only reader
+    // of this context) fetches; for anyone else GET dc-notices is refused by
+    // the API, or logged as a would-be refusal. A role that gains the key
+    // mid-session fetches when it does.
+    const { can } = usePermissions();
+    const mayRead = can('dc-notice');
+
     // Initial fetch effect
     useEffect(() => {
+        if (!mayRead) return;
         // Only fetch if empty, otherwise let the logic decide
         if (dcNoticeRecords.length === 0) {
             fetchDCNoticeRecords(false, false);
         }
-    }, [fetchDCNoticeRecords, dcNoticeRecords.length]);
+    }, [fetchDCNoticeRecords, dcNoticeRecords.length, mayRead]);
 
     return (
         <DCNoticeContext.Provider

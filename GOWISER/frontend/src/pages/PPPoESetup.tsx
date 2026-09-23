@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Save, Edit2, Trash2, GripVertical, Plus, X, Router, Loader2, CheckCircle, XCircle, ChevronDown } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { pppoeService, UsernamePattern, SequenceItem } from '../services/pppoeService';
+import { usePageActions } from '../hooks/usePageActions';
 
 const usernameComponents = [
   { type: 'first_name', label: 'First Name' },
@@ -49,6 +50,11 @@ const passwordComponents = [
 ];
 
 const PPPoESetup: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('pppoe-setup');
+
   const [patterns, setPatterns] = useState<UsernamePattern[]>([]);
   const [currentSequence, setCurrentSequence] = useState<SequenceItem[]>([]);
   const [draggedItem, setDraggedItem] = useState<SequenceItem | null>(null);
@@ -283,6 +289,7 @@ const PPPoESetup: React.FC = () => {
   };
 
   const handleEdit = (pattern: UsernamePattern) => {
+    if (!actions.canEdit) return;
     setPatternName(pattern.pattern_name);
     setPatternType(pattern.pattern_type as 'username' | 'password');
     setCurrentSequence(pattern.sequence);
@@ -296,6 +303,7 @@ const PPPoESetup: React.FC = () => {
   };
 
   const handleDelete = async (id: number, type: string) => {
+    if (!actions.canDelete) return;
     if (!window.confirm(`Are you sure you want to delete this ${type} pattern?`)) return;
 
     try {
@@ -313,6 +321,7 @@ const PPPoESetup: React.FC = () => {
   };
 
   const handleNewPattern = () => {
+    if (!actions.canCreate) return;
     setIsEditing(true);
     setCurrentSequence([]);
     setPatternName('');
@@ -388,6 +397,7 @@ const PPPoESetup: React.FC = () => {
       {!isEditing ? (
         <div>
           <div className="mb-4">
+            {actions.canCreate && (
             <button
               onClick={handleNewPattern}
               className="flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors"
@@ -396,6 +406,7 @@ const PPPoESetup: React.FC = () => {
               <Plus className="h-5 w-5" />
               Create/Edit Pattern
             </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -406,18 +417,22 @@ const PPPoESetup: React.FC = () => {
                 </h2>
                 {usernamePattern && (
                   <div className="flex gap-2">
+                    {actions.canEdit && (
                     <button
                       onClick={() => handleEdit(usernamePattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
                       <Edit2 className="h-4 w-4" />
                     </button>
+                    )}
+                    {actions.canDelete && (
                     <button
                       onClick={() => handleDelete(usernamePattern.id, 'username')}
                       className="text-red-600 hover:text-red-900"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -487,18 +502,22 @@ const PPPoESetup: React.FC = () => {
                 </h2>
                 {passwordPattern && (
                   <div className="flex gap-2">
+                    {actions.canEdit && (
                     <button
                       onClick={() => handleEdit(passwordPattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
                       <Edit2 className="h-4 w-4" />
                     </button>
+                    )}
+                    {actions.canDelete && (
                     <button
                       onClick={() => handleDelete(passwordPattern.id, 'password')}
                       className="text-red-600 hover:text-red-900"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
+                    )}
                   </div>
                 )}
               </div>

@@ -23,6 +23,8 @@ interface Application {
     desired_plan?: string;
     promo?: string;
     referred_by?: string;
+    // The agent the stored referral names; referred_by is the display name.
+    referred_by_agent_id?: number | null;
     create_date?: string;
     create_time?: string;
 }
@@ -48,6 +50,12 @@ export const useApplicationContext = () => {
 
 interface ApplicationProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the list on mount. False for a user the API would not
+     * serve it to (see SHELL_PREFETCH_KEYS). An explicit refresh from a screen
+     * still fetches.
+     */
+    prefetch?: boolean;
 }
 
 const transformApplication = (app: ApiApplication): Application => {
@@ -78,12 +86,13 @@ const transformApplication = (app: ApiApplication): Application => {
         desired_plan: app.desired_plan,
         promo: app.promo,
         referred_by: app.referred_by,
+        referred_by_agent_id: (app as any).referred_by_agent_id ?? null,
         create_date: app.create_date,
         create_time: app.create_time
     };
 };
 
-export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ children }) => {
+export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ children, prefetch = true }) => {
     const [applications, setApplications] = useState<Application[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
@@ -152,11 +161,12 @@ export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ childr
 
     // Initial fetch effect
     useEffect(() => {
+        if (!prefetch) return;
         // Only fetch if empty, otherwise let the logic decide
         if (applications.length === 0) {
             fetchApplications(false, false);
         }
-    }, [fetchApplications, applications.length]);
+    }, [prefetch, fetchApplications, applications.length]);
 
     return (
         <ApplicationContext.Provider

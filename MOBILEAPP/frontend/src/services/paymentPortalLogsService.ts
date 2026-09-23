@@ -1,8 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
-import { API_BASE_URL } from '../config/api';
+import apiClient from '../config/api';
 
-// No need to redeclare API_BASE_URL or getApiBaseUrl
+// Through the shared apiClient, so the list is fetched signed in (session
+// cookie and Origin), like every other screen. It used to call axios directly
+// with `Authorization: Bearer <authData.token>`, and authData never holds a
+// token, so the API saw an anonymous caller: that worked only while the route
+// was open, and returned every organization's logs, because the controller
+// scopes the list to the signed-in user's organization only when it knows who
+// is asking. Endpoints, parameters, return shapes and messages are unchanged.
 
 export interface PaymentPortalLog {
   id: string | number;
@@ -58,23 +62,9 @@ export const paymentPortalLogsService = {
     offset?: number;
   }): Promise<any> => {
     try {
-      const authData = await AsyncStorage.getItem('authData');
-      let token = '';
-
-      if (authData) {
-        const parsed = JSON.parse(authData);
-        token = parsed.token || '';
-      }
-
-      const response = await axios.get<PaymentPortalLogsResponse>(
-        `${API_BASE_URL}/payment-portal-logs`,
-        {
-          params,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          }
-        }
+      const response = await apiClient.get<PaymentPortalLogsResponse>(
+        `/payment-portal-logs`,
+        { params }
       );
 
       return {
@@ -100,22 +90,8 @@ export const paymentPortalLogsService = {
    */
   getLogById: async (id: string | number): Promise<PaymentPortalLog | null> => {
     try {
-      const authData = await AsyncStorage.getItem('authData');
-      let token = '';
-
-      if (authData) {
-        const parsed = JSON.parse(authData);
-        token = parsed.token || '';
-      }
-
-      const response = await axios.get<PaymentPortalLogResponse>(
-        `${API_BASE_URL}/payment-portal-logs/${id}`,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          }
-        }
+      const response = await apiClient.get<PaymentPortalLogResponse>(
+        `/payment-portal-logs/${id}`
       );
 
       return response.data.data || null;
@@ -130,22 +106,8 @@ export const paymentPortalLogsService = {
    */
   getLogsByAccountNo: async (accountNo: string): Promise<PaymentPortalLog[]> => {
     try {
-      const authData = await AsyncStorage.getItem('authData');
-      let token = '';
-
-      if (authData) {
-        const parsed = JSON.parse(authData);
-        token = parsed.token || '';
-      }
-
-      const response = await axios.get<PaymentPortalLogsResponse>(
-        `${API_BASE_URL}/payment-portal-logs/account/${accountNo}`,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
-          }
-        }
+      const response = await apiClient.get<PaymentPortalLogsResponse>(
+        `/payment-portal-logs/account/${accountNo}`
       );
 
       return response.data.data || [];

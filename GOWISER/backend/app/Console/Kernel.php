@@ -295,6 +295,36 @@ class Kernel extends ConsoleKernel
                  });
 
         // ===================================================================
+        // AGENT REFERRAL INVOICES
+        // ===================================================================
+
+        // One referral invoice per agent team, and one per solo agent, for the
+        // calendar week that has just ended (Monday 00:00 to Sunday 23:59). Runs
+        // at 00:00 every Monday, Asia/Manila.
+        //
+        // Uses: AgentInvoiceService, AgentInvoicePdfService (PDF uploaded to Google Drive)
+        // Logs: storage/logs/agent-invoices/Agent_Invoices.log
+        //
+        // Safe if it runs late or twice: an owner already invoiced for the week
+        // is skipped, and the database refuses a customer already billed to
+        // them, so a repeat run creates nothing.
+        //
+        // NOT scheduled here, by design (add to the system crontab if wanted):
+        //   cron:process-agent-incentives   awards completed quota batches
+        //   cron:close-achievement-periods  records ended weekly/monthly periods
+        $schedule->command('cron:generate-agent-invoices')
+                 ->weeklyOn(1, '00:00')
+                 ->timezone('Asia/Manila')
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('Agent invoice generation completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Agent invoice generation failed');
+                 });
+
+        // ===================================================================
         // SMARTOLT TOOL SUITE
         // ===================================================================
         // The unattended nightly SmartOLT pass: refresh the ONU inventory and

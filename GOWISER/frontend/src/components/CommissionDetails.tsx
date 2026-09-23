@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-    X, Info, ExternalLink, Receipt, CheckCircle,
+    X, ExternalLink, Receipt, CheckCircle,
     ChevronRight, ChevronLeft, DollarSign, Calendar,
     User, Hash, MessageSquare, Image as ImageIcon
 } from 'lucide-react';
@@ -14,10 +14,17 @@ interface CommissionDetailsProps {
     onPrevious?: () => void;
     onNext?: () => void;
     isMobile?: boolean;
+    /** Approve the record on screen. Omitted when the viewer may not approve. */
+    onApprove?: (record: any) => void;
+    /** Reject the record on screen. Omitted when the viewer may not approve. */
+    onReject?: (record: any) => void;
+    /** True while an approval or rejection is in flight. */
+    approvalPending?: boolean;
 }
 
 const CommissionDetails: React.FC<CommissionDetailsProps> = ({
-    data, type, onClose, onPrevious, onNext, isMobile = false
+    data, type, onClose, onPrevious, onNext, isMobile = false,
+    onApprove, onReject, approvalPending = false
 }) => {
     const [localIsMobile, setLocalIsMobile] = useState<boolean>(window.innerWidth < 768);
     useEffect(() => {
@@ -164,6 +171,37 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
                 </div>
 
                 <div className="flex items-center space-x-3">
+                    {/* Approve / Reject, ahead of the record arrows.
+                        Offered only while the record is Pending and only to a
+                        viewer permitted to approve — the same test the detail
+                        section used before these moved up here. */}
+                    {!isEarning && (onApprove || onReject) && ((payout as any).status ?? 'Pending') === 'Pending' && (
+                        <div className="flex items-center gap-2">
+                            {onApprove && (
+                                <button
+                                    type="button"
+                                    disabled={approvalPending}
+                                    onClick={() => onApprove(payout)}
+                                    title="Approve this payout and apply it to the agent's balance"
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+                                >
+                                    {approvalPending ? 'Working…' : 'Approve'}
+                                </button>
+                            )}
+                            {onReject && (
+                                <button
+                                    type="button"
+                                    disabled={approvalPending}
+                                    onClick={() => onReject(payout)}
+                                    title="Reject this payout. No money is moved."
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+                                >
+                                    Reject
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     <div className="flex items-center">
                         <button onClick={onPrevious} disabled={!onPrevious}
                             className={`p-2 rounded transition-colors ${!onPrevious ? 'opacity-50 cursor-not-allowed' : ''} ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
@@ -211,6 +249,9 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
                                 {renderField('Date Processed', new Date(payout.created_at).toLocaleString())}
                                 {renderField('Processed By', payout.created_by)}
                                 {renderField('Agent Name', payout.agent_name)}
+                                {/* Approval, shown the same way as on a transaction. */}
+                                {renderField('Status', (payout as any).status || 'Pending')}
+                                {renderField('Approved By', (payout as any).approved_by || (payout as any).approve_by || 'Not yet approved')}
                                 {renderField('Remarks', payout.remarks || 'No remarks provided')}
 
                                 <div className="mt-4">

@@ -1,24 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
-import { API_BASE_URL } from '../config/api';
-
-// No need to redeclare API_BASE_URL or getApiBaseUrl
-
-const axiosInstance = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  },
-});
-
-axiosInstance.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('auth_token');
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// The shared apiClient, so discount requests carry the session cookie, Origin
+// and XSRF token like every other service (the web client made the same
+// change). This used to be a standalone axios instance whose only credential
+// was a Bearer token read from an `auth_token` key nothing ever writes, so the
+// API saw these requests signed out: the /discounts routes require a session
+// (auth:sanctum), and the backend records the acting user from it.
+import apiClient from '../config/api';
 
 export interface DiscountData {
   account_no: string;
@@ -42,7 +28,7 @@ export interface DiscountResponse {
 
 export const create = async (data: DiscountData): Promise<DiscountResponse> => {
   try {
-    const response = await axiosInstance.post<any>('/discounts', data);
+    const response = await apiClient.post<any>('/discounts', data);
     return {
       success: true,
       message: response.data.message,
@@ -56,7 +42,7 @@ export const create = async (data: DiscountData): Promise<DiscountResponse> => {
 
 export const getAll = async (): Promise<DiscountResponse> => {
   try {
-    const response = await axiosInstance.get<any>('/discounts');
+    const response = await apiClient.get<any>('/discounts');
     return {
       success: true,
       data: response.data.data
@@ -69,7 +55,7 @@ export const getAll = async (): Promise<DiscountResponse> => {
 
 export const getById = async (id: number): Promise<DiscountResponse> => {
   try {
-    const response = await axiosInstance.get<any>(`/discounts/${id}`);
+    const response = await apiClient.get<any>(`/discounts/${id}`);
     return {
       success: true,
       data: response.data.data
@@ -82,7 +68,7 @@ export const getById = async (id: number): Promise<DiscountResponse> => {
 
 export const update = async (id: number, data: Partial<DiscountData>): Promise<DiscountResponse> => {
   try {
-    const response = await axiosInstance.put<any>(`/discounts/${id}`, data);
+    const response = await apiClient.put<any>(`/discounts/${id}`, data);
     return {
       success: true,
       message: response.data.message,
@@ -96,7 +82,7 @@ export const update = async (id: number, data: Partial<DiscountData>): Promise<D
 
 export const remove = async (id: number): Promise<DiscountResponse> => {
   try {
-    const response = await axiosInstance.delete<any>(`/discounts/${id}`);
+    const response = await apiClient.delete<any>(`/discounts/${id}`);
     return {
       success: true,
       message: response.data.message

@@ -149,7 +149,11 @@ class CustomerDetailUpdateController extends Controller
                 'location' => $validated['location'] ?? $customer->location,
                 'address_coordinates' => $validated['addressCoordinates'] ?? $customer->address_coordinates,
                 'housing_status' => $validated['housingStatus'] ?? $customer->housing_status,
-                'referred_by' => $validated['referredBy'] ?? $customer->referred_by,
+                // A form echoing the displayed agent name back keeps the stored id.
+                'referred_by' => \App\Support\AgentReferral::preserveOnWrite(
+                    $validated['referredBy'] ?? null,
+                    $customer->referred_by
+                ) ?? $customer->referred_by,
                 'group_name' => $validated['groupName'] ?? $customer->group_name,
                 'house_front_picture_url' => $houseFrontPictureUrl,
             ]);
@@ -218,6 +222,15 @@ class CustomerDetailUpdateController extends Controller
                     $changedOldDetails[$key] = $oldValue;
                     $changedNewDetails[$key] = $newValue;
                 }
+            }
+
+            // Compared on the STORED value above (an id rewritten to the same
+            // agent's name is a real change), and recorded readably here.
+            if (array_key_exists('referred_by', $changedOldDetails)) {
+                $changedOldDetails['referred_by'] = \App\Support\AgentReferral::displayName($changedOldDetails['referred_by']);
+            }
+            if (array_key_exists('referred_by', $changedNewDetails)) {
+                $changedNewDetails['referred_by'] = \App\Support\AgentReferral::displayName($changedNewDetails['referred_by']);
             }
 
             if (!empty($changedOldDetails) || !empty($changedNewDetails)) {

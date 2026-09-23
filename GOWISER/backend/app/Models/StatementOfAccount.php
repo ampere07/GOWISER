@@ -187,7 +187,7 @@ class StatementOfAccount extends Model
                     'region' => $customer->region,
                     'desired_plan' => $customer->desired_plan,
                     'housing_status' => $customer->housing_status,
-                    'referred_by' => $customer->referred_by,
+                    'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
                     'group_name' => $customer->group_name,
                 ];
             }

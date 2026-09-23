@@ -6,12 +6,19 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { useNapStore } from '../store/napStore';
 import { NAP } from '../services/napService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface NapFormData {
   name: string;
 }
 
 const NapList: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed. handleEdit also backs the row click, so guarding it stops a
+  // row opening the edit modal for a role that may not save from it.
+  const actions = usePageActions('nap');
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<NAP | null>(null);
@@ -174,6 +181,7 @@ const NapList: React.FC = () => {
   };
 
   const handleDelete = (item: NAP, event: React.MouseEvent) => {
+    if (!actions.canDelete) return;
     event.stopPropagation();
     showGlobalModal(
       'confirm',
@@ -210,12 +218,14 @@ const NapList: React.FC = () => {
   };
 
   const handleEdit = (item: NAP, event: React.MouseEvent) => {
+    if (!actions.canEdit) return;
     event.stopPropagation();
     setEditingItem(item);
     setIsModalOpen(true);
   };
 
   const handleAddNew = () => {
+    if (!actions.canCreate) return;
     setEditingItem(null);
     setIsModalOpen(true);
   };
@@ -254,6 +264,7 @@ const NapList: React.FC = () => {
                   colorPalette={colorPalette}
                   placeholder="Search NAP"
                 />
+                {actions.canCreate && (
                 <button
                   onClick={handleAddNew}
                   className="px-4 py-2.5 text-white rounded-lg flex items-center gap-2 transition-all font-medium text-xs active:scale-95 shadow-sm"
@@ -274,6 +285,7 @@ const NapList: React.FC = () => {
                   <Plus className="h-4 w-4" />
                   <span className="hidden md:inline">Add NAP</span>
                 </button>
+                )}
                 <button
                   onClick={() => fetchNapItems(1, itemsPerPage, searchQuery)}
                   className="p-2.5 rounded-lg flex items-center justify-center transition-colors shadow-sm active:rotate-180 duration-500"
@@ -378,6 +390,7 @@ const NapList: React.FC = () => {
                         )}
                       </div>
                       <div className="flex items-center space-x-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {actions.canEdit && (
                         <button
                           onClick={(e) => handleEdit(item, e)}
                           className={`p-2 rounded transition-colors ${isDarkMode
@@ -387,6 +400,8 @@ const NapList: React.FC = () => {
                         >
                           <Edit2 size={16} />
                         </button>
+                        )}
+                        {actions.canDelete && (
                         <button
                           onClick={(e) => handleDelete(item, e)}
                           disabled={deletingItems.has(item.id)}
@@ -401,6 +416,7 @@ const NapList: React.FC = () => {
                             <Trash2 size={16} />
                           )}
                         </button>
+                        )}
                       </div>
                     </div>
                   ))}

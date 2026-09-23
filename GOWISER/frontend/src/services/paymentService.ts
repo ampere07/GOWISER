@@ -81,7 +81,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -114,7 +117,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -146,7 +152,10 @@ export const paymentService = {
         {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -174,7 +183,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -240,7 +252,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -274,7 +289,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 
@@ -304,7 +322,10 @@ export const paymentService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it: the bearer
+          // token is not what the API authenticates by.
+          withCredentials: true,
         }
       );
 

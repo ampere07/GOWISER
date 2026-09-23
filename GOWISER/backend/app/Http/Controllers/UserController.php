@@ -5,13 +5,141 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\Organization;
 use App\Models\AgentBalance;
+use App\Support\AgentAccess;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 use App\Services\ActivityLogService;
 
 class UserController extends Controller
 {
+    /**
+     * The relations a user listing may carry for this caller.
+     *
+     * `agentBalance` holds an agent's commission RATE, quota, incentive value
+     * and every earned figure they have. The user list also feeds the
+     * technician / assignee / referral pickers, so eager-loading the balance
+     * unconditionally handed every agent a full read of their colleagues'
+     * rates and earnings.
+     *
+     * GOWISER: loaded for administrators and the roles that may read every
+     * agent's records (App\Support\AgentAccess::canReadAll) — the people the
+     * Agent Payout, Agent Management and payout modal screens are drawn for.
+     */
+    private function listRelationsFor($authUser, $ownRecordId = null): array
+    {
+        $base = ['organization', 'role', 'agent'];
+
+        // An agent reading their OWN account still gets their own balance.
+        $readingSelf = $authUser && $ownRecordId !== null
+            && (int) $authUser->id === (int) $ownRecordId;
+
+        $mayReadBalances = AgentAccess::canReadAll($authUser) || $readingSelf;
+
+        return $mayReadBalances ? array_merge($base, ['agentBalance']) : $base;
+    }
+
+    /**
+     * Is this account an agent, for the purpose of owning an agent_balance row?
+     *
+     * Either the seeded Agent role, matched by its id, or a per-organization
+     * role literally named "Agent", matched by name — the same test this
+     * controller always applied inline.
+     */
+    private function isAgentRole(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        if (AgentAccess::isAgent($user)) {
+            return true;
+        }
+
+        $role = $user->role;
+
+        return $role && strtolower(trim((string) $role->role_name)) === 'agent';
+    }
+
+    /**
+     * Give an agent the agent_balance row that makes them one, or update it.
+     *
+     * Holding that row is the definition of an agent everywhere it matters - the
+     * incentive cron iterates agent_balance directly, and the invoice, payout and
+     * referral-name code all join through it - so an agent account without one is
+     * invisible to the entire scheme however their role reads. Creating it with the
+     * account is what stops that gap opening.
+     *
+     * Rates the form sent are written; the ones it did not are left as they are on
+     * an existing row, and initialized to zero on a new one, so a partial edit can
+     * never blank a rate it said nothing about. The running totals (balance, earned
+     * commission, incentives) are seeded to zero on creation only - they are the
+     * cron's to move afterwards, never this endpoint's.
+     */
+    private function syncAgentBalance(User $user, Request $request): void
+    {
+        if (!$this->isAgentRole($user)) {
+            return;
+        }
+
+        $data = ['organization_id' => $user->organization_id];
+
+        foreach (['commission', 'quota', 'incentives_value', 'remarks'] as $field) {
+            if ($request->has($field)) {
+                $data[$field] = $request->input($field);
+            }
+        }
+
+        if (!AgentBalance::where('agent_id', $user->id)->exists()) {
+            // A rate the form sent EMPTY (ConvertEmptyStringsToNull makes it
+            // null) starts at zero on a new row, as it always did before
+            // (`$request->commission ?? 0.00`), rather than as NULL.
+            foreach (['commission', 'quota', 'incentives_value'] as $rate) {
+                if (array_key_exists($rate, $data) && $data[$rate] === null) {
+                    unset($data[$rate]);
+                }
+            }
+
+            // Only fills the keys the request did not already set.
+            $data += [
+                'commission'       => 0.00,
+                'quota'            => 0.00,
+                'incentives_value' => 0.00,
+                'balance'          => 0.00,
+                'commission_value' => 0.00,
+                'incentives'       => 0.00,
+            ];
+        }
+
+        // agent_balance grew its configuration and running-total columns across
+        // several guarded migrations, so a deployment that is behind on them has a
+        // narrower table than this code knows about. Writing a column that is not
+        // there throws, and the row is now created inside the account's own
+        // transaction - which would take the whole account down with it. Dropping
+        // the unknown keys instead means such a deployment still gets the row, just
+        // without the columns it has no place to put; the rest is upgraded by
+        // running the migrations, not by failing every agent that is created.
+        $data = array_intersect_key($data, array_flip(self::balanceColumns()));
+
+        AgentBalance::updateOrCreate(['agent_id' => $user->id], $data);
+    }
+
+    /**
+     * The columns agent_balance actually has, read once per request.
+     */
+    private static function balanceColumns(): array
+    {
+        static $columns = null;
+
+        if ($columns === null) {
+            $columns = Schema::getColumnListing('agent_balance');
+        }
+
+        return $columns;
+    }
+
     public function index(Request $request)
     {
         try {
@@ -19,7 +147,7 @@ class UserController extends Controller
             $organizationId = $user ? $user->organization_id : null;
             $roleId = $user ? $user->role_id : null;
 
-            $query = User::with(['organization', 'role', 'agent', 'agentBalance']);
+            $query = User::with($this->listRelationsFor($user));
             
             // A Global SuperAdmin must have role_id 7 AND no organization_id
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
@@ -126,26 +254,26 @@ class UserController extends Controller
                     'active' => $request->has('active') ? $request->active : 1,
                 ];
             
-            $user = User::create($userData);
-            
-            if (!$user) {
-                throw new \Exception('Failed to create user');
-            }
+            // The account and its agent_balance row are one unit of work. An agent
+            // holding no balance row is not an agent to any of the code that pays them,
+            // so the pair must not be left half-written: if the balance insert fails the
+            // user is rolled back with it and the caller gets the 500 below, rather than
+            // an account that looks created and earns nothing.
+            $user = DB::transaction(function () use ($userData, $request) {
+                $user = User::create($userData);
+
+                if (!$user) {
+                    throw new \Exception('Failed to create user');
+                }
+
+                // isAgentRole() reads the role row, so it has to be on the model.
+                $user->load('role');
+                $this->syncAgentBalance($user, $request);
+
+                return $user;
+            });
 
             $user->load(['organization', 'role', 'agent', 'agentBalance']);
-
-            if ($user->role_id == 4 || ($user->role && strtolower($user->role->role_name) === 'agent')) {
-                AgentBalance::updateOrCreate(
-                    ['agent_id' => $user->id],
-                    [
-                        'balance' => 0.00,
-                        'commission' => $request->commission ?? 0.00,
-                        'quota' => $request->quota ?? 0.00,
-                        'incentives_value' => $request->incentives_value ?? 0.00,
-                        'remarks' => $request->remarks ?? null,
-                    ]
-                );
-            }
 
             // Try to log user creation activity (but don't fail if logging fails)
             try {
@@ -184,7 +312,7 @@ class UserController extends Controller
             $roleId = $authUser ? $authUser->role_id : null;
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
             
-            $user = User::with(['organization', 'role', 'agent', 'agentBalance'])->findOrFail($id);
+            $user = User::with($this->listRelationsFor($authUser, $id))->findOrFail($id);
             
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
@@ -262,7 +390,7 @@ class UserController extends Controller
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
 
             $user = User::findOrFail($id);
-            
+
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
                     if ($user->organization_id !== $organizationId) {
@@ -315,40 +443,9 @@ class UserController extends Controller
             $user->update($updateData);
             $user->load(['organization', 'role', 'agent', 'agentBalance']);
 
-            if ($user->role_id == 4 || ($user->role && strtolower($user->role->role_name) === 'agent')) {
-                $balanceData = [];
-                if ($request->has('commission')) {
-                    $balanceData['commission'] = $request->commission;
-                }
-                if ($request->has('quota')) {
-                    $balanceData['quota'] = $request->quota;
-                }
-                if ($request->has('incentives_value')) {
-                    $balanceData['incentives_value'] = $request->incentives_value;
-                }
-                if ($request->has('remarks')) {
-                    $balanceData['remarks'] = $request->remarks;
-                }
-                // Check if record exists, if not, initialize balance to 0.00
-                if (!AgentBalance::where('agent_id', $user->id)->exists()) {
-                    $balanceData['balance'] = 0.00;
-                    if (!isset($balanceData['commission'])) {
-                        $balanceData['commission'] = 0.00;
-                    }
-                    if (!isset($balanceData['quota'])) {
-                        $balanceData['quota'] = 0.00;
-                    }
-                    if (!isset($balanceData['incentives_value'])) {
-                        $balanceData['incentives_value'] = 0.00;
-                    }
-                }
-                if (!empty($balanceData)) {
-                    AgentBalance::updateOrCreate(
-                        ['agent_id' => $user->id],
-                        $balanceData
-                    );
-                }
-            }
+            // Also covers an account being PROMOTED to agent here: the row is created
+            // on the edit that makes them one, not left for a later save to notice.
+            $this->syncAgentBalance($user, $request);
 
             // Try to log user update activity (but don't fail if logging fails)
             try {
@@ -388,6 +485,7 @@ class UserController extends Controller
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
 
             $user = User::findOrFail($id);
+
 
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
@@ -469,4 +567,4 @@ class UserController extends Controller
             ], 500);
         }
     }
-}
+}

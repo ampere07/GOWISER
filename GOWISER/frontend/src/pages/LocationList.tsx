@@ -6,6 +6,7 @@ import EditLocationModal from '../modals/EditLocationModal';
 import LocationListDetails from '../components/LocationListDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
+import { usePageActions } from '../hooks/usePageActions';
 import {
   getRegions,
   getCities,
@@ -45,6 +46,11 @@ interface SidebarFilter {
 }
 
 const LocationList: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed. The detail pane is told what it may offer.
+  const actions = usePageActions('location-list');
+
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -355,11 +361,13 @@ const LocationList: React.FC = () => {
   };
 
   const handleEditFromDetails = (location: LocationItem) => {
+    if (!actions.canEdit) return;
     setSelectedLocation(location);
     setIsEditModalOpen(true);
   };
 
   const handleDeleteFromDetails = (location: LocationItem) => {
+    if (!actions.canDelete) return;
     handleDeleteLocation(location, { stopPropagation: () => { } } as React.MouseEvent);
   };
 
@@ -421,6 +429,7 @@ const LocationList: React.FC = () => {
   };
 
   const handleDeleteLocation = (location: LocationItem, event: React.MouseEvent) => {
+    if (!actions.canDelete) return;
     event.stopPropagation();
     showGlobalModal(
       'confirm',
@@ -517,6 +526,7 @@ const LocationList: React.FC = () => {
   };
 
   const handleDeleteFromEdit = (location: LocationItem) => {
+    if (!actions.canDelete) return;
     handleDeleteLocation(location, { stopPropagation: () => { } } as any);
   };
 
@@ -786,6 +796,7 @@ const LocationList: React.FC = () => {
                 colorPalette={colorPalette}
                 placeholder="Search locations..."
               />
+              {actions.canCreate && (
               <button
                 onClick={() => setIsAddModalOpen(true)}
                 className="text-white px-4 py-2.5 rounded-lg text-xs transition-all flex items-center space-x-2 font-medium active:scale-95 shadow-sm"
@@ -806,6 +817,7 @@ const LocationList: React.FC = () => {
                 <Plus className="h-4 w-4" />
                 <span className="hidden md:inline">Add Location</span>
               </button>
+              )}
               <button
                 onClick={() => fetchLocationData()}
                 className="p-2.5 rounded-lg flex items-center justify-center transition-colors shadow-sm active:rotate-180 duration-500"
@@ -1007,6 +1019,8 @@ const LocationList: React.FC = () => {
             onClose={() => setSelectedLocation(null)}
             onEdit={handleEditFromDetails}
             onDelete={handleDeleteFromDetails}
+            canEdit={actions.canEdit}
+            canDelete={actions.canDelete}
             isMobile={typeof window !== 'undefined' ? window.innerWidth < 900 : false}
           />
         </div>

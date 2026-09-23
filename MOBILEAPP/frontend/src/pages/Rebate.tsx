@@ -31,6 +31,7 @@ import { getCustomerDetail, CustomerDetailData } from '../services/customerDetai
 import { BillingDetailRecord } from '../types/billing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
+import { usePermissions } from '../hooks/usePermissions';
 
 // Force light mode per RN migration conventions
 const isDarkMode = false;
@@ -151,7 +152,6 @@ const Rebate: React.FC = () => {
   const [isLoadingDetails, setIsLoadingDetails] = useState<boolean>(false);
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'sidebar' | 'list'>('list');
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
@@ -192,20 +192,6 @@ const Rebate: React.FC = () => {
             || null;
           setUserOrgId(orgId);
 
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch (e) {
-                perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (error) {
         console.error('Error parsing auth data in Rebate:', error);
@@ -218,13 +204,9 @@ const Rebate: React.FC = () => {
     fetchRebateData();
   }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
+  const { can: hasPermission } = usePermissions();
 
   const fetchRebateData = async (silent = false) => {
     try {

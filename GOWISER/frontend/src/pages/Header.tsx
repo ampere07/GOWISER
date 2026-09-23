@@ -7,6 +7,7 @@ import NotificationToast from '../components/NotificationToast';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface HeaderProps {
   onToggleSidebar?: () => void;
@@ -119,6 +120,10 @@ const summaryFor = (notification: AppNotification): string => {
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, onLogout, activeSection }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [showNotifications, setShowNotifications] = useState(false);
+  // Dashboard refuses a section the role cannot open, so the bell only offers
+  // shortcuts into sections this user can open: those it holds, and for a
+  // seeded role the bell shortcuts it has always had (WEB_REACHABLE).
+  const { canOpen } = usePermissions();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   // Outstanding-work counts shown above the feed. Kept separate from `unreadCount` because
@@ -577,16 +582,23 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
 
     if (!onNavigate || !notification.id) return;
 
+    let section: string;
     if (notification.type === 'job_order_done') {
-      onNavigate('job-order', String(notification.id));
+      section = 'job-order';
     } else if (notification.type === 'service_order_done' || notification.type === 'service_order_charge_claimed') {
       // Both point at the same record — the charge is a field on the service order.
-      onNavigate('service-order', String(notification.id));
+      section = 'service-order';
     } else if (notification.type === 'transaction_revert') {
-      onNavigate('transactions-revert', String(notification.id));
+      section = 'transactions-revert';
     } else {
-      onNavigate('application-management', String(notification.id));
+      section = 'application-management';
     }
+
+    // Opening a record in a section this role cannot open would only land on
+    // the access-denied screen.
+    if (!canOpen(section)) return;
+
+    onNavigate(section, String(notification.id));
   };
 
   const handleClearAll = () => {
@@ -764,6 +776,14 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     );
   }
 
+  // Outstanding work the bell can take this user to. Every seeded staff role can
+  // open all five queues (WEB_REACHABLE), so this is navBadges.total for them; a
+  // custom role counts only the queues it can open, the rows it is shown.
+  const attentionTotal = ATTENTION_ROWS.reduce(
+    (sum, row) => sum + (canOpen(row.section) ? navBadges[row.key] : 0),
+    0
+  );
+
   // Admin/Staff Header (Original)
   return (
     <header className={`${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
@@ -827,9 +847,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                 thing is waiting or thirty without opening the panel. Totals the outstanding work
                 AND the unread feed, since both are things the bell is telling them about.
                 Capped at 99+ so a large backlog cannot stretch the header. */}
-            {(navBadges.total + unreadCount) > 0 && (
+            {(attentionTotal + unreadCount) > 0 && (
               <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
-                {(navBadges.total + unreadCount) > 99 ? '99+' : (navBadges.total + unreadCount)}
+                {(attentionTotal + unreadCount) > 99 ? '99+' : (attentionTotal + unreadCount)}
               </span>
             )}
           </button>
@@ -856,13 +876,13 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
               {/* Needs attention — outstanding work, above the feed and deliberately outside the
                   "Clear All" scope: these clear when the work is done, not when dismissed.
                   Hidden entirely when everything is at zero so a quiet queue costs no space. */}
-              {navBadges.total > 0 && (
+              {ATTENTION_ROWS.some(row => navBadges[row.key] > 0 && canOpen(row.section)) && (
                 <div className={`px-4 py-3 border-b ${isDarkMode ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
                   <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                     Needs Attention
                   </div>
                   <div className="space-y-1">
-                    {ATTENTION_ROWS.filter(row => navBadges[row.key] > 0).map(row => (
+                    {ATTENTION_ROWS.filter(row => navBadges[row.key] > 0 && canOpen(row.section)).map(row => (
                       <button
                         key={row.key}
                         onClick={() => {

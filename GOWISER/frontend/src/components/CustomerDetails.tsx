@@ -28,6 +28,7 @@ import * as lcpnapService from '../services/lcpnapService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
 import apiClient from '../config/api';
 import { getOnlineStatusInfo } from '../utils/onlineStatus';
+import { usePermissions } from '../hooks/usePermissions';
 
 // Break circular dependency with lazy loading
 const LcpNapLocationDetails = React.lazy(() => import('./LcpNapLocationDetails'));
@@ -111,9 +112,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 }) => {
 
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -125,41 +123,12 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in CustomerDetails:', error);
-      }
-    }
-  }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7 || lowerRole === 'headtech' || roleId === 8) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   const [selectedSOARecord, setSelectedSOARecord] = useState<any>(null);
   const [loadingSOARecord, setLoadingSOARecord] = useState(false);

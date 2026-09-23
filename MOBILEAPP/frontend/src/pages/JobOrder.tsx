@@ -11,7 +11,7 @@ import { JobOrder } from '../types/jobOrder';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { techInOutService } from '../services/techInOutService';
 import TimeInOutModal from '../modals/TimeInOutModal';
-import { agentOwnsReferral, getOnsiteStatus, isActiveOnsiteStatus } from '../utils/agentReferral';
+import { agentJobOrderBand, createAgentReferralMatcher, storedReferralOf } from '../utils/agentReferral';
 
 
 const StatusText = React.memo(({ status, type }: { status?: string | null, type: 'onsite' | 'billing' }) => {
@@ -366,6 +366,18 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   const [userEmail, setUserEmail] = useState<string>('');
   const [userRoleId, setUserRoleId] = useState<number | null>(null);
   const [userFullName, setUserFullName] = useState<string>('');
+  // A referral made through the picker is stored as this id and holds none of
+  // the agent's name, so the id is what finds their own job orders.
+  const [userId, setUserId] = useState<number | null>(null);
+  /**
+   * True once the signed-in user has been read from storage.
+   *
+   * Storage is asynchronous here, so the first render has no identity. Without
+   * this gate the role-based filter below sees no role, treats the viewer as
+   * unrestricted, and paints every job order in the organisation for a moment
+   * before replacing it with the agent's own. Nothing is listed until it is set.
+   */
+  const [identityReady, setIdentityReady] = useState(false);
 
   // Debounce search input to avoid recomputing heavy filter on every keystroke
   useEffect(() => {
@@ -391,11 +403,15 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   useEffect(() => {
     let cancelled = false;
     const initLoad = async () => {
-      const [authResult, paletteResult, billingResult] = await Promise.allSettled([
-        AsyncStorage.getItem('authData'),
+      // The palette and billing statuses are network calls; they are started
+      // now but NOT waited on before the identity is known, so the list (which
+      // is gated on identityReady below) is not held empty for every role until
+      // both requests settle.
+      const othersPromise = Promise.allSettled([
         settingsColorPaletteService.getActive(),
         getBillingStatuses(),
       ]);
+      const [authResult] = await Promise.allSettled([AsyncStorage.getItem('authData')]);
 
       if (cancelled) return;
 
@@ -409,6 +425,7 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           const rId = userData.role_id ? Number(userData.role_id) : null;
           setUserRoleId(rId);
           setUserFullName(userData.full_name || '');
+          setUserId(userData.id ?? userData.user_id ?? null);
 
           // Check time in status for technicians
           const isTech = rId === 2 || rName.toLowerCase() === 'technician';
@@ -427,6 +444,15 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           }
         } catch (error) { }
       }
+
+      // Set whether or not the read succeeded: a viewer whose identity cannot be
+      // determined is treated as having no role, which shows nothing rather than
+      // leaving the list stuck behind the gate for ever.
+      setIdentityReady(true);
+
+      const [paletteResult, billingResult] = await othersPromise;
+      if (cancelled) return;
+
       if (paletteResult.status === 'fulfilled') {
         setColorPalette(paletteResult.value);
       }
@@ -476,7 +502,17 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
 
   const filteredJobOrders = useMemo(() => {
+    // Nothing is listed until the signed-in user is known, so a restricted role
+    // never sees records it is not entitled to, even for a single frame.
+    if (!identityReady) return [];
+
     const lowerSearch = debouncedSearch.toLowerCase();
+
+    // An agent with neither name nor email nor id must see nothing, never
+    // everyone's job orders.
+    const agentKnowsWhoTheyAre = Boolean(userFullName) || Boolean(userEmail) || userId !== null;
+    const ownsReferral = createAgentReferralMatcher(userFullName, userEmail, userId);
+
     return jobOrders.filter(jobOrder => {
       const fullName = getClientFullName(jobOrder).toLowerCase();
       const matchesSearch = debouncedSearch === '' ||
@@ -490,16 +526,17 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         userRoleId === 1 || userRoleId === 7 || userRoleId === 8 ||
         userRole.toLowerCase() === 'superadmin' || userRole.toLowerCase() === 'administrator' || userRole.toLowerCase() === 'headtech';
 
-      // Role-based filtering: Agents (role_id 4) only see their own referrals
+      // Role-based filtering: Agents (role_id 4) only see their own referrals.
+      //
+      // An agent sees every referral they own, however long ago it was raised —
+      // there is no date cut-off, and finished ones are kept rather than
+      // dropped: they read at the bottom of the list (see sortedJobOrders) so
+      // the work still in flight leads.
       if (!isSuperUser && (userRole.toLowerCase() === 'agent' || userRoleId === 4)) {
-        const referredBy = jobOrder.Referred_By || jobOrder.referred_by || '';
-        const matchesAgent = agentOwnsReferral(referredBy, userFullName, userEmail);
-
-        if (!matchesAgent) return false;
-
-        // Agents only see active job orders here (in progress / reschedule).
-        // Completed ("done") ones are shown on the Agent History page instead.
-        if (!isActiveOnsiteStatus(getOnsiteStatus(jobOrder))) return false;
+        if (!agentKnowsWhoTheyAre) return false;
+        // Referred_By is the display name; the stored value (an agent id for
+        // picker-made referrals) is what decides ownership.
+        if (!ownsReferral(storedReferralOf(jobOrder))) return false;
       }
 
       // Hide job orders with onsite status "done", "completed", or "failed" after 1 day
@@ -569,9 +606,29 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
 
       return true;
     });
-  }, [jobOrders, debouncedSearch, statusFilter, userRole, userRoleId, userFullName, userEmail, authUserData, filterValues, getClientFullName, getClientFullAddress]);
+  }, [jobOrders, debouncedSearch, statusFilter, identityReady, userRole, userRoleId, userFullName, userEmail, userId, authUserData, filterValues, getClientFullName, getClientFullAddress]);
+
+  const isAgentViewer = useMemo(
+    () => userRole.toLowerCase() === 'agent' || userRoleId === 4,
+    [userRole, userRoleId]
+  );
 
   const sortedJobOrders = useMemo(() => {
+    // An agent reads their referrals by status band — In Progress first, then
+    // Reschedule, then Failed, with Done last — and newest first inside each
+    // band, so the visits still happening lead and the finished installations
+    // sit at the bottom. The started-first rule below is deliberately not
+    // applied: it reorders an agent's list for a reason unrelated to them.
+    if (isAgentViewer) {
+      return [...filteredJobOrders].sort((a, b) => {
+        const bandA = agentJobOrderBand(a);
+        const bandB = agentJobOrderBand(b);
+        if (bandA !== bandB) return bandA - bandB;
+
+        return (parseInt(String(b.id), 10) || 0) - (parseInt(String(a.id), 10) || 0);
+      });
+    }
+
     return [...filteredJobOrders].sort((a, b) => {
       const activeA = isWorkStarted(a) ? 1 : 0;
       const activeB = isWorkStarted(b) ? 1 : 0;
@@ -584,7 +641,7 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       const idB = parseInt(String(b.id)) || 0;
       return idB - idA;
     });
-  }, [filteredJobOrders]);
+  }, [filteredJobOrders, isAgentViewer]);
 
   const shouldPaginate = true; // Consistently paginate for all roles to prevent UI jumping
 

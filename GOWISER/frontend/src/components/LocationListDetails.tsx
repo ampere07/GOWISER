@@ -24,6 +24,9 @@ interface LocationListDetailsProps {
   onClose: () => void;
   onEdit: (location: LocationItem) => void;
   onDelete: (location: LocationItem) => void;
+  /** Whether the viewer may use each control. The Location List decides. */
+  canEdit?: boolean;
+  canDelete?: boolean;
   isMobile?: boolean;
 }
 
@@ -32,6 +35,8 @@ const LocationListDetails: React.FC<LocationListDetailsProps> = ({
   onClose, 
   onEdit, 
   onDelete,
+  canEdit = true,
+  canDelete = true,
   isMobile = false 
 }) => {
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
@@ -350,6 +355,7 @@ const LocationListDetails: React.FC<LocationListDetailsProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
+          {canDelete && (
           <button
             onClick={() => onDelete(location)}
             className={`p-1.5 rounded hover:bg-red-500/10 text-red-500 transition-colors`}
@@ -357,7 +363,9 @@ const LocationListDetails: React.FC<LocationListDetailsProps> = ({
           >
             <Trash2 size={18} />
           </button>
+          )}
           
+          {canEdit && (
           <button
             onClick={() => onEdit(location)}
             className="p-1.5 rounded text-white flex items-center space-x-1 transition-colors"
@@ -366,6 +374,7 @@ const LocationListDetails: React.FC<LocationListDetailsProps> = ({
             <Edit size={16} />
             <span className="text-sm">Edit</span>
           </button>
+          )}
 
           <button
             onClick={onClose}

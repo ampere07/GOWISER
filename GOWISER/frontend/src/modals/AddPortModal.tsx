@@ -109,6 +109,9 @@ const AddPortModal: React.FC<AddPortModalProps> = ({
 
       const response = await fetch(url, {
         method,
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking.
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',

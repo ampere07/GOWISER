@@ -95,6 +95,24 @@ export const deleteApplication = async (id: string): Promise<void> => {
   await apiClient.delete<ApplicationResponse>(`/applications/${id}`);
 };
 
+/**
+ * Uploads an application's supporting documents to Drive and stores the resulting URLs.
+ * Accepted form keys: proof_of_billing, government_valid_id,
+ * secondary_government_valid_id, house_front_image, promo_image, nearest_landmark1,
+ * nearest_landmark2, document_attachment, other_isp_bill.
+ */
+export const uploadApplicationImages = async (
+  id: number | string,
+  formData: FormData
+): Promise<{ success?: boolean; message?: string; data?: any }> => {
+  const response = await apiClient.post<{ success?: boolean; message?: string; data?: any }>(
+    `/applications/${id}/upload-images`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
+  return response.data;
+};
+
 export const getRelatedDetailsUpdateLogs = async (id: string): Promise<any> => {
   try {
     const response = await apiClient.get<any>(`/audit-trail-logs/by-application/${id}`);

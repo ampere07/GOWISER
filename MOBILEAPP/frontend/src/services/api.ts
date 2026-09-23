@@ -77,6 +77,17 @@ export const storeAgentCommissionHistory = async (data: any): Promise<any> => {
   }
 };
 
+/** How many applications this agent has raised. Scoped to the caller server side. */
+export const fetchAgentApplicationCount = async (): Promise<any> => {
+  try {
+    const response = await apiClient.get('/applications/my-count');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching agent application count:', error);
+    throw error;
+  }
+};
+
 export const fetchAgentAchievements = async (agentId: string | number): Promise<any> => {
   try {
     const response = await apiClient.get('/commissions/achievements', {

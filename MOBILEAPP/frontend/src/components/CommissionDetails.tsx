@@ -21,6 +21,15 @@ interface CommissionDetailsProps {
     onPrevious?: () => void;
     onNext?: () => void;
     isMobile?: boolean;
+    /**
+     * Settling a pending payout. Both are optional: the caller passes them only
+     * for a viewer permitted to approve, so an unpermitted reader never sees the
+     * buttons rather than seeing them and being refused.
+     */
+    onApprove?: (record: any) => void;
+    onReject?: (record: any) => void;
+    /** True while a decision is in flight, so neither can be pressed twice. */
+    approvalPending?: boolean;
 }
 
 // Forced light mode to match the ~50 already-migrated pages.
@@ -28,6 +37,7 @@ const isDarkMode = false;
 
 const CommissionDetails: React.FC<CommissionDetailsProps> = ({
     data, type, onClose, onPrevious, onNext,
+    onApprove, onReject, approvalPending = false,
 }) => {
     const { width } = useWindowDimensions();
     const isTablet = width >= 768;
@@ -124,6 +134,47 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
                         </Text>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        {/* Only while the record is still Pending, and only when
+                            the caller supplied the handlers. */}
+                        {!isEarning && (onApprove || onReject)
+                            && ((payout as any).status ?? 'Pending') === 'Pending' && (
+                            <>
+                                {onApprove && (
+                                    <TouchableOpacity
+                                        onPress={() => onApprove(payout)}
+                                        disabled={approvalPending}
+                                        style={{
+                                            paddingHorizontal: 12,
+                                            paddingVertical: 6,
+                                            borderRadius: 8,
+                                            backgroundColor: '#16a34a',
+                                            opacity: approvalPending ? 0.5 : 1,
+                                        }}
+                                    >
+                                        <Text style={{ fontSize: 12, fontWeight: '600', color: '#ffffff' }}>
+                                            {approvalPending ? 'Working…' : 'Approve'}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                                {onReject && (
+                                    <TouchableOpacity
+                                        onPress={() => onReject(payout)}
+                                        disabled={approvalPending}
+                                        style={{
+                                            paddingHorizontal: 12,
+                                            paddingVertical: 6,
+                                            borderRadius: 8,
+                                            backgroundColor: '#dc2626',
+                                            opacity: approvalPending ? 0.5 : 1,
+                                        }}
+                                    >
+                                        <Text style={{ fontSize: 12, fontWeight: '600', color: '#ffffff' }}>
+                                            Reject
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                            </>
+                        )}
                         <TouchableOpacity
                             onPress={onPrevious}
                             disabled={!onPrevious}

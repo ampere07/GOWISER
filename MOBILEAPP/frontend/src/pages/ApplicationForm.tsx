@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createApplication, uploadApplicationImages } from '../services/api';
 import { getRegions, getCitiesByRegionId, getBarangaysByCityId, Region, City, Borough } from '../services/cityService';
 import { planService, Plan } from '../services/planService';
+import { referredByEcho } from '../utils/referredByField';
 import ImagePreview from '../components/ImagePreview';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
@@ -34,6 +35,14 @@ const ApplicationForm = ({ onClose }: { onClose?: () => void }) => {
         referred_by: 'None / Walk-in',
         desired_plan: '',
         created_by_user_id: null as number | null
+    });
+
+    // The signed-in agent, as the box was seeded with them: the name it shows and
+    // the id that is actually stored. Kept so the submit below can tell an
+    // untouched field from one somebody has typed over.
+    const [referralSeed, setReferralSeed] = useState<{ referred_by: string; referred_by_agent_id: number | null }>({
+        referred_by: '',
+        referred_by_agent_id: null,
     });
 
     const [documents, setDocuments] = useState({
@@ -85,6 +94,12 @@ const ApplicationForm = ({ onClose }: { onClose?: () => void }) => {
                 if (authData && isMountedRef.current) {
                     const user = JSON.parse(authData);
                     if (user) {
+                        // The box shows the agent their own NAME. What gets stored
+                        // is their id — see the submit below.
+                        setReferralSeed({
+                            referred_by: user.full_name || '',
+                            referred_by_agent_id: user.id ?? null,
+                        });
                         setFormData(prev => ({
                             ...prev,
                             ...(user.full_name ? { referred_by: user.full_name } : {}),
@@ -170,7 +185,9 @@ const ApplicationForm = ({ onClose }: { onClose?: () => void }) => {
     }, []);
 
     const handleSubmit = useCallback(async () => {
-        const fd = formData;
+        // The referral is stored as the agent's id while the box still reads as
+        // the name it was seeded with; type over it and the text is what is kept.
+        const fd = { ...formData, referred_by: referredByEcho(referralSeed, formData.referred_by) ?? '' };
         // Basic validation
         if (!fd.email_address || !fd.first_name || !fd.last_name || !fd.mobile_number ||
             !fd.region || !fd.city || !fd.barangay || !fd.installation_address || !fd.desired_plan) {

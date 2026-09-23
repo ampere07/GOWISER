@@ -14,6 +14,41 @@ interface UserModalProps {
   agentOnly?: boolean; // If true, role is locked to Agent
 }
 
+/**
+ * Starting values pre-filled on the Agent fields when creating a new user.
+ *
+ * The fields stay required — this only saves the agreed standard terms being
+ * typed out for every new Agent, and they can still be overwritten before the
+ * account is created. An existing user is never touched by these: editing
+ * always shows that user's own stored values.
+ *
+ * Quota is a COUNT of completed referrals that earns one incentive; Commission
+ * and Incentives are peso amounts. Change the agreed terms here.
+ */
+const AGENT_DEFAULTS = {
+  commission: 100,        // ₱ per completed referral
+  quota: 10,              // completed referrals per incentive batch
+  incentives_value: 100,  // ₱ per completed batch
+} as const;
+
+/** A blank create form, carrying the Agent defaults above. */
+const EMPTY_USER_FORM: CreateUserRequest = {
+  first_name: '',
+  middle_initial: '',
+  last_name: '',
+  username: '',
+  email_address: '',
+  contact_number: '',
+  password: '',
+  role_id: undefined,
+  agent_id: undefined,
+  organization_id: undefined,
+  commission: AGENT_DEFAULTS.commission,
+  quota: AGENT_DEFAULTS.quota,
+  incentives_value: AGENT_DEFAULTS.incentives_value,
+  remarks: '',
+};
+
 const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, agentOnly = false }) => {
   const isEditMode = !!user;
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -40,20 +75,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const [formData, setFormData] = useState<CreateUserRequest>({
-    first_name: '',
-    middle_initial: '',
-    last_name: '',
-    username: '',
-    email_address: '',
-    contact_number: '',
-    password: '',
-    role_id: undefined,
-    agent_id: undefined,
-    organization_id: undefined,
-    commission: undefined,
-    quota: undefined,
-    incentives_value: undefined,
-    remarks: '',
+    ...EMPTY_USER_FORM,
   });
 
   useEffect(() => {
@@ -114,22 +136,8 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
         });
         setConfirmPassword('');
       } else {
-        setFormData({
-          first_name: '',
-          middle_initial: '',
-          last_name: '',
-          username: '',
-          email_address: '',
-          contact_number: '',
-          password: '',
-          role_id: undefined,
-          agent_id: undefined,
-          organization_id: undefined,
-          commission: undefined,
-          quota: undefined,
-          incentives_value: undefined,
-          remarks: '',
-        });
+        // Creating: start from a blank form carrying the agreed Agent defaults.
+        setFormData({ ...EMPTY_USER_FORM });
         setConfirmPassword('');
       }
       setErrors({});
@@ -235,22 +243,8 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
         
         setTimeout(() => {
           onSave(response.data!);
-          setFormData({
-            first_name: '',
-            middle_initial: '',
-            last_name: '',
-            username: '',
-            email_address: '',
-            contact_number: '',
-            password: '',
-            role_id: undefined,
-            agent_id: undefined,
-            organization_id: undefined,
-            commission: undefined,
-            quota: undefined,
-            incentives_value: undefined,
-            remarks: '',
-          });
+          // Reset ready for the next user, defaults included.
+          setFormData({ ...EMPTY_USER_FORM });
           setConfirmPassword('');
           setLoadingModal(prev => ({ ...prev, isOpen: false }));
           onClose();

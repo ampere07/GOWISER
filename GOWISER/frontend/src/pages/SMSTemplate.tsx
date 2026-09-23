@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { MessageSquare, Plus, Edit2, Trash2, Save, X, Eye, EyeOff } from 'lucide-react';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface SMSTemplateData {
   id: number;
@@ -33,6 +34,11 @@ interface ModalConfig {
 }
 
 const SMSTemplate: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('sms-template');
+
   const [templates, setTemplates] = useState<SMSTemplateData[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
@@ -136,6 +142,7 @@ const SMSTemplate: React.FC = () => {
   };
 
   const handleCreate = () => {
+    if (!actions.canCreate) return;
     setFormData({
       template_name: '',
       template_type: '',
@@ -147,6 +154,7 @@ const SMSTemplate: React.FC = () => {
   };
 
   const handleEdit = (template: SMSTemplateData) => {
+    if (!actions.canEdit) return;
     setFormData({
       template_name: template.template_name,
       template_type: template.template_type,
@@ -210,6 +218,7 @@ const SMSTemplate: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    if (!actions.canDelete) return;
     setModal({
       isOpen: true,
       type: 'confirm',
@@ -300,7 +309,7 @@ const SMSTemplate: React.FC = () => {
           <MessageSquare className="h-8 w-8 mr-3" style={{ color: getPrimaryColor() }} />
           <h1 className="text-3xl font-bold">SMS Templates</h1>
         </div>
-        {!isCreating && !editingId && (
+        {actions.canCreate && !isCreating && !editingId && (
           <button
             onClick={handleCreate}
             className="flex items-center px-4 py-2 rounded text-white transition-colors"
@@ -522,6 +531,7 @@ const SMSTemplate: React.FC = () => {
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex gap-2">
+                            {actions.canEdit && (
                             <button
                               onClick={() => handleEdit(template)}
                               className={`p-2 rounded transition-colors ${isDarkMode
@@ -532,6 +542,8 @@ const SMSTemplate: React.FC = () => {
                             >
                               <Edit2 className="h-4 w-4" />
                             </button>
+                            )}
+                            {actions.canDelete && (
                             <button
                               onClick={() => handleDelete(template.id)}
                               className={`p-2 rounded transition-colors ${isDarkMode
@@ -542,6 +554,7 @@ const SMSTemplate: React.FC = () => {
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
+                            )}
                           </div>
                         </td>
                       </tr>

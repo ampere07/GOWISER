@@ -117,7 +117,10 @@ class CustomerDetailController extends Controller
                 'region' => $customer->region,
                 'addressCoordinates' => $customer->address_coordinates,
                 'housingStatus' => $customer->housing_status,
-                'referredBy' => $customer->referred_by,
+                // Shown as a name; the id travels beside it so an edit form can
+                // write the same referral back instead of turning it into a name.
+                'referredBy' => \App\Support\AgentReferral::displayName($customer->referred_by),
+                'referredByAgentId' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                 'desiredPlan' => $customer->desired_plan,
                 'houseFrontPictureUrl' => $customer->house_front_picture_url,
                 'proofOfBillingUrl' => $customer->proof_of_billing_url,

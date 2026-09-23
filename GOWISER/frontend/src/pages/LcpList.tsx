@@ -6,12 +6,19 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { useLcpStore } from '../store/lcpStore';
 import { LCP } from '../services/lcpService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface LcpFormData {
   name: string;
 }
 
 const LcpList: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed. handleEdit also backs the row click, so guarding it stops a
+  // row opening the edit modal for a role that may not save from it.
+  const actions = usePageActions('lcp');
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<LCP | null>(null);
@@ -174,6 +181,7 @@ const LcpList: React.FC = () => {
   };
 
   const handleDelete = (item: LCP, event: React.MouseEvent) => {
+    if (!actions.canDelete) return;
     event.stopPropagation();
     showGlobalModal(
       'confirm',
@@ -210,12 +218,14 @@ const LcpList: React.FC = () => {
   };
 
   const handleEdit = (item: LCP, event: React.MouseEvent) => {
+    if (!actions.canEdit) return;
     event.stopPropagation();
     setEditingItem(item);
     setIsModalOpen(true);
   };
 
   const handleAddNew = () => {
+    if (!actions.canCreate) return;
     setEditingItem(null);
     setIsModalOpen(true);
   };
@@ -253,6 +263,7 @@ const LcpList: React.FC = () => {
                   colorPalette={colorPalette}
                   placeholder="Search LCP"
                 />
+              {actions.canCreate && (
               <button
                 onClick={handleAddNew}
                 className="text-white px-4 py-2.5 font-medium rounded-lg transition-all shadow-sm flex items-center space-x-2 active:scale-95"
@@ -273,6 +284,7 @@ const LcpList: React.FC = () => {
                 <Plus size={18} />
                 <span className="hidden md:inline">Add LCP</span>
               </button>
+              )}
               <button
                 onClick={() => fetchLcpItems(1, itemsPerPage, searchQuery)}
                 className="p-2.5 rounded-lg flex items-center justify-center transition-colors shadow-sm active:rotate-180 duration-500"
@@ -378,6 +390,7 @@ const LcpList: React.FC = () => {
                         )}
                       </div>
                       <div className="flex items-center space-x-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {actions.canEdit && (
                         <button
                           onClick={(e) => handleEdit(item, e)}
                           className={`p-2 rounded-lg transition-all ${isDarkMode
@@ -388,6 +401,8 @@ const LcpList: React.FC = () => {
                         >
                           <Edit2 size={18} />
                         </button>
+                        )}
+                        {actions.canDelete && (
                         <button
                           onClick={(e) => handleDelete(item, e)}
                           disabled={deletingItems.has(item.id)}
@@ -403,6 +418,7 @@ const LcpList: React.FC = () => {
                             <Trash2 size={18} />
                           )}
                         </button>
+                        )}
                       </div>
                     </div>
                   ))}

@@ -7,6 +7,7 @@ import ServiceOrderDetails from '../components/ServiceOrderDetails';
 import { useServiceOrderContext, type ServiceOrder } from '../contexts/ServiceOrderContext';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { Picker } from '@react-native-picker/picker';
+import { createAgentReferralMatcher, storedReferralOf } from '../utils/agentReferral';
 
 // Location grouping removed as per user request
 
@@ -252,6 +253,9 @@ const ServiceOrderPage: React.FC = () => {
   const [userRoleId, setUserRoleId] = useState<number | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
   const [userFullName, setUserFullName] = useState<string>('');
+  // A referral made through the picker is stored as this id and holds none of
+  // the agent's name, so the id is what finds their own service orders.
+  const [userId, setUserId] = useState<number | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [mobileView, setMobileView] = useState<MobileView>('orders');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
@@ -289,6 +293,7 @@ const ServiceOrderPage: React.FC = () => {
           setUserRoleId(roleId);
           setUserEmail(userData.email || '');
           setUserFullName(userData.full_name || '');
+          setUserId(userData.id ?? userData.user_id ?? null);
 
           if (role.toLowerCase() === 'technician' || roleId === 2 || role.toLowerCase() === 'agent' || roleId === 4) {
             // MobileView enforces 'orders' by default
@@ -339,6 +344,9 @@ const ServiceOrderPage: React.FC = () => {
     const lowerSearch = debouncedSearch.toLowerCase();
     const isSearchEmpty = lowerSearch === '';
 
+    // The agent's own half of the referral test, built once for the whole scan.
+    const ownsReferral = createAgentReferralMatcher(userFullName, userEmail, userId);
+
     return serviceOrders
       .filter(serviceOrder => {
         // Hide resolved service orders for technicians
@@ -373,12 +381,12 @@ const ServiceOrderPage: React.FC = () => {
 
         // Role-based filtering: Agents (role_id 4) only see their own referrals
         if (!isSuperUser && (userRole.toLowerCase() === 'agent' || userRoleId === 4)) {
-          const referredBy = (serviceOrder.referredBy || '').toLowerCase();
-          const matchesAgent =
-            (userFullName && referredBy.includes(userFullName.toLowerCase())) ||
-            (userEmail && referredBy.includes(userEmail.toLowerCase()));
-
-          if (!matchesAgent) return false;
+          // The shared rule, not a substring test of its own: a referral is now
+          // stored as the agent's user id, which contains none of their name, and
+          // `includes` would also have counted "Ana" as a match for "Joana".
+          // referredBy is the display name; referredByAgentId is the agent the
+          // stored value names, when it names one.
+          if (!ownsReferral(storedReferralOf(serviceOrder))) return false;
         }
 
         return true;
@@ -395,7 +403,7 @@ const ServiceOrderPage: React.FC = () => {
         const timeB = b.rawUpdatedAt ? new Date(b.rawUpdatedAt).getTime() : (b.timestamp ? new Date(b.timestamp).getTime() : 0);
         return timeB - timeA;
       });
-  }, [serviceOrders, debouncedSearch, statusFilter, userRole, userRoleId, userFullName, userEmail]);
+  }, [serviceOrders, debouncedSearch, statusFilter, userRole, userRoleId, userFullName, userEmail, userId]);
 
   const shouldPaginate = true; // Consistently paginate for all roles to prevent UI jumping
 

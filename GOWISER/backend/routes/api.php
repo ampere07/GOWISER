@@ -62,6 +62,33 @@ Route::get('/commissions/agent-job-orders', [CommissionController::class, 'getJo
 Route::get('/commissions/incentive-history', [CommissionController::class, 'getIncentiveHistory']);
 Route::get('/commissions/bonus-history', [CommissionController::class, 'getBonusHistory']);
 Route::post('/commissions/bonus-history', [CommissionController::class, 'storeBonusHistory']);
+// Weekly / monthly onboarding achievements. Reading is scoped in the controller
+// (a non-admin reads their own); claiming credits the caller, and only an
+// administrator may name another agent.
+Route::get('/commissions/achievements', [CommissionController::class, 'getAchievements']);
+Route::post('/commissions/achievements', [CommissionController::class, 'storeAchievement']);
+// Payout approval: a payout or bonus is recorded as Pending and only moves the
+// agent's balance once approved here. Administrator / SuperAdmin only (enforced
+// in the controller via App\Support\AgentAccess); the approver is taken from
+// the signed-in user, never from the request body.
+Route::post('/commissions/history/{id}/approve', [CommissionController::class, 'approveHistory'])->whereNumber('id');
+Route::post('/commissions/history/{id}/reject', [CommissionController::class, 'rejectHistory'])->whereNumber('id');
+Route::post('/commissions/bonus-history/{id}/approve', [CommissionController::class, 'approveBonus'])->whereNumber('id');
+Route::post('/commissions/bonus-history/{id}/reject', [CommissionController::class, 'rejectBonus'])->whereNumber('id');
+
+// ── Weekly agent referral invoices ──────────────────────────────────────────
+// Scoped inside the controller: an agent sees their team's invoices, or their
+// own when they have no team; an administrator sees their organisation's; a
+// superadmin sees all. generate / status are Administrator / SuperAdmin only.
+// The literal paths are registered before the /{id} ones (which also carry
+// whereNumber) so they can never be read as an id.
+Route::get('/agent-invoices', [\App\Http\Controllers\AgentInvoiceController::class, 'index']);
+Route::post('/agent-invoices/generate', [\App\Http\Controllers\AgentInvoiceController::class, 'generate']);
+Route::get('/agent-invoices/periods', [\App\Http\Controllers\AgentInvoiceController::class, 'periods']);
+Route::get('/agent-invoices/archive', [\App\Http\Controllers\AgentInvoiceController::class, 'archive']);
+Route::get('/agent-invoices/{id}', [\App\Http\Controllers\AgentInvoiceController::class, 'show'])->whereNumber('id');
+Route::get('/agent-invoices/{id}/pdf', [\App\Http\Controllers\AgentInvoiceController::class, 'pdf'])->whereNumber('id');
+Route::patch('/agent-invoices/{id}/status', [\App\Http\Controllers\AgentInvoiceController::class, 'updateStatus'])->whereNumber('id');
 
 // Reports module is Super Admin only — enforced here (not just hidden in the UI) since
 // reports can expose org-wide financial/commission data.
@@ -1326,22 +1353,19 @@ Route::post('/login', function (Request $request) {
             $fullName = $user->username;
         }
 
-        // Get role permissions (for custom roles)
-        // Note: Role model casts 'permissions' to array automatically
-        $rolePermissions = null;
-        if ($user->role) {
-            $rawPerms = $user->role->permissions;
-            \Log::info('Login permissions debug', [
-                'user_id' => $user->id,
-                'role_id' => $user->role_id,
-                'role_name' => $user->role->role_name ?? 'unknown',
-                'raw_permissions' => $rawPerms,
-                'permissions_type' => gettype($rawPerms),
-            ]);
-            if (is_array($rawPerms) && count($rawPerms) > 0) {
-                $rolePermissions = $rawPerms;
-            }
-        }
+        // The role's effective permission keys.
+        //
+        // Resolved through App\Support\Permissions rather than read straight off
+        // the role row, so a seeded role (1-8) gets the keys its role implies
+        // and a custom role (9+) gets its own stored list — plus, if it is a
+        // hybrid, everything its base role holds, and, if it was saved before
+        // per-action keys existed, every action of each page it holds. The
+        // clients receive one shape and do not have to know which kind of role
+        // they hold. A SuperAdmin gets ["*"].
+        //
+        // This is the same list /api/me/permissions returns; sending it at
+        // sign-in saves the first paint a round trip.
+        $rolePermissions = \App\Support\Permissions::forUser($user);
 
         $responseData = [
             'user' => [
@@ -1352,6 +1376,12 @@ Route::post('/login', function (Request $request) {
                 'role' => $primaryRole,
                 'role_id' => $user->role_id,
                 'permissions' => $rolePermissions,
+                // Where this role should land. The client uses it instead of
+                // guessing from the first key in the list. Null for a
+                // standalone custom role: the client picks its first page.
+                'home' => \App\Support\Permissions::homeFor($user),
+                // A custom role saved before per-action keys existed.
+                'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
             ]
         ];
 
@@ -1494,6 +1524,33 @@ Route::post('/logout', function (Request $request) {
 });
 
 /**
+ * The signed-in user's effective permission keys and landing page.
+ *
+ * The server is the authority on what a role may do; this is how a client
+ * asks. The clients cache the same table locally so the first paint after a
+ * reload does not have to wait on a round trip, and reconcile against this —
+ * so a user whose role is changed while they are signed in loses the menu
+ * entries on their next load rather than on their next sign-in.
+ *
+ * `permissions` may be `["*"]` for a SuperAdmin, which the clients read as
+ * "everything, including keys added later".
+ */
+Route::middleware('auth:sanctum')->get('/me/permissions', function (Request $request) {
+    $user = $request->user();
+
+    return response()->json([
+        'success' => true,
+        'data' => [
+            'role_id'     => (int) $user->role_id,
+            'role'        => strtolower(optional($user->role)->role_name ?? ''),
+            'permissions' => \App\Support\Permissions::forUser($user),
+            'home'        => \App\Support\Permissions::homeFor($user),
+            'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
+        ],
+    ]);
+});
+
+/**
  * Cheap "is my session still good?" probe for the SPA to call on boot and before deciding a
  * 401 is terminal. Unauthenticated is a normal answer here, not an error, so it returns 200
  * with authenticated=false rather than a 401 — that keeps it from tripping the SPA's own
@@ -1622,6 +1679,8 @@ Route::prefix('applications')->middleware('auth:sanctum')->group(function () {
     Route::get('/', [ApplicationController::class , 'index']);
     Route::post('/', [ApplicationController::class , 'store']);
     Route::post('/broadcast-viewing', [ApplicationController::class, 'broadcastViewing']);
+    // Above /{id}: the parameter is unconstrained and would match "my-count".
+    Route::get('/my-count', [ApplicationController::class , 'myCount']);
     Route::get('/{id}', [ApplicationController::class , 'show']);
     Route::put('/{id}', [ApplicationController::class , 'update']);
     Route::post('/{id}/upload-images', [ApplicationController::class, 'uploadImages']);
@@ -1914,7 +1973,12 @@ Route::get('/plans/{id}/related', function ($id) {
                             $jo->city = $jo->city ?? ($app ? $app->city : '');
                             $jo->region = $jo->region ?? ($app ? $app->region : '');
                             $jo->desired_plan = $jo->desired_plan ?? ($app ? $app->desired_plan : '');
-                            $jo->referred_by = $jo->referred_by ?? ($app ? $app->referred_by : '');
+                            // Shown as a name, with the id kept beside it so the
+                            // mobile forms write the same referral back rather
+                            // than turning it into a name again.
+                            $rawReferral = $jo->referred_by ?? ($app ? $app->referred_by : '');
+                            $jo->referred_by = \App\Support\AgentReferral::displayName($rawReferral);
+                            $jo->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($rawReferral);
                             $jo->applying_for = $jo->applying_for ?? ($app ? $app->promo : '');
                             $jo->terms_agreed = $jo->terms_agreed ?? ($app ? $app->terms_agreed : '');
 

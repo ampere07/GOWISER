@@ -12,6 +12,7 @@ import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
 import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
 import { useFunnelFilter } from '../filter/useFunnelFilter';
+import { usePermissions } from '../hooks/usePermissions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -147,9 +148,6 @@ const Discounts: React.FC = () => {
   const [discountRecords, setDiscountRecords] = useState<DiscountRecord[]>([]);
   const [createdDateFrom, setCreatedDateFrom] = useState<string>('');
   const [createdDateTo, setCreatedDateTo] = useState<string>('');
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
 
@@ -173,41 +171,12 @@ const Discounts: React.FC = () => {
     }
   }, [selectedLocation, createdDateFrom, createdDateTo, isMobile]);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in Discounts:', error);
-      }
-    }
-  }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     selectedDiscountRef.current = selectedDiscount;

@@ -78,6 +78,8 @@ export interface ServiceOrderData {
   city?: string;
   barangay?: string;
   referred_by?: string;
+  // The agent the stored referral names; referred_by itself is the display name.
+  referred_by_agent_id?: number | null;
   proof_of_billing_url?: string;
   government_valid_id_url?: string;
   second_government_valid_id_url?: string;

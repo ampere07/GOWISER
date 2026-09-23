@@ -107,6 +107,13 @@ class JobOrder extends Model
         'organization_id',
         'technicians',
         'commission_status',
+        // NOT fillable, deliberately: commission_value, incentive_value,
+        // agent_paid_at, agent_paid_to. They record what this job order settled
+        // with its referring agent and are written only by
+        // JobOrderAgentPaymentService via forceFill(). JobOrderController::update()
+        // fills from $request->all(), so making them fillable would let any edit
+        // form clear agent_paid_at (and get the agent paid twice) or 500 on a
+        // database where the 2026_08_14 migration has not run yet.
     ];
 
     protected $dates = [
@@ -128,6 +135,10 @@ class JobOrder extends Model
         'withholding_percentage' => 'decimal:2',
         'vip_enabled' => 'boolean',
         'vip_expiration' => 'datetime',
+        'commission_value' => 'decimal:2',
+        'incentive_value' => 'decimal:2',
+        'agent_paid_at' => 'datetime',
+        'agent_paid_to' => 'integer',
     ];
 
     public function application()

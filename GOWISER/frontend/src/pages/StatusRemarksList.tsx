@@ -5,6 +5,7 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 import StatusRemarksFormModal from '../modals/StatusRemarksFormModal';
 import GlobalSearch from './globalfunctions/GlobalSearch';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface StatusRemark {
   id: number;
@@ -24,6 +25,9 @@ interface GlobalModalState {
 }
 
 const StatusRemarksList: React.FC = () => {
+  // Add/edit/delete on this list. The same key the API demands, so a
+  // control is only drawn when the request behind it would succeed.
+  const actions = usePageActions('status-remarks-list');
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusRemarks, setStatusRemarks] = useState<StatusRemark[]>([]);
@@ -118,6 +122,7 @@ const StatusRemarksList: React.FC = () => {
   };
 
   const handleDelete = (remark: StatusRemark) => {
+    if (!actions.canDelete) return;
     showGlobalModal(
       'confirm',
       'Confirm Deletion',
@@ -171,6 +176,7 @@ const StatusRemarksList: React.FC = () => {
   };
 
   const handleEdit = (remark: StatusRemark) => {
+    if (!actions.canEdit) return;
     setEditingRemark(remark);
     setShowAddModal(true);
   };
@@ -249,31 +255,35 @@ const StatusRemarksList: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              onClick={() => handleEdit(remark)}
-              className={`p-2 rounded transition-colors ${isDarkMode
-                ? 'text-gray-400 hover:text-white hover:bg-gray-700'
-                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              title="Edit"
-            >
-              <Edit2 className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => handleDelete(remark)}
-              disabled={deletingItems.has(remark.id)}
-              className={`p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isDarkMode
-                ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700'
-                : 'text-gray-600 hover:text-red-600 hover:bg-gray-100'
-                }`}
-              title="Delete"
-            >
-              {deletingItems.has(remark.id) ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-            </button>
+            {actions.canEdit && (
+              <button
+                onClick={() => handleEdit(remark)}
+                className={`p-2 rounded transition-colors ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                title="Edit"
+              >
+                <Edit2 className="h-4 w-4" />
+              </button>
+            )}
+            {actions.canDelete && (
+              <button
+                onClick={() => handleDelete(remark)}
+                disabled={deletingItems.has(remark.id)}
+                className={`p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isDarkMode
+                  ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700'
+                  : 'text-gray-600 hover:text-red-600 hover:bg-gray-100'
+                  }`}
+                title="Delete"
+              >
+                {deletingItems.has(remark.id) ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -295,6 +305,7 @@ const StatusRemarksList: React.FC = () => {
               colorPalette={colorPalette}
               placeholder="Search Status Remarks..."
             />
+            {actions.canCreate && (
             <button
               onClick={() => {
                 setEditingRemark(null);
@@ -318,6 +329,7 @@ const StatusRemarksList: React.FC = () => {
               <Plus className="h-4 w-4" />
               <span className="hidden md:inline">Add Remark</span>
             </button>
+            )}
             <button
               onClick={() => loadStatusRemarks()}
               className="p-2.5 rounded-lg flex items-center justify-center transition-colors shadow-sm active:rotate-180 duration-500"

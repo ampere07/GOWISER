@@ -70,9 +70,15 @@ class CustomerController extends Controller
                 ->get()
                 ->pluck('total', 'account_id');
 
-            $customers = Customer::with(['group', 'billingAccounts.onlineStatus'])
+            $customerRows = Customer::with(['group', 'billingAccounts.onlineStatus'])
                 ->orderBy('created_at', 'desc')
-                ->get()
+                ->get();
+
+            // One query for every agent-id referral in the list, rather than one
+            // per distinct id inside the map below.
+            \App\Support\AgentReferral::prime($customerRows->pluck('referred_by'));
+
+            $customers = $customerRows
                 ->map(function ($customer) use ($transactions, $portalLogs) {
                     $totalPaid = 0;
                     foreach ($customer->billingAccounts as $account) {
@@ -96,7 +102,10 @@ class CustomerController extends Controller
                         'region' => $customer->region,
                         'address_coordinates' => $customer->address_coordinates,
                         'housing_status' => $customer->housing_status,
-                        'referred_by' => $customer->referred_by,
+                        // Shown as a name; the id travels beside it so an edit form can
+                        // write the same referral back instead of turning it into a name.
+                        'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
+                        'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                         'desired_plan' => $customer->desired_plan,
                         'house_front_picture_url' => $customer->house_front_picture_url,
                         'group_id' => $customer->group_id,
@@ -148,7 +157,10 @@ class CustomerController extends Controller
                 'region' => $customer->region,
                 'address_coordinates' => $customer->address_coordinates,
                 'housing_status' => $customer->housing_status,
-                'referred_by' => $customer->referred_by,
+                // Shown as a name; the id travels beside it so an edit form can
+                // write the same referral back instead of turning it into a name.
+                'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                 'desired_plan' => $customer->desired_plan,
                 'house_front_picture_url' => $customer->house_front_picture_url,
                 'group_id' => $customer->group_id,
@@ -266,7 +278,18 @@ class CustomerController extends Controller
                 ], 422);
             }
 
-            $customer->update($request->all());
+            $payload = $request->all();
+
+            // Responses show an agent-id referral as the agent's name; a form that
+            // echoes that name back must not overwrite the stored id with it.
+            if (array_key_exists('referred_by', $payload)) {
+                $payload['referred_by'] = \App\Support\AgentReferral::preserveOnWrite(
+                    $payload['referred_by'],
+                    $customer->referred_by
+                );
+            }
+
+            $customer->update($payload);
 
             // Broadcast customer-updated event
             $this->broadcastCustomerUpdated($customer);

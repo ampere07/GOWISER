@@ -120,8 +120,16 @@ class ServiceOrderApiController extends Controller
                 if ($user) {
                     $agentName = trim($user->first_name . ' ' . ($user->middle_initial ? $user->middle_initial . ' ' : '') . $user->last_name);
 
-                    $query->where(function ($q) use ($agentName) {
+                    // A referral made through the agent picker is stored as the
+                    // agent's user id, which holds none of their name — matched
+                    // alongside the name so both forms reach the same agent.
+                    $tagged = \App\Support\AgentReferral::encode($user->id ?? null);
+
+                    $query->where(function ($q) use ($agentName, $tagged) {
                         $q->where('so.referred_by', 'LIKE', '%' . $agentName . '%');
+                        if ($tagged !== null) {
+                            $q->orWhere('so.referred_by', $tagged);
+                        }
                     });
 
                     \Log::info('Filtering service orders for agent role using referred_by column', [
@@ -202,10 +210,20 @@ class ServiceOrderApiController extends Controller
             }
 
             // Map related data to service orders
+            // Resolve every referral on the page in one query rather than one
+            // per row: a referral made through the agent picker holds the
+            // agent's user id, and every screen shows their name.
+            \App\Support\AgentReferral::prime($serviceOrders->pluck('referred_by'));
+
             $mappedOrders = $serviceOrders->map(function ($so) use ($billingAccounts, $technicalDetails, $jobOrderPasswords) {
                 $ba = $billingAccounts->get($so->account_no);
                 $c = $ba ? $ba->customer : null;
                 $td = $technicalDetails->get($so->account_no);
+
+                // Shown as a name, with the id beside it so an edit form writes
+                // the same referral back rather than turning it into a name.
+                $so->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($so->referred_by);
+                $so->referred_by = \App\Support\AgentReferral::displayName($so->referred_by);
 
                 // Manually populate fields that were previously joined
                 $so->account_id = $ba ? $ba->id : null;
@@ -542,6 +560,11 @@ class ServiceOrderApiController extends Controller
 
             if ($serviceOrder) {
                 $serviceOrder->technicians = isset($serviceOrder->technicians) ? json_decode($serviceOrder->technicians) : null;
+
+                // Shown as a name, with the id beside it so an edit form writes
+                // the same referral back rather than turning it into a name.
+                $serviceOrder->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($serviceOrder->referred_by ?? null);
+                $serviceOrder->referred_by = \App\Support\AgentReferral::displayName($serviceOrder->referred_by ?? null);
             }
 
             return response()->json([

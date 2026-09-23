@@ -16,6 +16,33 @@ interface AgentPayoutModalProps {
     onSuccess: () => void;
     agentId?: number;
     agentName?: string;
+    /**
+     * Approving an existing payout rather than raising a new one.
+     *
+     * A payout raised from an invoice is recorded without an amount, proof or
+     * remarks, so approving collects them. With this set the form posts to the
+     * record's own approve endpoint — posting to /commissions/history instead
+     * would raise a SECOND payout beside the one being approved.
+     */
+    approveId?: number;
+    /** The reference the record already carries; approving keeps it. */
+    approveRefNumber?: string;
+    /**
+     * The type the record was raised with. Approving never re-types a record:
+     * the approve call carries this type (or none), never the picker's value —
+     * re-typing a record to "all" at approval drains every bucket.
+     */
+    approveType?: string | null;
+    /** The amount the record already carries, prefilled when approving. */
+    approveAmount?: number | string | null;
+    /**
+     * Raised from an agent invoice. The form then asks only for the agent:
+     * the invoice number is the reference, and the amount is settled when
+     * the payout is approved rather than when it is raised.
+     */
+    fromInvoice?: boolean;
+    /** The invoice number, which becomes the payout's reference. */
+    invoiceNumber?: string;
 }
 
 interface PayoutFormData {
@@ -57,7 +84,13 @@ const AgentPayoutForm: React.FC<{
     onClose: () => void;
     onSuccess: () => void;
     isOpen: boolean;
-}> = ({ agentId, agentName, onClose, onSuccess, isOpen }) => {
+    approveId?: number;
+    approveRefNumber?: string;
+    approveType?: string | null;
+    approveAmount?: number | string | null;
+    fromInvoice?: boolean;
+    invoiceNumber?: string;
+}> = ({ agentId, agentName, onClose, onSuccess, isOpen, approveId, approveRefNumber, approveType, approveAmount, fromInvoice = false, invoiceNumber }) => {
     const { isDarkMode } = useModalTheme();
 
     const [agents, setAgents] = useState<any[]>([]);
@@ -154,7 +187,11 @@ const AgentPayoutForm: React.FC<{
             setSelectedAgentId(agentId || '');
 
             let initialAmount = '';
-            if (agentId && agents.length > 0) {
+            const carriedAmount = Number(approveAmount);
+            if (approveId && Number.isFinite(carriedAmount) && carriedAmount > 0) {
+                // Approving: the record's own amount, not the agent's balance.
+                initialAmount = String(carriedAmount);
+            } else if (agentId && agents.length > 0) {
                 const selectedAgentObj = agents.find((a) => Number(a.id) === Number(agentId));
                 const { total } = getAgentBalances(selectedAgentObj);
                 initialAmount = total > 0 ? String(total) : '';
@@ -162,11 +199,15 @@ const AgentPayoutForm: React.FC<{
 
             setFormData({
                 agent_id: agentId || '',
-                ref_number: generateRefNumber(),
+                // Approving keeps the reference the record was raised with —
+                // it is what ties the payout back to the invoice it settles.
+                ref_number: approveRefNumber
+                    || (fromInvoice && invoiceNumber ? invoiceNumber : generateRefNumber()),
                 total_amount: initialAmount,
                 remarks: '',
                 proof_of_payment: '',
-                payout_type: 'commission',
+                // Approving keeps the record's own type; see approveType.
+                payout_type: (approveId && approveType) ? approveType : 'commission',
             });
             setImage(null);
             setError(null);
@@ -224,8 +265,21 @@ const AgentPayoutForm: React.FC<{
     };
 
     const handleSave = async () => {
-        if (!formData.agent_id || !formData.ref_number || !formData.total_amount || !formData.remarks || !image) {
-            setError('Agent, reference number, amount, proof, and remarks are required.');
+        // Raised from an invoice, only the agent and the reference are needed:
+        // the API takes the amount from the invoice and the rest is collected
+        // when the payout is approved. Asking for all five here refused a
+        // payout the server would have accepted, under a message naming only two.
+        const invoiceRaise = fromInvoice && !approveId;
+        const missingRequired = invoiceRaise
+            ? (!formData.agent_id || !formData.ref_number)
+            : (!formData.agent_id || !formData.ref_number || !formData.total_amount || !formData.remarks || !image);
+
+        if (missingRequired) {
+            setError(approveId
+                ? 'Amount, proof, and remarks are required to approve.'
+                : fromInvoice
+                    ? 'Agent and reference number are required.'
+                    : 'Agent, reference number, amount, proof, and remarks are required.');
             return;
         }
 
@@ -238,7 +292,11 @@ const AgentPayoutForm: React.FC<{
         else if (formData.payout_type === 'Bonus_payout') maxAvailable = bonus;
         else if (formData.payout_type === 'all') maxAvailable = total;
 
-        if (Number(formData.total_amount) > maxAvailable) {
+        // A credit ("Add Incentives" / "Add Bonus") being approved adds money,
+        // so no balance caps it.
+        const isCreditType = formData.payout_type === 'incentives' || formData.payout_type === 'Bonus';
+
+        if (!isCreditType && formData.total_amount && Number(formData.total_amount) > maxAvailable) {
             setError(`Payout amount cannot exceed available balance for the selected type (₱${Number(maxAvailable).toLocaleString(undefined, { minimumFractionDigits: 2 })}).`);
             return;
         }
@@ -277,11 +335,30 @@ const AgentPayoutForm: React.FC<{
             const payload = {
                 ...formData,
                 proof_of_payment: proofUrl,
-                type: 'agent_payout',
+                // Send the payout type the user actually picked. The option values
+                // (commission / incentives_payout / Bonus_payout / all) map 1:1 onto the
+                // balance branches in CommissionController::storeHistory — a literal
+                // 'agent_payout' matches none of them, so the incentives and bonus
+                // buckets would be left untouched while the balance was debited.
+                type: formData.payout_type,
                 job_order_ids: [],
                 ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {}),
+                // Tells the API this came from an invoice, which is what
+                // relaxes its requirement for the fields the form did not ask for.
+                ...(fromInvoice ? { from_invoice: true } : {}),
             };
-            const response = await apiClient.post('/commissions/history', payload);
+            // Approving writes these details onto the record that already
+            // exists and applies it; raising a payout creates a new one.
+            // The approve call never carries the picker's type: the record keeps
+            // the type it was raised with (sent back unchanged, or omitted).
+            const response = approveId
+                ? await apiClient.post(`/commissions/history/${approveId}/approve`, {
+                    total_amount: formData.total_amount,
+                    ...(approveType ? { type: approveType } : {}),
+                    remarks: formData.remarks,
+                    proof_of_payment: proofUrl,
+                })
+                : await apiClient.post('/commissions/history', payload);
 
             if ((response.data as any).success) {
                 onSuccess();
@@ -335,14 +412,18 @@ const AgentPayoutForm: React.FC<{
             primaryAction={{
                 label: 'Save',
                 onClick: handleSave,
-                disabled:
-                    loading ||
-                    !formData.agent_id ||
-                    !formData.total_amount ||
-                    Number(formData.total_amount) <= 0 ||
-                    Number(formData.total_amount) > availableTotal ||
-                    !formData.remarks ||
-                    !image,
+                // Raised from an invoice, only the agent and reference are needed
+                // (see handleSave); everything else is collected at approval.
+                disabled: (fromInvoice && !approveId)
+                    ? (loading || !formData.agent_id || !formData.ref_number)
+                    : (loading ||
+                        !formData.agent_id ||
+                        !formData.total_amount ||
+                        Number(formData.total_amount) <= 0 ||
+                        (!(formData.payout_type === 'incentives' || formData.payout_type === 'Bonus')
+                            && Number(formData.total_amount) > availableTotal) ||
+                        !formData.remarks ||
+                        !image),
             }}
         >
             <View style={{ gap: 20 }}>
@@ -430,6 +511,8 @@ const AgentPayoutForm: React.FC<{
                     <View style={{ borderWidth: 1, borderColor: inputBorder, borderRadius: 8, backgroundColor: inputBg }}>
                         <Picker
                             selectedValue={formData.payout_type}
+                            // Approving cannot re-type the record.
+                            enabled={!approveId}
                             onValueChange={(val) => {
                                 setFormData((prev) => ({
                                     ...prev,

@@ -9,6 +9,8 @@ export interface LoginResponse {
       full_name: string;
       role: string;
       role_id: number;
+      permissions?: string[] | null;
+      home?: string | null;
       organization?: {
         id: number;
         name: string;
@@ -55,6 +57,13 @@ export interface UserData {
   full_name: string;
   role: string;
   role_id: number;
+  /**
+   * The role's effective permission keys, resolved server side (see
+   * backend/app/Support/Permissions.php). `['*']` for a SuperAdmin.
+   */
+  permissions?: string[] | null;
+  /** The page this role lands on, as a permission key, e.g. "job-order". */
+  home?: string | null;
   organization?: {
     id: number;
     name: string;
@@ -106,6 +115,14 @@ export interface Role {
   id: number;
   role_name: string;
   description?: string;
+  organization_id?: number | null;
+  /** The seeded role (1-8) a hybrid custom role builds on, or null. */
+  base_role_id?: number | null;
+  /** The role's own stored keys (a hybrid's extras only). */
+  permissions?: string[] | string | null;
+  /** What the role grants, legacy rules applied, minus the inherited half. */
+  effective_permissions?: string[] | null;
+  users_count?: number;
   created_at: string;
   updated_at: string;
   users?: User[];

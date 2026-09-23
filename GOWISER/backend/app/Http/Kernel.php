@@ -43,6 +43,12 @@ class Kernel extends HttpKernel
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
             'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            // Authorization for every API endpoint, from the table in
+            // App\Support\ApiPermissionMap. Last in the group so the session
+            // Sanctum starts above is available to it, and so a request that is
+            // refused has already been rate limited. Whether it refuses, only
+            // logs, or stands aside is config('permissions.api_access_control').
+            \App\Http\Middleware\ApiAccessControl::class,
         ],
     ];
 
@@ -59,6 +65,7 @@ class Kernel extends HttpKernel
         'can' => \Illuminate\Auth\Middleware\Authorize::class,
         'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
         'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
+        'permission' => \App\Http\Middleware\EnsurePermission::class,
         'role' => \App\Http\Middleware\EnsureUserHasRole::class,
         'signed' => \App\Http\Middleware\ValidateSignature::class,
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,

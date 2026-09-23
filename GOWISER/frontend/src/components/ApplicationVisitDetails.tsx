@@ -26,6 +26,9 @@ interface ApplicationVisitDetailsProps {
     full_name: string;
     full_address: string;
     referred_by?: string;
+    // Carried alongside the name so the JO Assign form below writes the same
+    // referral back instead of turning an agent id into a name again.
+    referred_by_agent_id?: number | null;
     updated_by_user_email: string;
     created_at?: string;
     updated_at?: string;
@@ -1052,6 +1055,8 @@ const ApplicationVisitDetails: React.FC<ApplicationVisitDetailsProps> = ({ appli
         applicationData={{
           id: currentVisitData.application_id,
           referred_by: applicationDetails?.referred_by || currentVisitData.referred_by,
+          referred_by_agent_id:
+            (applicationDetails as any)?.referred_by_agent_id ?? currentVisitData.referred_by_agent_id ?? null,
           first_name: applicationDetails?.first_name || currentVisitData.first_name,
           middle_initial: applicationDetails?.middle_initial || currentVisitData.middle_initial,
           last_name: applicationDetails?.last_name || currentVisitData.last_name,

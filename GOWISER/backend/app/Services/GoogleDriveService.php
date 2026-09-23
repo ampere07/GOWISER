@@ -290,6 +290,59 @@ class GoogleDriveService
         }
     }
 
+    /**
+     * Upload content already held in memory, with no file on disk.
+     *
+     * uploadFile() takes a path or an UploadedFile and reads it, which means
+     * whatever is being uploaded has to be written somewhere first. A document
+     * generated in memory has no reason to touch the filesystem at all — and on
+     * a server where the storage directory is not writable by the web user, it
+     * cannot. This is the same upload, given the bytes directly.
+     *
+     * No image resizing here: this path exists for generated documents, and
+     * resizing is uploadFile()'s concern for photographs.
+     *
+     * @return string  the shareable Drive URL
+     */
+    public function uploadContent(string $content, $folderId, string $fileName, string $mimeType = 'application/octet-stream')
+    {
+        try {
+            $fileMetadata = new GoogleDrive\DriveFile([
+                'name' => $fileName,
+                'parents' => [$folderId]
+            ]);
+
+            $uploadedFile = $this->service->files->create($fileMetadata, [
+                'data' => $content,
+                'mimeType' => $mimeType,
+                'uploadType' => 'multipart',
+                'fields' => 'id',
+                'supportsAllDrives' => true
+            ]);
+
+            $this->makeFileViewable($uploadedFile->id);
+
+            $fileUrl = 'https://drive.google.com/file/d/' . $uploadedFile->id . '/view';
+
+            Log::info('Content uploaded to Google Drive', [
+                'file_name' => $fileName,
+                'file_id'   => $uploadedFile->id,
+                'folder_id' => $folderId,
+                'bytes'     => strlen($content),
+                'url'       => $fileUrl,
+            ]);
+
+            return $fileUrl;
+        } catch (\Exception $e) {
+            Log::error('Failed to upload content to Google Drive', [
+                'file_name' => $fileName,
+                'folder_id' => $folderId,
+                'error'     => $e->getMessage()
+            ]);
+            throw $e;
+        }
+    }
+
     public function uploadFile($file, $folderId, $fileName, $mimeType = null)
     {
         try {

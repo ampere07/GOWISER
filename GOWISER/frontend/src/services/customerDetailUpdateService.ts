@@ -82,6 +82,9 @@ export const customerDetailUpdateService = {
 
       const response = await fetch(`${API_URL}/customer-detail/${accountNo}`, {
         method,
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking (and records who made the change).
+        credentials: 'include',
         headers,
         body,
       });

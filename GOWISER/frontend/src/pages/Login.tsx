@@ -106,7 +106,18 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           full_name: response.data.user.full_name,
           role: response.data.user.role,
           role_id: response.data.user.role_id,
+          // The role's effective keys, as the server resolved them.
           permissions: response.data.user.permissions || null,
+          // The section this role lands on, so the client does not infer it
+          // from the first key in the list.
+          home: response.data.user.home || null,
+          // Only a backend with the permission table sends `home` (null for a
+          // standalone custom role). An older one sends a custom role's raw
+          // stored row as `permissions`, which config/permissions.ts then
+          // resolves itself.
+          permissions_resolved: Object.prototype.hasOwnProperty.call(response.data.user, 'home'),
+          // A custom role saved before per-action keys existed (bell shortcuts).
+          permissions_legacy: response.data.user.permissions_legacy === true,
           organization: response.data.user.organization
         };
         setShowForceLoginModal(false);

@@ -53,6 +53,13 @@ class JobOrderController extends Controller
      * Resolved by name so a reordered status table cannot silently break VIP approval, with the
      * long-standing id as the fallback. Same resolution the rest of the app uses.
      */
+    /** Is this account an agent, whose job orders are their own referrals? */
+    private function isAgentUser($user): bool
+    {
+        return \App\Support\AgentAccess::isAgent($user)
+            || strtolower(trim((string) ($user->role->role_name ?? ''))) === 'agent';
+    }
+
     private function getVipBillingStatusId(): int
     {
         if ($this->resolvedVipStatusId !== null) {
@@ -136,6 +143,47 @@ class JobOrderController extends Controller
                     $query->where('organization_id', $currentUser->organization_id);
                 } else {
                     $query->whereNull('organization_id');
+                }
+            }
+
+            // An agent asks for their own referrals, so the page is narrowed to
+            // them here rather than after the fact.
+            //
+            // The list is ordered newest first and taken a page at a time, so a
+            // client that filters by ownership afterwards only ever sees the
+            // newest N rows of the whole organisation. An agent's completed
+            // referrals are their oldest, so those were the ones falling outside
+            // that window — the reason done work appeared to be missing while
+            // work in progress showed up fine.
+            //
+            // referred_by holds either the agent's id or older free text, so this
+            // narrows rather than decides: it returns a superset, and the exact
+            // match in AgentProgramme::referralBelongsToAgent — which the clients
+            // carry as agentReferral.ts — still settles which rows are the
+            // agent's. Both forms are covered by AgentReferral::narrow.
+            if ($currentUser && $this->isAgentUser($currentUser)) {
+                $first = trim((string) ($currentUser->first_name ?? ''));
+                $last  = trim((string) ($currentUser->last_name ?? ''));
+                $email = trim((string) ($currentUser->email_address ?? $currentUser->email ?? ''));
+
+                // A referral made through the picker is stored as this agent's
+                // user id, so the id is part of the narrowing too — it carries
+                // none of their name, and the LIKEs alone would hide every
+                // referral they have made since the picker started writing ids.
+                $agentId = $currentUser->id ?? null;
+
+                $referralMatch = function ($q) use ($agentId, $first, $last, $email) {
+                    \App\Support\AgentReferral::narrow($q, 'referred_by', $agentId, $first, $last, $email);
+                };
+
+                if ($first !== '' || $last !== '' || $email !== '' || $agentId !== null) {
+                    // Both sources: a job order carries its referral on the
+                    // application, or on the billing account's customer where
+                    // there is no application behind it.
+                    $query->where(function ($outer) use ($referralMatch) {
+                        $outer->whereHas('application', $referralMatch)
+                              ->orWhereHas('billingAccount.customer', $referralMatch);
+                    });
                 }
             }
             
@@ -236,6 +284,17 @@ class JobOrderController extends Controller
             }
 
             // Normal mode: Return full data
+            //
+            // Resolve every referral on the page in one query rather than one
+            // per row: a referral made through the agent picker holds the
+            // agent's user id, and the list shows their name.
+            \App\Support\AgentReferral::prime(
+                $jobOrders->flatMap(fn ($jo) => [
+                    optional($jo->application)->referred_by,
+                    optional(optional($jo->billingAccount)->customer)->referred_by,
+                ])
+            );
+
             $formattedJobOrders = $jobOrders->map(function ($jobOrder) {
                 $application = $jobOrder->application;
                 $customer = $jobOrder->billingAccount ? $jobOrder->billingAccount->customer : null;
@@ -345,7 +404,18 @@ class JobOrderController extends Controller
                     'Mobile_Number' => $application ? $application->mobile_number : ($customer ? $customer->contact_number_primary : null),
                     'Secondary_Mobile_Number' => $application ? $application->secondary_mobile_number : ($customer ? $customer->contact_number_secondary : null),
                     'Desired_Plan' => $application ? $application->desired_plan : ($customer ? $customer->desired_plan : null),
-                    'Referred_By' => $application ? $application->referred_by : ($customer ? $customer->referred_by : null),
+                    // The stored value and how to show it, side by side. Every
+                    // list, export and detail pane reads Referred_By and keeps
+                    // showing a name; the edit forms read the id so that saving
+                    // an untouched record writes the same referral back rather
+                    // than turning it into a name again.
+                    'Referred_By' => \App\Support\AgentReferral::displayName(
+                        $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
+                    ),
+                    'Referred_By_Raw' => $application ? $application->referred_by : ($customer ? $customer->referred_by : null),
+                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent(
+                        $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
+                    ),
                     'Billing_Status' => $jobOrder->billing_status,
                     'commission_status' => $jobOrder->commission_status,
                     'job_order_items' => $jobOrder->items,
@@ -954,6 +1024,12 @@ class JobOrderController extends Controller
                 $jobOrder->refresh();
             }
             
+            // Whether this update is what turned the job order Done. The agent
+            // is told after the commit rather than here: RADIUS below can still
+            // fail the whole update, and a referral that did not finish saving
+            // must not announce itself as installed.
+            $becameDone = false;
+
             if (($data['onsite_status'] ?? null) === 'Done' && $oldStatus !== 'Done') {
                 $this->broadcastJobOrderDone($jobOrder);
                 
@@ -967,6 +1043,8 @@ class JobOrderController extends Controller
                     ]);
                     throw new \Exception($detailedError);
                 }
+
+                $becameDone = true;
             }
             
             \Log::info('JobOrder After Update', [
@@ -1048,6 +1126,10 @@ class JobOrderController extends Controller
 
             DB::commit();
 
+            if ($becameDone) {
+                $this->notifyReferringAgentOfCompletion($jobOrder);
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Job order updated successfully',
@@ -1107,6 +1189,198 @@ class JobOrderController extends Controller
             ], 500);
         }
     }
+
+
+    /**
+     * Tell the agent who referred this customer that the visit is done.
+     *
+     * Reaches them as a push notification, so it arrives whether or not the app
+     * is open — an agent finds out their referral is installed without having to
+     * go looking for it.
+     *
+     * Who the referral belongs to is resolved by
+     * JobOrderAgentPaymentService::referringAgent, which applies the shared rule
+     * the incentives, achievements and invoices all use. An agent is therefore
+     * only ever told about a customer the rest of the system also counts as
+     * theirs, and a referral naming a team rather than a person matches nobody
+     * and quietly notifies no one.
+     *
+     * Called after the update commits and never inside it. Failing to send must
+     * not fail the visit: the work is saved and the technician is finished
+     * either way, so everything here is swallowed and logged.
+     */
+    private function notifyReferringAgentOfCompletion(JobOrder $jobOrder): void
+    {
+        try {
+            $agent = app(\App\Services\JobOrderAgentPaymentService::class)->referringAgent($jobOrder);
+
+            if (!$agent) {
+                return;
+            }
+
+            $email = trim((string) ($agent->email_address ?? $agent->email ?? ''));
+            if ($email === '') {
+                return;
+            }
+
+            $application = $jobOrder->application;
+            $customer = trim(($application->first_name ?? '') . ' ' . ($application->last_name ?? ''));
+
+            app(\App\Services\PushNotificationService::class)->sendToUserByEmail(
+                $email,
+                'Referral Installed',
+                $customer !== ''
+                    ? "{$customer} is now installed. Job Order #{$jobOrder->id} is marked Done."
+                    : "Your referral is now installed. Job Order #{$jobOrder->id} is marked Done.",
+                [
+                    'type' => 'job_order_done',
+                    'job_order_id' => $jobOrder->id,
+                ],
+                'JO'
+            );
+        } catch (\Throwable $e) {
+            \Log::warning('[JobOrder] Could not notify the referring agent that a job order was completed', [
+                'job_order_id' => $jobOrder->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+
+    /**
+     * Settle the referring agent for a job order being approved, if there is one
+     * and if the settlement service is available.
+     *
+     * Three outcomes, deliberately treated differently:
+     *
+     *   • No referral recorded — a job order nobody referred is a perfectly
+     *     ordinary approval (walk-ins and direct sign-ups). Skipped without
+     *     reaching for the service at all.
+     *   • The service cannot be resolved — that means the class is missing from
+     *     THIS deployment, not that anything is wrong with the job order. Nothing
+     *     has been written at that point, so the approval carries on and the gap
+     *     is logged as an error for whoever deploys. The row keeps a null
+     *     agent_paid_at, so it stays eligible to be settled once the deployment
+     *     catches up; blocking every approval instead would be far worse.
+     *   • A failure INSIDE settle() stays fatal on purpose: it runs in the
+     *     approval's transaction, and a half-applied credit must roll back with
+     *     it rather than leave an agent's balance wrong.
+     *
+     * A fourth outcome is possible and is the one that catches people out: a
+     * referral IS recorded, but no agent matches it, so settle() writes nothing
+     * and the approval succeeds looking entirely normal. The job order's
+     * commission_status, commission_value, incentive_value, agent_paid_at and
+     * agent_paid_to all stay NULL — indistinguishable from the feature not
+     * being deployed. approve() logs that case as a WARNING with the referral
+     * text, because it is the only way to tell the two apart.
+     *
+     * @return array{paid: bool, reason: string, agent_id: ?int,
+     *               commission: float, incentive_value: float,
+     *               referred_by?: string}
+     */
+    /** Are the agent-settlement columns present? Cached per process. */
+    private static function agentSettlementSchemaReady(): bool
+    {
+        static $ready = null;
+
+        if ($ready === null) {
+            try {
+                $ready = \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'agent_paid_at')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'commission_value')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'incentive_value')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('agent_balance', 'commission_value');
+            } catch (\Throwable $e) {
+                $ready = false;
+            }
+        }
+
+        return $ready;
+    }
+
+    private function settleReferringAgent(JobOrder $jobOrder, ?string $actionBy): array
+    {
+        $skipped = static fn (string $reason): array => [
+            'paid'            => false,
+            'reason'          => $reason,
+            'agent_id'        => null,
+            'commission'      => 0.0,
+            'incentive_value' => 0.0,
+        ];
+
+        // Resolved exactly the way JobOrderAgentPaymentService::referringAgent()
+        // does, including the fallback read, so this pre-check cannot disagree
+        // with the service about whether a referral exists.
+        $referredBy = optional($jobOrder->application)->referred_by;
+        if (!$referredBy && $jobOrder->application_id) {
+            $referredBy = DB::table('applications')->where('id', $jobOrder->application_id)->value('referred_by');
+        }
+
+        if (trim((string) $referredBy) === '') {
+            return $skipped('no referred_by on the application');
+        }
+
+        // Carried into the outcome so a skip can be read without going back to
+        // the database to ask what the referral actually said. The commonest
+        // cause of a skip is a referral naming a TEAM rather than an agent —
+        // see agents:export-team-referrals — and the value is what shows that
+        // at a glance.
+        $referralText = trim((string) $referredBy);
+
+        // GOWISER: the settlement writes job_orders.agent_paid_at/_to,
+        // commission_value, incentive_value and agent_balance.commission_value,
+        // all added by the 2026_08_14 agent migrations. Until those have been
+        // run, settling would throw inside the approval transaction and block
+        // EVERY approval of a referred job order — so it is skipped instead,
+        // loudly, and the job order stays eligible (agent_paid_at NULL) for
+        // when the schema catches up.
+        if (!self::agentSettlementSchemaReady()) {
+            \Log::error('Job Order Approval - agent settlement columns missing (run the 2026_08_14 agent migrations); approving without settling', [
+                'job_order_id' => $jobOrder->getKey(),
+            ]);
+
+            return $skipped('settlement columns not migrated');
+        }
+
+        try {
+            $service = app(\App\Services\JobOrderAgentPaymentService::class);
+        } catch (\Throwable $e) {
+            \Log::error('Job Order Approval - agent settlement unavailable, approving without it', [
+                'job_order_id' => $jobOrder->getKey(),
+                'exception'    => get_class($e),
+                'error'        => $e->getMessage(),
+            ]);
+
+            return $skipped('settlement service unavailable');
+        }
+
+        // GOWISER: a settlement failure must never fail or roll back the
+        // approval itself (customer, billing account, user and RADIUS work are
+        // all in the same transaction). settle() runs inside a nested
+        // transaction — a SAVEPOINT on MySQL — so a throw rolls back only the
+        // half-applied credit, and the approval carries on with the job order
+        // left unsettled (agent_paid_at NULL) and eligible to be settled later.
+        try {
+            $outcome = DB::transaction(fn () => $service->settle($jobOrder, $actionBy));
+        } catch (\Throwable $e) {
+            \Log::error('Job Order Approval - agent settlement failed; approving without it', [
+                'job_order_id' => $jobOrder->getKey(),
+                'exception'    => get_class($e),
+                'error'        => $e->getMessage(),
+            ]);
+
+            $failed = $skipped('settlement failed');
+            $failed['referred_by'] = $referralText;
+
+            return $failed;
+        }
+
+        // The referral text travels with the outcome either way, so the caller
+        // can say WHY nothing settled rather than only that nothing did.
+        $outcome['referred_by'] = $referralText;
+
+        return $outcome;
+    }
+
 
     private function broadcastJobOrderDone($jobOrder)
     {
@@ -1544,7 +1818,62 @@ class JobOrderController extends Controller
                 ]);
             }
 
+            // Settle the referring agent: mark the job order Paid, credit the
+            // commission, and record the rates it was settled at so a later
+            // change to either setting cannot restate it.
+            //
+            // Inside the transaction deliberately — if anything after this
+            // fails, the credit rolls back with the approval rather than
+            // leaving an agent paid for a job order that was never approved.
+            // A job order already carrying agent_paid_at is left alone, so
+            // approving twice cannot pay twice.
+            $agentPayment = $this->settleReferringAgent($jobOrder, $actionUserEmail);
+
             DB::commit();
+
+            if ($agentPayment['paid']) {
+                \Log::info('Job Order Approval - agent settled', [
+                    'job_order_id'    => $id,
+                    'agent_id'        => $agentPayment['agent_id'],
+                    'commission'      => $agentPayment['commission'],
+                    'incentive_value' => $agentPayment['incentive_value'],
+                ]);
+            } elseif ($agentPayment['reason'] === 'no referred_by on the application') {
+                // Genuinely ordinary: walk-ins and direct sign-ups have no
+                // referrer, so there is nothing to settle and nothing to see.
+                \Log::info('Job Order Approval - agent not settled', [
+                    'job_order_id' => $id,
+                    'reason'       => $agentPayment['reason'],
+                ]);
+            } elseif ($agentPayment['reason'] !== '' && $agentPayment['reason'] !== 'already_paid') {
+                // A referral WAS recorded and still nothing settled. The
+                // approval is valid, but the agent has silently not been paid
+                // and the job order's commission_status, commission_value,
+                // incentive_value, agent_paid_at and agent_paid_to all stay
+                // NULL — which looks identical to the feature not running.
+                //
+                // A warning, not info, because this needs somebody to look:
+                //   • "no matching agent" almost always means referred_by names
+                //     a TEAM, not an agent (agents:export-team-referrals lists
+                //     them), or the name on the account does not match what was
+                //     typed into the referral.
+                //   • "agent has no balance record" means the agent exists but
+                //     holds no agent_balance row, which is what defines an
+                //     agent everywhere in this module — add one and the next
+                //     approval settles.
+                \Log::warning('Job Order Approval - referral recorded but agent NOT settled', [
+                    'job_order_id' => $id,
+                    'reason'       => $agentPayment['reason'],
+                    // Both forms: the stored value is what to go and fix, and the
+                    // name is what makes the line readable when the referral is an
+                    // agent id rather than the text somebody typed.
+                    'referred_by'  => \App\Support\AgentReferral::displayName($agentPayment['referred_by'] ?? null),
+                    'referred_by_stored' => $agentPayment['referred_by'] ?? null,
+                    'agent_id'     => $agentPayment['agent_id'],
+                    'effect'       => 'commission_status/commission_value/incentive_value/agent_paid_at/agent_paid_to left NULL on this job order',
+                ]);
+            }
+
 
             // Prepaid onboarding: a prepaid customer must PAY before they get service. At approval
             // we (1) generate their initial bill immediately, and (2) start them Inactive +

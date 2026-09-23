@@ -79,65 +79,59 @@ import TeamAgent from './teamAgent';
 import Roles from './roles';
 import Commission from './Commission';
 import AgentPayout from './AgentPayout';
+import BonusHistory from './BonusHistory';
+import AgentInvoice from './AgentInvoice';
+import DashboardAgent from './DashboardAgent';
+import ApplicationForm from './ApplicationForm';
 import SmartOltTool from './SmartOltTool';
 import MikrotikRadiusTool from './MikrotikRadiusTool';
 import XenditReconcileTool from './XenditReconcileTool';
 import BillingReconcileTool from './BillingReconcileTool';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import AccessDenied from '../components/AccessDenied';
+import { usePermissions } from '../hooks/usePermissions';
+import {
+    AuthLike,
+    PermissionRefresh,
+    canOpenSection,
+    homeSectionFor,
+    inheritedPermissions,
+    isLockedRole,
+    mergeAuth,
+    parsePermissions,
+    refreshPatch,
+    roleIdOf,
+} from '../config/permissions';
+import apiClient from '../config/api';
 import { roleService } from '../services/userService';
 
 interface DashboardProps {
     onLogout: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
-    const [userData, setUserData] = useState<any>(() => {
-        try {
-            const authData = localStorage.getItem('authData');
-            return authData ? JSON.parse(authData) : null;
-        } catch (error) {
-            console.error('Error parsing user data:', error);
-            return null;
-        }
-    });
+/** authData as stored right now, or null when signed out or unreadable. */
+const readStoredAuth = (): any | null => {
+    try {
+        const authData = localStorage.getItem('authData');
+        return authData ? JSON.parse(authData) : null;
+    } catch (error) {
+        console.error('Error parsing user data:', error);
+        return null;
+    }
+};
 
-    const [activeSection, setActiveSection] = useState(() => {
-        try {
-            const authData = localStorage.getItem('authData');
-            if (authData) {
-                const user = JSON.parse(authData);
-                const normalizedRole = user.role?.toLowerCase().replace(/\s+/g, '') || '';
-                if (normalizedRole === 'customer' || String(user.role_id) === '3') {
-                    return 'customer-dashboard';
-                }
-                if (normalizedRole === 'technician' || String(user.role_id) === '2' || normalizedRole === 'agent' || String(user.role_id) === '4') {
-                    return 'job-order';
-                }
-                if (String(user.role_id) === '7' || normalizedRole === 'superadmin') {
-                    return 'dashboard';
-                }
-                if (normalizedRole === 'administrator' || String(user.role_id) === '1') {
-                    return 'dashboard';
-                }
-                if (String(user.role_id) === '8' || normalizedRole === 'headtech') {
-                    return 'application-management';
-                }
-                if (normalizedRole === 'osp' || String(user.role_id) === '6') {
-                    return 'work-order';
-                }
-                if (normalizedRole === 'inventorystaff' || String(user.role_id) === '5') {
-                    return 'inventory';
-                }
-                // Custom roles (role_id > 8): land on the first page in their permissions
-                if (user.role_id > 8 && user.permissions && Array.isArray(user.permissions) && user.permissions.length > 0) {
-                    return user.permissions[0];
-                }
-            }
-        } catch (e) {
-            console.error(e);
-        }
-        return 'dashboard';
-    });
+const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
+    const [userData, setUserData] = useState<any>(readStoredAuth);
+
+    // Where this user lands. A seeded role lands where it always has (see
+    // ROLE_HOME in config/permissions.ts); a custom role lands on the page the
+    // server named, or else the first page it holds, never on a sub action.
+    // Kept, so the permission refresh below can tell whether the user is still
+    // on the page they were first shown.
+    const [initialLanding] = useState<string>(() => homeSectionFor(readStoredAuth()));
+    const [activeSection, setActiveSection] = useState<string>(initialLanding);
+
+    const { can, canOpen, home } = usePermissions();
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -209,64 +203,118 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         };
     }, []);
 
-    // Fetch permissions from API for custom roles if not available in authData
+    /**
+     * Reconcile this session's permissions against the server.
+     *
+     * The list stored at sign-in is a snapshot. Asking once per load means a
+     * role edited while somebody is signed in — or the user moved to another
+     * role — takes effect on their next load, and that a custom role always
+     * uses the server's resolved list (base role merged in, grandfathered
+     * actions included) rather than its raw row.
+     *
+     * A failure here is not fatal: the stored list, or the role table for a
+     * seeded role, carries on being used.
+     */
     useEffect(() => {
-        if (!userData || !userData.role_id) return;
-        const rid = Number(userData.role_id);
-        if (rid <= 8) return; // Locked role, skip
+        if (!userData) return;
 
-        // Check if permissions are already available
-        if (userData.permissions && Array.isArray(userData.permissions) && userData.permissions.length > 0) return;
+        // Set on unmount, i.e. sign-out.
+        let cancelled = false;
+        const signedInAs = userData.id;
 
-        const fetchRolePermissions = async () => {
+        /**
+         * Merge a fresher account into authData.
+         *
+         * Only into what is stored NOW, and only while it is still the account
+         * this request was made for. Signing out (the Logout button, the
+         * session-expired prompt, a failed revalidation on load) clears
+         * authData before this component unmounts, and another tab may have
+         * signed someone else in; an answer landing late must neither bring a
+         * signed-out session back nor overwrite another user's.
+         */
+        const commit = (patch: (current: AuthLike) => Partial<AuthLike>) => {
+            if (cancelled) return;
+
+            const current = readStoredAuth();
+            const updated = current ? mergeAuth(current, signedInAs, patch(current)) : null;
+            if (!updated) return;
+
+            localStorage.setItem('authData', JSON.stringify(updated));
+            setUserData(updated);
+            // usePermissions elsewhere in the tree listens for this; a
+            // `storage` event only fires in other tabs.
+            window.dispatchEvent(new Event('auth-changed'));
+
+            // Move somebody still on the page they were first shown to where
+            // the refreshed role lands, and anybody on a page the role can no
+            // longer open; leave everyone else where they are.
+            const nextHome = homeSectionFor(updated);
+            setActiveSection(section =>
+                section === initialLanding || !canOpenSection(updated, section) ? nextHome : section
+            );
+        };
+
+        /**
+         * The path the app took before GET /me/permissions existed, kept for a
+         * backend that does not have it yet: a custom role signed in without
+         * its list reads it off its own role row.
+         */
+        const fallBackToRoleRow = async () => {
+            const roleId = roleIdOf(userData);
+            if (roleId <= 0 || isLockedRole(roleId)) return;
+            if (userData.permissions !== undefined && userData.permissions !== null) return;
+
             try {
-                const response = await roleService.getRoleById(rid);
-                if (response.success && response.data) {
-                    let perms: string[] = [];
-                    const rawPerms = response.data.permissions;
-                    if (Array.isArray(rawPerms)) {
-                        perms = rawPerms;
-                    } else if (typeof rawPerms === 'string') {
-                        try {
-                            const parsed = JSON.parse(rawPerms);
-                            perms = Array.isArray(parsed) ? parsed : [];
-                        } catch (e) {
-                            perms = rawPerms.split(',').map(p => p.trim()).filter(Boolean);
-                        }
-                    }
+                const response = await roleService.getRoleById(roleId);
+                const row: any = response?.success ? response.data : null;
+                if (!row) return;
 
-                    if (perms.length > 0) {
-                        // Update userData state
-                        const updatedUser = { ...userData, permissions: perms };
-                        setUserData(updatedUser);
-                        // Update localStorage
-                        localStorage.setItem('authData', JSON.stringify(updatedUser));
-                        // Navigate to the first allowed page if currently on dashboard (default)
-                        if (activeSection === 'dashboard') {
-                            setActiveSection(perms[0]);
-                        }
-                    }
+                if (Array.isArray(row.effective_permissions)) {
+                    commit(() => ({
+                        permissions: [...inheritedPermissions(row.base_role_id), ...row.effective_permissions],
+                        permissions_resolved: true,
+                    }));
+                    return;
+                }
+
+                const stored = parsePermissions(row.permissions);
+                if (stored.length > 0) {
+                    commit(() => ({ permissions: stored, permissions_resolved: false }));
                 }
             } catch (err) {
-                console.error('Failed to fetch role permissions for custom role:', err);
+                console.warn('Failed to read role permissions:', err);
             }
         };
 
-        fetchRolePermissions();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userData?.role_id]);
+        const reconcile = async () => {
+            try {
+                const response = await apiClient.get<{
+                    success: boolean;
+                    data: PermissionRefresh;
+                }>('/me/permissions');
 
-    // Reports is Super Admin only. Direct/stale navigation into it (e.g. a leftover
-    // localStorage activeSection from before a role change) is redirected to the dashboard
-    // rather than left to render — the Sidebar link is hidden, but nothing else enforced this.
-    useEffect(() => {
-        if (activeSection !== 'reports') return;
-        const normalizedRole = userData?.role?.toLowerCase().replace(/\s+/g, '') || '';
-        const isSuperAdmin = String(userData?.role_id) === '7' || normalizedRole === 'superadmin';
-        if (!isSuperAdmin) {
-            setActiveSection('dashboard');
-        }
-    }, [activeSection, userData]);
+                const fresh = response.data?.data;
+                if (!response.data?.success || !fresh || !Array.isArray(fresh.permissions)) return;
+
+                // Permissions, landing page, and the role itself: the user may
+                // have been moved to another role since signing in.
+                commit(current => refreshPatch(current, fresh));
+            } catch (err: any) {
+                const status = err?.response?.status;
+                // A 404 is a backend without this endpoint; a 401/419 is a
+                // lapsed session, which the API client already handles.
+                console.warn('Failed to refresh permissions:', status ?? err?.message ?? err);
+                if (!cancelled && status !== 401 && status !== 419) {
+                    await fallBackToRoleRow();
+                }
+            }
+        };
+
+        reconcile();
+
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [userData?.id, userData?.role_id]);
 
     useEffect(() => {
         const fetchColorPalette = async () => {
@@ -281,7 +329,54 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         fetchColorPalette();
     }, []);
 
+    /**
+     * The section guard.
+     *
+     * There is no URL router here: a section is a piece of state, reachable from
+     * the sidebar, a notification, a restored session or a button on another
+     * page. Checking here means the check holds however the section was chosen,
+     * and it is the same key the API will demand a moment later. `canOpen` also
+     * honours the header bell's shortcuts a seeded role has always had
+     * (WEB_REACHABLE in config/permissions.ts).
+     */
     const renderContent = () => {
+        if (!canOpen(activeSection)) {
+            return (
+                <AccessDenied
+                    section={activeSection}
+                    // No way "home" when home is this refusal, or is refused too.
+                    onGoHome={home !== activeSection && canOpen(home) ? () => handleSectionChange(home) : undefined}
+                />
+            );
+        }
+
+        return renderSection();
+    };
+
+    /**
+     * The 'dashboard' section, which opens for any of the three dashboard keys.
+     *
+     * A seeded role gets the dashboard it always had, chosen by role. A custom
+     * role gets the one its keys name: the general dashboard when it holds
+     * `dashboard` (or has no list yet, as before), else the agent's or the
+     * customer's.
+     */
+    const renderDashboard = () => {
+        const roleId = roleIdOf(userData);
+        const custom = !isLockedRole(roleId);
+
+        if ((userData && String(userData.role_id) === '3') ||
+            (custom && !can('dashboard') && !can('agent-dashboard') && can('customer-dashboard'))) {
+            return <DashboardCustomer onNavigate={(section, tab) => handleSectionChange(section, tab)} />;
+        }
+        if ((userData && (userData.role?.toLowerCase() === 'agent' || String(userData.role_id) === '4')) ||
+            (custom && !can('dashboard') && can('agent-dashboard'))) {
+            return <DashboardAgent onNavigate={handleSectionChange} />;
+        }
+        return <DashboardContent />;
+    };
+
+    const renderSection = () => {
         switch (activeSection) {
             // Customer Routes
             case 'customer-dashboard':
@@ -293,6 +388,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Bills initialTab={billsInitialTab} onNavigate={handleSectionChange} />;
             case 'customer-support':
                 return <Support forceLightMode={true} />;
+
+            // Agent Routes
+            case 'agent-dashboard':
+                return <DashboardAgent onNavigate={handleSectionChange} />;
+            case 'agent-application':
+                // Back to the dashboard it was opened from: the agent's
+                // 'dashboard', or a custom role's own landing page.
+                return (
+                    <ApplicationForm
+                        onClose={() => handleSectionChange(home)}
+                        onSubmitted={() => handleSectionChange(home)}
+                    />
+                );
 
             case 'live-monitor':
                 return <LiveMonitor />;
@@ -384,15 +492,18 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <WorkOrder />;
             case 'service-order':
                 return <ServiceOrder autoOpenServiceOrderId={serviceOrderAutoOpenId} />;
-            case 'reports': {
-                const normalizedRole = userData?.role?.toLowerCase().replace(/\s+/g, '') || '';
-                const isSuperAdmin = String(userData?.role_id) === '7' || normalizedRole === 'superadmin';
-                return isSuperAdmin ? <Reports /> : null;
-            }
+            // Opened only for a role holding 'reports' (SuperAdmin among the
+            // seeded roles); the section guard above enforces it.
+            case 'reports':
+                return <Reports />;
             case 'commission':
                 return <Commission />;
             case 'agent-payout':
                 return <AgentPayout />;
+            case 'bonus-history':
+                return <BonusHistory />;
+            case 'agent-invoices':
+                return <AgentInvoice />;
             // case 'application-visit':
             //     return <ApplicationVisit />;
             case 'location-list':
@@ -449,10 +560,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Settings />;
             case 'dashboard':
             default:
-                if (userData && String(userData.role_id) === '3') {
-                    return <DashboardCustomer onNavigate={(section, tab) => handleSectionChange(section, tab)} />;
-                }
-                return <DashboardContent />;
+                return renderDashboard();
         }
     };
 

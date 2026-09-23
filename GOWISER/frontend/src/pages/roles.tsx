@@ -6,8 +6,15 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import RoleModal from '../modals/RoleModal';
 import { useRoleStore } from '../store/roleStore';
 import { roleService } from '../services/userService';
+import { baseRoleLabel } from '../config/permissions';
+import { usePageActions } from '../hooks/usePageActions';
 
 const Roles: React.FC = () => {
+    // Add, Edit and Delete are granted separately. The same keys the API
+    // demands, so a control is only drawn when the request behind it would
+    // succeed.
+    const actions = usePageActions('roles');
+
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -82,6 +89,7 @@ const Roles: React.FC = () => {
     };
 
     const handleDeleteRole = async (id: number) => {
+        if (!actions.canDelete) return;
         if (window.confirm('Are you sure you want to delete this role?')) {
             try {
                 const res = await roleService.deleteRole(id);
@@ -91,7 +99,9 @@ const Roles: React.FC = () => {
                     alert(res.message || 'Failed to delete role');
                 }
             } catch (err: any) {
-                alert(err.message || 'An error occurred');
+                // The server's reason (a system role, users still assigned)
+                // rather than axios's "Request failed with status code 422".
+                alert(err?.response?.data?.message || err.message || 'An error occurred');
             }
         }
     };
@@ -140,6 +150,7 @@ const Roles: React.FC = () => {
                         >
                             <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
                         </button>
+                        {actions.canCreate && (
                         <button
                             onClick={() => { setSelectedRole(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
@@ -147,6 +158,7 @@ const Roles: React.FC = () => {
                         >
                             <Plus size={20} />
                         </button>
+                        )}
                     </div>
                 </div>
 
@@ -198,6 +210,16 @@ const Roles: React.FC = () => {
                                                         System
                                                     </span>
                                                 )}
+                                                {/* A hybrid: it holds this seeded role's access plus its own
+                                                    extras, so the base is worth reading at a glance. */}
+                                                {role.id > 8 && baseRoleLabel(role.base_role_id) && (
+                                                    <span
+                                                        className={`ml-2 px-1.5 py-0.5 text-[10px] font-bold rounded uppercase ${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-100 text-purple-600'}`}
+                                                        title={`Inherits everything a ${baseRoleLabel(role.base_role_id)} holds, plus its own permissions`}
+                                                    >
+                                                        {baseRoleLabel(role.base_role_id)} +
+                                                    </span>
+                                                )}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">
@@ -210,18 +232,22 @@ const Roles: React.FC = () => {
                                             <div className="flex items-center justify-end gap-2">
                                                 {role.id > 8 ? (
                                                     <>
+                                                        {actions.canEdit && (
                                                         <button
                                                             onClick={() => { setSelectedRole(role); setShowModal(true); }}
                                                             className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                         >
                                                             <Edit size={16} />
                                                         </button>
+                                                        )}
+                                                        {actions.canDelete && (
                                                         <button
                                                             onClick={() => handleDeleteRole(role.id)}
                                                             className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                         >
                                                             <Trash2 size={16} />
                                                         </button>
+                                                        )}
                                                     </>
                                                 ) : (
                                                     <span className={`text-[10px] font-medium px-2 py-1 rounded-full ${isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'}`}>

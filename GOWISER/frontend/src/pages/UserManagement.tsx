@@ -7,8 +7,21 @@ import UserDetails from '../components/UserDetails';
 import UserModal from '../modals/UserModal';
 
 import { useUserStore } from '../store/userStore';
+import { usePageActions } from '../hooks/usePageActions';
 
 const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }) => {
+  // Add, Edit and Delete are granted separately on Users Management.
+  //
+  // Agent Management renders this same component with agentOnly, and lives in
+  // the Agent group, which has no per-action keys yet — gating it against
+  // user-management would hide its controls from the roles that run it, and
+  // gating it against keys that do not exist would hide them from everyone. It
+  // keeps the access it has until that group is given its own verbs.
+  const userActions = usePageActions('user-management');
+  const actions = agentOnly
+    ? { canView: true, canCreate: true, canEdit: true, canDelete: true, can: () => true }
+    : userActions;
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [searchQuery, setSearchQuery] = useState('');
@@ -192,6 +205,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
               >
                 <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
               </button>
+              {actions.canCreate && (
               <button
                 onClick={() => { setSelectedUser(null); setShowModal(true); }}
                 className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
@@ -199,6 +213,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
               >
                 <Plus size={20} />
               </button>
+              )}
             </div>
           </div>
 
@@ -291,7 +306,8 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
           <UserDetails
             user={selectedUser}
             onClose={() => { setSelectedUser(null); setMobileView('users'); }}
-            onEdit={(u) => { setSelectedUser(u); setShowModal(true); }}
+            onEdit={actions.canEdit ? (u) => { setSelectedUser(u); setShowModal(true); } : undefined}
+            canDelete={actions.canDelete}
             isMobile={isMobile}
             isDarkMode={isDarkMode}
             colorPalette={colorPalette}

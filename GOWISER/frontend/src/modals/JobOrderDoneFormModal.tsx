@@ -11,6 +11,12 @@ import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import SearchableField, { GroupedOption } from '../components/common/SearchableField';
 import { agentService } from '../services/agentService';
+import {
+  buildAgentGroups,
+  referredByFields,
+  referredByForSave,
+  selectionFromOption,
+} from '../utils/referredByField';
 
 
 interface Region {
@@ -47,7 +53,10 @@ interface JobOrderDoneFormModalProps {
 interface JOFormData {
   timestamp: string;
   status: string;
+  // The agent's NAME, which is what the field shows. What gets stored is the id
+  // in referredById — see utils/referredByField.ts.
   referredBy: string;
+  referredById: number | null;
   firstName: string;
   middleInitial: string;
   lastName: string;
@@ -109,6 +118,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     timestamp: new Date().toLocaleString('sv-SE').replace(' ', ' '),
     status: '',
     referredBy: '',
+    referredById: null,
     firstName: '',
     middleInitial: '',
     lastName: '',
@@ -336,7 +346,11 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         ...prev,
         timestamp: jobOrderData.timestamp || jobOrderData.Timestamp || new Date().toLocaleString('sv-SE').replace(' ', ' '),
         status: jobOrderData.Status || jobOrderData.status || 'Confirmed',
-        referredBy: jobOrderData.Referred_By || jobOrderData.referred_by || '',
+        // Only the stored value and the id inside it. The name is filled in by
+        // the effect below once the agent list has loaded — reading `agents`
+        // here would make it a dependency of this whole prefill, and a late
+        // agent list would then reset every field the user had already typed.
+        ...referredByFields(jobOrderData, []),
         firstName: jobOrderData.First_Name || jobOrderData.first_name || '',
         middleInitial: jobOrderData.Middle_Initial || jobOrderData.middle_initial || '',
         lastName: jobOrderData.Last_Name || jobOrderData.last_name || '',
@@ -389,6 +403,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         timestamp: new Date().toLocaleString('sv-SE').replace(' ', ' '),
         status: 'Confirmed',
         referredBy: '',
+    referredById: null,
         firstName: '',
         middleInitial: '',
         lastName: '',
@@ -425,6 +440,54 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       setValidateCooldown(0);
     }
   }, [isOpen, currentUserEmail]);
+
+  /**
+   * Keep the agent's name on screen and their id in the form.
+   *
+   * SearchableField hands over the option it rendered, so the id comes from the
+   * row that was clicked rather than being looked back up by name — which is
+   * what keeps two agents sharing a name distinct.
+   */
+  const handleReferredBySelect = (label: string, option?: any) => {
+    const selection = selectionFromOption(label, option);
+    setFormData(prev => ({
+      ...prev,
+      referredBy: selection.label,
+      referredById: selection.agentId,
+    }));
+  };
+
+  // The agent list is fetched while the modal is opening, so a record prefilled
+  // before it arrives has no name to show for an id-form referral and holds the
+  // stored value instead. Resolving again once the list lands fills the name in.
+  //
+  // The guard is on the LABEL, not the id: prefill already reads the id out of
+  // the stored value, so a guard on the id would never let this run. A label
+  // that still equals what was stored is one nobody has picked over.
+  const referredByRaw = jobOrderData?.Referred_By ?? jobOrderData?.referred_by ?? '';
+  const referredByAgentIdProp =
+    jobOrderData?.Referred_By_Agent_ID ?? jobOrderData?.referred_by_agent_id ?? null;
+
+  useEffect(() => {
+    if (!isOpen || !agents.length) return;
+
+    setFormData(prev => {
+      if (prev.referredBy !== String(referredByRaw ?? '')) return prev;
+
+      const resolved = referredByFields(
+        { referred_by: referredByRaw, referred_by_agent_id: referredByAgentIdProp },
+        agents
+      );
+
+      // Returning prev unchanged is what stops this looping: the parent rebuilds
+      // its props on every render, and React bails out of a set that produces
+      // the identical state.
+      if (resolved.referredBy === prev.referredBy && resolved.referredById === prev.referredById) {
+        return prev;
+      }
+      return { ...prev, ...resolved };
+    });
+  }, [isOpen, agents, referredByRaw, referredByAgentIdProp]);
 
   const handleInputChange = (field: keyof JOFormData, value: string | number | boolean) => {
     if (field === 'middleInitial' && typeof value === 'string') {
@@ -795,7 +858,10 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         vip_enabled: Boolean(updatedFormData.vipEnabled),
         vip_expiration: updatedFormData.vipEnabled ? (updatedFormData.vipExpiration || null) : null,
         installation_landmark: updatedFormData.installationLandmark || null,
-        referred_by: updatedFormData.referredBy || null,
+        referred_by: referredByForSave(
+          { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
+          agents
+        ),
         modem_router_sn: updatedFormData.modemSN || null,
         router_model: updatedFormData.routerModel || null,
         updated_by_user_email: currentUserEmail
@@ -870,7 +936,10 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
           desired_plan: updatedFormData.choosePlan || null,
           promo: updatedFormData.promo || null,
           landmark: updatedFormData.installationLandmark || null,
-          referred_by: updatedFormData.referredBy || null,
+          referred_by: referredByForSave(
+            { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
+            agents
+          ),
           updated_by: currentUserEmail
         };
         await updateApplication(applicationId, applicationUpdateData);
@@ -963,48 +1032,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     return allBarangays.filter(brgy => brgy.city_id !== undefined && brgy.city_id === selectedCity.id);
   };
 
-  const getGroupedAgents = (): GroupedOption[] => {
-    if (!agents.length) return [];
-
-    const groups: Record<number, any[]> = {};
-    const noTeam: any[] = [];
-
-    agents.forEach(agent => {
-      if (agent.agent_id) {
-        if (!groups[agent.agent_id]) groups[agent.agent_id] = [];
-        groups[agent.agent_id].push({
-          name: `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim(),
-          ...agent
-        });
-      } else {
-        noTeam.push({
-          name: `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim(),
-          ...agent
-        });
-      }
-    });
-
-    const grouped: GroupedOption[] = [];
-
-    teams.forEach(team => {
-      const teamAgents = groups[team.id];
-      if (teamAgents && teamAgents.length > 0) {
-        grouped.push({
-          label: team.team_name || `Team ${team.id}`,
-          options: teamAgents
-        });
-      }
-    });
-
-    if (noTeam.length > 0) {
-      grouped.push({
-        label: 'No Team',
-        options: noTeam
-      });
-    }
-
-    return grouped;
-  };
+  const getGroupedAgents = (): GroupedOption[] => buildAgentGroups(agents, teams);
 
   const filteredCities = getFilteredCities();
   const filteredBarangays = getFilteredBarangays();
@@ -1177,15 +1205,22 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 {errors.status && <p className="text-red-500 text-xs mt-1">{errors.status}</p>}
               </div>
 
+                {/*
+                  Team names are group headings here, not choices. A referral has
+                  to name one agent: referred_by is what the commission is settled
+                  against when the job order is approved, and a team name matches
+                  no agent, so it would silently leave the referral unpaid. Teams
+                  stay searchable — typing one still lists its members to pick from.
+                */}
                 <SearchableField
                   label="Referred By"
                   value={formData.referredBy}
-                  onSelect={(val) => handleInputChange('referredBy', val)}
+                  onSelect={(val, option) => handleReferredBySelect(val, option)}
                   groupedOptions={groupedAgents}
                   optionLabelKey="name"
                   isDarkMode={isDarkMode}
                   placeholder="Search Agent..."
-                  isHeaderSelectable={true}
+                  isHeaderSelectable={false}
                 />
 
             </div>

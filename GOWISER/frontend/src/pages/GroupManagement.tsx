@@ -5,8 +5,14 @@ import Breadcrumb from './Breadcrumb';
 import AddNewGroupForm from '../components/AddNewGroupForm';
 import EditGroupForm from '../components/EditGroupForm';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePageActions } from '../hooks/usePageActions';
 
 const GroupManagement: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('group-management');
+
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -97,6 +103,7 @@ const GroupManagement: React.FC = () => {
   };
 
   const handleAddNew = () => {
+    if (!actions.canCreate) return;
     setShowAddForm(true);
   };
 
@@ -117,6 +124,7 @@ const GroupManagement: React.FC = () => {
   };
 
   const handleEdit = (group: Group) => {
+    if (!actions.canEdit) return;
     if (!group) {
       console.error('Cannot edit Affiliate: No Affiliate data');
       alert('Cannot edit Affiliate: No Affiliate data');
@@ -138,6 +146,7 @@ const GroupManagement: React.FC = () => {
   };
 
   const handleDeleteClick = (group: Group) => {
+    if (!actions.canDelete) return;
     setDeletingGroup(group);
   };
 
@@ -215,6 +224,7 @@ const GroupManagement: React.FC = () => {
                 e.currentTarget.style.boxShadow = 'none';
               }}
             />
+            {actions.canCreate && (
             <button
               onClick={handleAddNew}
               className="px-6 py-3 rounded transition-colors text-sm font-medium whitespace-nowrap text-white"
@@ -232,6 +242,7 @@ const GroupManagement: React.FC = () => {
             >
               Add New Affiliate
             </button>
+            )}
           </div>
 
           {loading ? (
@@ -311,6 +322,7 @@ const GroupManagement: React.FC = () => {
                             </td>
                             <td className="px-4 py-4">
                               <div className="flex gap-2">
+                                {actions.canEdit && (
                                 <button
                                   onClick={() => handleEdit(group)}
                                   className={`p-2 rounded transition-colors ${isDarkMode
@@ -324,6 +336,8 @@ const GroupManagement: React.FC = () => {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                                   </svg>
                                 </button>
+                                )}
+                                {actions.canDelete && (
                                 <button
                                   onClick={() => handleDeleteClick(group)}
                                   className={`p-2 rounded transition-colors ${isDarkMode
@@ -336,6 +350,7 @@ const GroupManagement: React.FC = () => {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                   </svg>
                                 </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -389,6 +404,7 @@ const GroupManagement: React.FC = () => {
 
                       <div className={`flex gap-2 pt-3 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-300'
                         }`}>
+                        {actions.canEdit && (
                         <button
                           onClick={() => handleEdit(group)}
                           className={`flex-1 px-4 py-2 border rounded transition-colors text-sm font-medium ${isDarkMode
@@ -402,6 +418,8 @@ const GroupManagement: React.FC = () => {
                         >
                           Edit
                         </button>
+                        )}
+                        {actions.canDelete && (
                         <button
                           onClick={() => handleDeleteClick(group)}
                           className={`flex-1 px-4 py-2 border rounded transition-colors text-sm font-medium ${isDarkMode
@@ -411,6 +429,7 @@ const GroupManagement: React.FC = () => {
                         >
                           Delete
                         </button>
+                        )}
                       </div>
                     </div>
                   ))

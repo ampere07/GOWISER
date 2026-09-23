@@ -8,7 +8,96 @@ import { fetchAgentCommissionHistory, fetchAgentIncentiveHistory } from '../serv
 import { useJobOrderContext } from '../contexts/JobOrderContext';
 import { JobOrder } from '../types/jobOrder';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { agentOwnsReferral, getOnsiteStatus, isDoneOnsiteStatus } from '../utils/agentReferral';
+import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus, storedReferralOf } from '../utils/agentReferral';
+
+/**
+ * A status word in the colour its state calls for.
+ *
+ * At module scope on purpose. Declared inside the component, every render built
+ * a new component type, so React could not match it against the previous one
+ * and tore down and rebuilt every status in the list instead of leaving it
+ * alone — React.memo around it was worth nothing, because the memo was new too.
+ */
+const StatusText = React.memo(({ status }: { status?: string | null; type: 'onsite' | 'billing' }) => {
+  if (!status) return <Text style={{ color: '#9ca3af' }}>-</Text>;
+
+  let textColor = '';
+  switch (status.toLowerCase().trim()) {
+    case 'done':
+    case 'active':
+    case 'completed':
+    case 'paid':
+    case 'collected':
+      textColor = '#4ade80';
+      break;
+    case 'pending':
+    case 'in progress':
+    case 'reschedule':
+    case 'rescheduled':
+      textColor = '#fb923c';
+      break;
+    case 'suspended':
+    case 'overdue':
+    case 'unpaid':
+    case 'not collected':
+    case 'cancelled':
+      textColor = '#ef4444';
+      break;
+    default:
+      textColor = '#9ca3af';
+  }
+
+  return (
+    <Text style={{ fontWeight: 'bold', textTransform: 'capitalize', color: textColor }}>
+      {status}
+    </Text>
+  );
+});
+
+// Pure of everything on the screen — they read their arguments and nothing
+// else — so they are built once rather than rebuilt on every render.
+const checkIsStarted = (time?: string | null) => {
+  if (!time) return false;
+  const lowerTime = String(time).toLowerCase().trim();
+  return !['0000-00-00 00:00:00', 'not set', '-', 'none', '', 'null', 'undefined'].includes(lowerTime);
+};
+
+const isWorkStarted = (item: JobOrder) => {
+  const hasStart = checkIsStarted(item.start_time) || checkIsStarted(item.StartTimeStamp) || checkIsStarted(item.start_timestamp);
+  const hasEnd = checkIsStarted(item.end_time) || checkIsStarted(item.EndTimeStamp) || checkIsStarted(item.end_timestamp);
+  return hasStart && !hasEnd;
+};
+
+const getClientFullName = (jobOrder: JobOrder): string => {
+  return [
+    jobOrder.First_Name || jobOrder.first_name || '',
+    jobOrder.Middle_Initial || jobOrder.middle_initial ? (jobOrder.Middle_Initial || jobOrder.middle_initial) + '.' : '',
+    jobOrder.Last_Name || jobOrder.last_name || ''
+  ].filter(Boolean).join(' ').trim() || '-';
+};
+
+const getClientFullAddress = (jobOrder: JobOrder): string => {
+  const addressParts = [
+    jobOrder.Installation_Address || jobOrder.installation_address || jobOrder.Address || jobOrder.address,
+    jobOrder.Barangay || jobOrder.barangay,
+    jobOrder.City || jobOrder.city,
+    jobOrder.Region || jobOrder.region
+  ].filter(Boolean);
+  return addressParts.length > 0 ? addressParts.join(', ') : '-';
+};
+
+const formatDateVal = (dateStr?: string | null): string => {
+  if (!dateStr) return '-';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '-';
+    const datePart = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
+    const timePart = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    return `${datePart} ${timePart}`;
+  } catch (e) {
+    return '-';
+  }
+};
 
 const AgentHistory: React.FC = () => {
   const { width } = useWindowDimensions();
@@ -32,6 +121,9 @@ const AgentHistory: React.FC = () => {
 
   const { jobOrders, refreshJobOrders } = useJobOrderContext();
   const [userFullName, setUserFullName] = useState<string>('');
+  // A referral made through the picker is stored as this id and holds none of
+  // the agent's name, so the id is what finds their own history.
+  const [userId, setUserId] = useState<number | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
 
   useEffect(() => {
@@ -40,6 +132,7 @@ const AgentHistory: React.FC = () => {
         try {
           const ud = JSON.parse(data);
           setUserFullName(ud.full_name || '');
+          setUserId(ud.id ?? ud.user_id ?? null);
           setUserEmail(ud.email || '');
         } catch (e) { }
       }
@@ -47,9 +140,18 @@ const AgentHistory: React.FC = () => {
   }, []);
 
   const agentJobOrders = useMemo(() => {
+    // Everything that does not vary per job order is worked out here rather than
+    // inside the filter: the agent's own half of the ownership test (see
+    // createAgentReferralMatcher), and the two day boundaries, which were being
+    // rebuilt through dayjs on every row the filter looked at.
+    const ownsReferral = createAgentReferralMatcher(userFullName, userEmail, userId);
+    const from = dateFrom ? dayjs(dateFrom).startOf('day').valueOf() : null;
+    const to = dateTo ? dayjs(dateTo).endOf('day').valueOf() : null;
+
     return jobOrders.filter(jo => {
-      const referredBy = jo.Referred_By || jo.referred_by || '';
-      if (!agentOwnsReferral(referredBy, userFullName, userEmail)) return false;
+      // The stored value (an agent id for picker-made referrals), not the
+      // display name the API resolved it to.
+      if (!ownsReferral(storedReferralOf(jo))) return false;
 
       // Only completed ("done") job orders belong in Agent History.
       if (!isDoneOnsiteStatus(getOnsiteStatus(jo))) return false;
@@ -60,16 +162,16 @@ const AgentHistory: React.FC = () => {
         if (filterType === 'paid' && cStatus !== 'paid' && cStatus !== 'done') return false;
       }
 
-      if (dateFrom || dateTo) {
+      if (from !== null || to !== null) {
         const raw = jo.created_at || (jo as any).Created_At || jo.Timestamp || jo.timestamp;
-        const d = raw ? new Date(raw) : null;
-        if (!d || isNaN(d.getTime())) return false;
-        if (dateFrom && d < dayjs(dateFrom).startOf('day').toDate()) return false;
-        if (dateTo && d > dayjs(dateTo).endOf('day').toDate()) return false;
+        const stamp = raw ? new Date(raw).getTime() : NaN;
+        if (isNaN(stamp)) return false;
+        if (from !== null && stamp < from) return false;
+        if (to !== null && stamp > to) return false;
       }
       return true;
     }).sort((a, b) => (parseInt(String(b.id)) || 0) - (parseInt(String(a.id)) || 0));
-  }, [jobOrders, userFullName, userEmail, filterType, dateFrom, dateTo]);
+  }, [jobOrders, userId, userFullName, userEmail, filterType, dateFrom, dateTo]);
 
   const incentivesBatches = useMemo(() => {
     // Group by processed_at
@@ -80,6 +182,17 @@ const AgentHistory: React.FC = () => {
       groups[key].push(item);
     });
 
+    // The job orders indexed by id, once.
+    //
+    // Each incentive names the job order it was earned on, and every one of them
+    // used to be resolved with a `jobOrders.find(...)` — a fresh walk of the
+    // whole set per incentive, so an agent with a long history paid for their
+    // incentive count times their job order count. Keyed by String(id) because
+    // the ids arrive as numbers from one source and strings from the other, and
+    // the lookup this replaces compared them loosely.
+    const jobOrderById = new Map<string, any>();
+    for (const jo of jobOrders) jobOrderById.set(String(jo.id), jo);
+
     const batches = [];
     let batchIndex = 1;
     // Sort groups by processed_at descending
@@ -89,7 +202,7 @@ const AgentHistory: React.FC = () => {
       const items = groups[key];
       const customers = items.map((incItem: any) => {
         // match job order by id
-        const jo = jobOrders.find(j => j.id == incItem.job_order_id);
+        const jo = jobOrderById.get(String(incItem.job_order_id));
         if (jo) return jo;
         // fallback if job order not in context
         return {
@@ -263,84 +376,7 @@ const AgentHistory: React.FC = () => {
     }
   }, []);
 
-  const StatusText = React.memo(({ status, type }: { status?: string | null, type: 'onsite' | 'billing' }) => {
-    if (!status) return <Text style={{ color: '#9ca3af' }}>-</Text>;
-    let textColor = '';
-    switch (status.toLowerCase().trim()) {
-      case 'done':
-      case 'active':
-      case 'completed':
-      case 'paid':
-      case 'collected':
-        textColor = '#4ade80';
-        break;
-      case 'pending':
-      case 'in progress':
-      case 'reschedule':
-      case 'rescheduled':
-        textColor = '#fb923c';
-        break;
-      case 'suspended':
-      case 'overdue':
-      case 'unpaid':
-      case 'not collected':
-      case 'cancelled':
-        textColor = '#ef4444';
-        break;
-      default:
-        textColor = '#9ca3af';
-    }
-    return (
-      <Text style={{ fontWeight: 'bold', textTransform: 'capitalize', color: textColor }}>
-        {status}
-      </Text>
-    );
-  });
-
-  const checkIsStarted = (time?: string | null) => {
-    if (!time) return false;
-    const lowerTime = String(time).toLowerCase().trim();
-    return !['0000-00-00 00:00:00', 'not set', '-', 'none', '', 'null', 'undefined'].includes(lowerTime);
-  };
-
-  const isWorkStarted = (item: JobOrder) => {
-    const hasStart = checkIsStarted(item.start_time) || checkIsStarted(item.StartTimeStamp) || checkIsStarted(item.start_timestamp);
-    const hasEnd = checkIsStarted(item.end_time) || checkIsStarted(item.EndTimeStamp) || checkIsStarted(item.end_timestamp);
-    return hasStart && !hasEnd;
-  };
-
-  const getClientFullName = (jobOrder: JobOrder): string => {
-    return [
-      jobOrder.First_Name || jobOrder.first_name || '',
-      jobOrder.Middle_Initial || jobOrder.middle_initial ? (jobOrder.Middle_Initial || jobOrder.middle_initial) + '.' : '',
-      jobOrder.Last_Name || jobOrder.last_name || ''
-    ].filter(Boolean).join(' ').trim() || '-';
-  };
-
-  const getClientFullAddress = (jobOrder: JobOrder): string => {
-    const addressParts = [
-      jobOrder.Installation_Address || jobOrder.installation_address || jobOrder.Address || jobOrder.address,
-      jobOrder.Barangay || jobOrder.barangay,
-      jobOrder.City || jobOrder.city,
-      jobOrder.Region || jobOrder.region
-    ].filter(Boolean);
-    return addressParts.length > 0 ? addressParts.join(', ') : '-';
-  };
-
-  const formatDateVal = (dateStr?: string | null): string => {
-    if (!dateStr) return '-';
-    try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return '-';
-      const datePart = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
-      const timePart = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      return `${datePart} ${timePart}`;
-    } catch (e) {
-      return '-';
-    }
-  };
-
-  const renderJobOrderItem = ({ item: jobOrder }: { item: JobOrder }) => {
+  const renderJobOrderItem = useCallback(({ item: jobOrder }: { item: JobOrder }) => {
     const rawStatus = String(jobOrder.commission_status || '').toLowerCase().trim();
     const displayStatus = (!jobOrder.commission_status || rawStatus === 'null' || rawStatus === 'unpaid' ? 'Not Collected' : 'Collected');
     const onsiteStatus = jobOrder.Onsite_Status || jobOrder.onsite_status || null;
@@ -381,16 +417,16 @@ const AgentHistory: React.FC = () => {
         </View>
       </View>
     );
-  };
+  }, [formatCurrency]);
 
-  const toggleBatch = (batchId: string) => {
+  const toggleBatch = useCallback((batchId: string) => {
     setExpandedBatches(prev => ({
       ...prev,
       [batchId]: !prev[batchId]
     }));
-  };
+  }, []);
 
-  const renderIncentiveBatch = ({ item }: { item: any }) => {
+  const renderIncentiveBatch = useCallback(({ item }: { item: any }) => {
     const isExpanded = expandedBatches[item.id] === true; // closed by default
 
     return (
@@ -449,7 +485,7 @@ const AgentHistory: React.FC = () => {
         )}
       </View>
     );
-  };
+  }, [expandedBatches, toggleBatch, formatCurrency, colorPalette]);
 
   const renderHeader = () => {
     return (
@@ -634,7 +670,16 @@ const AgentHistory: React.FC = () => {
           ListFooterComponent={renderFooter}
           contentContainerStyle={[
             styles.listContainer,
-            { paddingBottom: isMobile ? 120 : 40 }
+            {
+              paddingBottom: isMobile ? 120 : 40,
+              // A payout card is a name on the left and a figure on the right.
+              // Given a tablet's full width the two end up a hand's span apart
+              // with nothing between them, so the list is held to a phone-like
+              // column and centred instead.
+              width: '100%',
+              maxWidth: 640,
+              alignSelf: 'center',
+            }
           ]}
           refreshControl={
             <RefreshControl

@@ -66,6 +66,8 @@ interface ServiceOrder {
     city?: string;
     barangay?: string;
     referredBy?: string;
+    // The agent the stored referral names (the API sends the name in referredBy).
+    referredByAgentId?: number | null;
     start_time?: string | null;
     end_time?: string | null;
     setupImageUrl?: string;
@@ -102,6 +104,12 @@ export const useServiceOrderContext = () => {
 
 interface ServiceOrderProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the first page on mount. False for a user the API would
+     * not serve it to (see SHELL_PREFETCH_KEYS). An explicit refresh from a
+     * screen still fetches.
+     */
+    prefetch?: boolean;
 }
 
 const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
@@ -165,6 +173,7 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         city: order.city || '',
         barangay: order.barangay || '',
         referredBy: order.referred_by || '',
+        referredByAgentId: order.referred_by_agent_id ?? null,
         start_time: order.start_time || null,
         end_time: order.end_time || null,
         setupImageUrl: order.setup_image_url || '',
@@ -174,7 +183,7 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
     };
 };
 
-export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ children }) => {
+export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ children, prefetch = true }) => {
     const [serviceOrders, setServiceOrders] = useState<ServiceOrder[]>([]);
     const ordersRef = React.useRef<ServiceOrder[]>([]);
     const fetchingRef = React.useRef<boolean>(false);
@@ -274,10 +283,11 @@ export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ chil
 
     // Initial fetch effect
     useEffect(() => {
+        if (!prefetch) return;
         if (ordersRef.current.length === 0 && !fetchingRef.current) {
             fetchServiceOrders(1, false, false);
         }
-    }, [fetchServiceOrders]);
+    }, [fetchServiceOrders, prefetch]);
 
     return (
         <ServiceOrderContext.Provider

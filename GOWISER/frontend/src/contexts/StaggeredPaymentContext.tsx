@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { staggeredInstallationService } from '../services/staggeredInstallationService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface StaggeredInstallation {
     id: string;
@@ -119,13 +120,22 @@ export const StaggeredPaymentProvider: React.FC<StaggeredPaymentProviderProps> =
         await fetchStaggeredRecords(true, true);
     }, [fetchStaggeredRecords]);
 
+    // This provider wraps the whole signed-in app, so the prefetch below would
+    // run for every role. Only a role that can open Staggered (the only reader
+    // of this context) fetches; for anyone else GET staggered-installations is
+    // refused by the API, or logged as a would-be refusal. A role that gains
+    // the key mid-session fetches when it does.
+    const { can } = usePermissions();
+    const mayRead = can('staggered-payment');
+
     // Initial fetch effect
     useEffect(() => {
+        if (!mayRead) return;
         // Only fetch if empty, otherwise let the logic decide
         if (staggeredRecords.length === 0) {
             fetchStaggeredRecords(false, false);
         }
-    }, [fetchStaggeredRecords, staggeredRecords.length]);
+    }, [fetchStaggeredRecords, staggeredRecords.length, mayRead]);
 
     return (
         <StaggeredPaymentContext.Provider

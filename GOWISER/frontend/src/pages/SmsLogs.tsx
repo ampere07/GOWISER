@@ -154,7 +154,10 @@ const SmsLogs: React.FC = () => {
 
       const response = await axios.get<any>(`${API_BASE_URL}/sms/logs`, {
         params: { per_page: 1000 },
-        headers: { Authorization: token ? `Bearer ${token}` : '' }
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        // The session cookie, as the shared API client sends it: the bearer
+        // token is not what the API authenticates by.
+        withCredentials: true,
       });
 
       // Laravel paginator returns { data: [...] }

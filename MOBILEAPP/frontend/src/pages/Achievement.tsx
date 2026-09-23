@@ -4,6 +4,7 @@ import { CheckCircle } from 'lucide-react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus, storedReferralOf } from '../utils/agentReferral';
 import { useJobOrderContext } from '../contexts/JobOrderContext';
 import { 
     fetchAgentAchievements, 
@@ -77,19 +78,25 @@ const Achievement: React.FC = () => {
     }, [jobOrdersRefresh]);
 
     const onboardReferredCount = useMemo(() => {
-        if (!agentEmail && !agentName) return 0;
+        // The id alone is enough now: a referral stored as one carries no name.
+        if (!agentEmail && !agentName && !agentId) return 0;
 
-        const filtered = jobOrders.filter(jo => {
-            const referredBy = (jo.Referred_By || jo.referred_by || '').toLowerCase();
-            return (agentEmail && referredBy.includes(agentEmail.toLowerCase())) || 
-                   (agentName && referredBy.includes(agentName.toLowerCase()));
-        });
+        // The shared rule, not a substring test of its own: a referral is now
+        // stored as the agent's user id, which contains none of their name, and
+        // `includes` would also have counted "Ana" as a match for "Joana".
+        //
+        // Built once and counted in one pass: this used to walk the whole job
+        // order set twice and re-derive the agent's name for every row of it,
+        // all to produce a single number.
+        const ownsReferral = createAgentReferralMatcher(agentName, agentEmail, agentId);
 
-        return filtered.filter(jo => {
-            const status = (jo.Onsite_Status || jo.onsite_status || '').toLowerCase().trim();
-            return status === 'done' || status === 'completed';
-        }).length;
-    }, [jobOrders, agentEmail, agentName]);
+        let onboarded = 0;
+        for (const jo of jobOrders) {
+            if (!ownsReferral(storedReferralOf(jo))) continue;
+            if (isDoneOnsiteStatus(getOnsiteStatus(jo))) onboarded++;
+        }
+        return onboarded;
+    }, [jobOrders, agentEmail, agentName, agentId]);
 
     const target = 30;
     

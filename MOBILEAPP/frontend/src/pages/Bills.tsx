@@ -10,7 +10,7 @@ import { FlashList } from '@shopify/flash-list';
 import { paymentService, PendingPayment } from '../services/paymentService';
 import { useCustomerDataContext } from '../contexts/CustomerDataContext';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { API_BASE_URL } from '../config/api';
+import apiClient, { API_BASE_URL } from '../config/api';
 
 interface SOARecord {
     id: number;
@@ -558,14 +558,15 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
 
         setIsGeneratingPDF(record.id);
         try {
-            const response = await fetch(`${API_BASE_URL}/statement-of-accounts/${record.id}/generate-pdf`, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                }
-            });
-            const result = await response.json();
+            // Through apiClient so the request is signed in (a bare fetch sent
+            // no session or Origin). No timeout, as before: the server renders
+            // and stores the PDF while this waits.
+            const response = await apiClient.post(
+                `/statement-of-accounts/${record.id}/generate-pdf`,
+                undefined,
+                { timeout: 0 }
+            );
+            const result = response.data;
             const pdfUrl = result.pdf_url || result.data?.url || result.data?.print_link;
             if (result.success && pdfUrl) {
                 Linking.openURL(pdfUrl);
@@ -575,8 +576,14 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa' }) => {
                 console.error('PDF Generation failed:', result.message);
                 // Fallback or alert if needed
             }
-        } catch (error) {
-            console.error('Error generating PDF:', error);
+        } catch (error: any) {
+            // An error status used to be read like any other reply; keep
+            // reporting its message the same way.
+            if (error?.response?.data && typeof error.response.data === 'object') {
+                console.error('PDF Generation failed:', error.response.data.message);
+            } else {
+                console.error('Error generating PDF:', error);
+            }
         } finally {
             setIsGeneratingPDF(null);
         }

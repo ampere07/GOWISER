@@ -23,6 +23,8 @@ import { userService } from '../services/userService';
 import { User as UserType } from '../types/api';
 import { getBillingRecords, getBillingRecordDetails, BillingDetailRecord } from '../services/billingService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
+import { isAgentUser } from '../utils/agentReferral';
+import { usePermissions } from '../hooks/usePermissions';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const UserDetails = React.lazy(() => import('./UserDetails'));
@@ -58,7 +60,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [applicationData, setApplicationData] = useState<Application | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -276,39 +277,26 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         setUserRole(role);
         setRoleId(id);
 
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
 
-        const isAgent = role === 'agent' || String(id) === '4';
+        const isAgent = isAgentUser(role, id);
         const isTechnician = role === 'technician' || String(id) === '2';
 
         if (isAgent) {
-          const agentAllowedFields = [
-            'timestamp',
-            'jobOrderNumber',
-            'referredBy',
-            'fullName',
-            'contactNumber',
-            'emailAddress',
-            'fullAddress',
-            'installationFee',
-            'billingStatus',
-            'billingDay',
-            'dateInstalled',
-            'onsiteStatus'
+          // Agents see the customer/visit side of a referral but none of the technical
+          // provisioning details or uploaded documents — the same split the mobile app
+          // applies. Installation fee stays visible because it drives their commission
+          // and is already shown on the agent's Job Order list columns.
+          const agentHiddenFields = [
+            // Technical provisioning
+            'modemRouterSn', 'routerModel', 'lcpnap', 'port', 'vlan', 'username',
+            'ipAddress', 'usageType', 'jobOrderItems',
+            // Attachments & documents
+            'clientSignature', 'setupImage', 'speedtestImage', 'signedContractImage',
+            'boxReadingImage', 'routerReadingImage', 'portLabelImage', 'houseFrontPicture',
+            'clientTagging', 'proofImage', 'proofOfBilling', 'governmentValidId',
+            'secondGovernmentValidId', 'documentAttachment', 'otherIspBill'
           ];
+          const agentAllowedFields = defaultFields.filter(f => !agentHiddenFields.includes(f));
           setFieldOrder(agentAllowedFields);
           const newVisibility: Record<string, boolean> = {};
           defaultFields.forEach(f => {
@@ -329,13 +317,11 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     }
   }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     const fetchBillingStatuses = async () => {

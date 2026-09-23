@@ -23,6 +23,7 @@ import { ReceiptData } from '../utils/receiptTemplates';
 import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
+import { usePermissions } from '../hooks/usePermissions';
 
 // Company details printed in the Official Receipt header. These are static registration
 // details (not stored in settings), so edit them here if the company info ever changes.
@@ -200,47 +201,12 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [fullRelatedInvoices, setFullRelatedInvoices] = useState<any[]>([]);
   const [invoicesCount, setInvoicesCount] = useState(0);
   const [expandedModalSection, setExpandedModalSection] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<{ role: string, role_id: string | number } | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
-  useEffect(() => {
-    try {
-      const authData = localStorage.getItem('authData');
-      if (authData) {
-        const parsed = JSON.parse(authData);
-        setUserRole({
-          role: parsed.role || '',
-          role_id: parsed.role_id || ''
-        });
+  const { can } = usePermissions();
 
-        let perms: string[] = [];
-        if (parsed.permissions) {
-          if (Array.isArray(parsed.permissions)) {
-            perms = parsed.permissions;
-          } else if (typeof parsed.permissions === 'string') {
-            try {
-              const parsedPerms = JSON.parse(parsed.permissions);
-              perms = Array.isArray(parsedPerms) ? parsedPerms : [];
-            } catch (e) {
-              perms = parsed.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      }
-    } catch (err) {
-      console.error('Error getting user role and permissions:', err);
-    }
-  }, []);
-
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole?.role || '').toLowerCase().trim();
-    const roleId = Number(userRole?.role_id || 0);
-    if (lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -913,7 +879,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             )}
             {(transaction.status || '').toLowerCase() === 'pending' &&
-              (String(userRole?.role_id) === '7' || userRole?.role === 'SuperAdmin') && (
+              hasPermission('transaction-list.delete') && (
                 <button
                   onClick={handleDeleteTransaction}
                   disabled={loading}

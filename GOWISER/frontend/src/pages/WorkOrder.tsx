@@ -11,9 +11,11 @@ import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { exportToCSV } from '../utils/exportUtils';
 import { useUserDirectory } from '../hooks/useUserDirectory';
+import { isAgentUser } from '../utils/agentReferral';
 import { resolveUserDisplayName } from '../utils/userDisplay';
 import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
 import { useFunnelFilter } from '../filter/useFunnelFilter';
+import { usePermissions } from '../hooks/usePermissions';
 
 // work_orders persists these actors as email strings; they render as names where the
 // email is known to the user directory, and fall through unchanged otherwise.
@@ -342,7 +344,14 @@ const WorkOrderPage: React.FC = () => {
     }
   };
 
+  // Raising (or deleting) a work order, as opposed to working the ones already
+  // assigned. work-order.manage: every role holding the page except the Agent,
+  // whose access is read-only, as on the mobile app.
+  const { can } = usePermissions();
+  const canManageWorkOrders = can('work-order.manage');
+
   const handleAddNew = () => {
+    if (!canManageWorkOrders) return;
     setSelectedWorkOrder(null);
     setShowAssignModal(true);
   };
@@ -381,12 +390,15 @@ const WorkOrderPage: React.FC = () => {
       }
     });
 
-    // Apply role-based filtering for OSP
-    if (userRole === 6) {
+    // Apply role-based filtering for OSP (6) and Agent (4): they only see work orders
+    // assigned to them, matching the mobile app.
+    if (Number(userRole) === 6 || isAgentUser(userRoleName, userRole)) {
       filtered = filtered.filter(wo => {
         // Find if user is assigned - assign_to can be either name or email
-        const targetAssign = (wo.assign_to || '').toLowerCase();
-        return targetAssign === userEmail.toLowerCase() || targetAssign === userName.toLowerCase();
+        const targetAssign = (wo.assign_to || '').toLowerCase().trim();
+        const meEmail = userEmail.toLowerCase().trim();
+        const meName = userName.toLowerCase().trim();
+        return (!!meEmail && targetAssign === meEmail) || (!!meName && targetAssign === meName);
       });
     }
 
@@ -406,7 +418,7 @@ const WorkOrderPage: React.FC = () => {
         checkValue(wo.requested_by)
       );
     });
-  }, [workOrders, userRole, userEmail, userName, searchQuery, currentUserOrgId]);
+  }, [workOrders, userRole, userRoleName, userEmail, userName, searchQuery, currentUserOrgId]);
 
   /**
    * One filter entry per table column, so every column the table can show is filterable. Keys
@@ -901,16 +913,18 @@ const WorkOrderPage: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={handleAddNew}
-                  className="px-4 py-2 text-white rounded-lg flex items-center gap-2 transition-all font-medium text-xs active:scale-95 shadow-sm flex-shrink-0"
-                  style={{
-                    backgroundColor: colorPalette?.primary || '#7c3aed'
-                  }}
-                >
-                  <Plus className="h-4 w-4" />
-                  <span className="hidden md:inline">Add Work Order</span>
-                </button>
+                {canManageWorkOrders && (
+                  <button
+                    onClick={handleAddNew}
+                    className="px-4 py-2 text-white rounded-lg flex items-center gap-2 transition-all font-medium text-xs active:scale-95 shadow-sm flex-shrink-0"
+                    style={{
+                      backgroundColor: colorPalette?.primary || '#7c3aed'
+                    }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span className="hidden md:inline">Add Work Order</span>
+                  </button>
+                )}
                 <button
                   onClick={handleExport}
                   disabled={isLoading || funnel.filteredRows.length === 0}

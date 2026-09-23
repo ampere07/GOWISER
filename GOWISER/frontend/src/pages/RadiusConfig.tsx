@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface RadiusConfigData {
   id: number;
@@ -37,6 +38,11 @@ interface ModalConfig {
 }
 
 const RadiusConfig: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('radius-config');
+
   const [radiusConfigs, setRadiusConfigs] = useState<RadiusConfigData[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
@@ -152,11 +158,13 @@ const RadiusConfig: React.FC = () => {
   };
 
   const handleStartCreate = () => {
+    if (!actions.canCreate) return;
     resetForm();
     setIsCreating(true);
   };
 
   const handleStartEdit = (config: RadiusConfigData) => {
+    if (!actions.canEdit) return;
     setFormData({
       ssl_type: config.ssl_type || '',
       ip: config.ip || '',
@@ -225,6 +233,7 @@ const RadiusConfig: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    if (!actions.canDelete) return;
     setIdToDelete(id);
     setConfirmInput('');
     setIsDeleteModalOpen(true);
@@ -287,7 +296,7 @@ const RadiusConfig: React.FC = () => {
               RADIUS Configuration
             </h2>
           </div>
-          {canCreateNew && !isCreating && editingId === null && (
+          {actions.canCreate && canCreateNew && !isCreating && editingId === null && (
             <button
               onClick={handleStartCreate}
               className="px-3 py-1.5 text-white text-sm rounded transition-colors"
@@ -491,6 +500,7 @@ const RadiusConfig: React.FC = () => {
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
+                        {actions.canEdit && (
                         <button
                           onClick={() => handleStartEdit(config)}
                           className={`px-3 py-1 text-sm rounded transition-colors ${isDarkMode
@@ -500,6 +510,8 @@ const RadiusConfig: React.FC = () => {
                         >
                           Edit
                         </button>
+                        )}
+                        {actions.canDelete && (
                         <button
                           onClick={() => handleDelete(config.id)}
                           className={`px-3 py-1 text-sm rounded transition-colors ${isDarkMode
@@ -509,6 +521,7 @@ const RadiusConfig: React.FC = () => {
                         >
                           Delete
                         </button>
+                        )}
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

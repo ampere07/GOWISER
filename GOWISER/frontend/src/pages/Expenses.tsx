@@ -24,11 +24,17 @@ import {
 import { getExpensesCategories, ExpensesCategory } from '../services/expensesCategoryService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import pusher from '../services/pusherService';
+import { usePageActions } from '../hooks/usePageActions';
 
 const peso = (value: number) =>
   `₱${(value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const Expenses: React.FC = () => {
+  // Add, Edit and Delete are granted separately (expenses.create / .edit /
+  // .delete), the same keys the API checks, so a control is drawn only when
+  // the request behind it would succeed.
+  const actions = usePageActions('expenses');
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
@@ -139,11 +145,13 @@ const Expenses: React.FC = () => {
   }, [expenses, searchQuery]);
 
   const handleAdd = () => {
+    if (!actions.canCreate) return;
     setEditing(null);
     setIsModalOpen(true);
   };
 
   const handleEdit = (expense: Expense) => {
+    if (!actions.canEdit) return;
     setEditing(expense);
     setIsModalOpen(true);
   };
@@ -159,6 +167,7 @@ const Expenses: React.FC = () => {
   };
 
   const handleDelete = async (expense: Expense) => {
+    if (!actions.canDelete) return;
     if (!window.confirm(`Delete this ${expense.expenseType} expense of ${peso(expense.amount)}?`)) {
       return;
     }
@@ -260,14 +269,16 @@ const Expenses: React.FC = () => {
             <Download size={16} />
             <span>{exporting ? 'Exporting…' : 'CSV'}</span>
           </button>
-          <button
-            onClick={handleAdd}
-            className="text-white px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
-            style={{ backgroundColor: accent }}
-          >
-            <Plus size={16} />
-            <span>Add Expense</span>
-          </button>
+          {actions.canCreate && (
+            <button
+              onClick={handleAdd}
+              className="text-white px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
+              style={{ backgroundColor: accent }}
+            >
+              <Plus size={16} />
+              <span>Add Expense</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -536,28 +547,32 @@ const Expenses: React.FC = () => {
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => handleEdit(expense)}
-                              className={`p-2 rounded transition-colors ${
-                                isDarkMode
-                                  ? 'text-gray-400 hover:text-green-400'
-                                  : 'text-gray-600 hover:text-green-600'
-                              }`}
-                              title="Edit"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(expense)}
-                              className={`p-2 rounded transition-colors ${
-                                isDarkMode
-                                  ? 'text-gray-400 hover:text-red-400'
-                                  : 'text-gray-600 hover:text-red-600'
-                              }`}
-                              title="Delete"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {actions.canEdit && (
+                              <button
+                                onClick={() => handleEdit(expense)}
+                                className={`p-2 rounded transition-colors ${
+                                  isDarkMode
+                                    ? 'text-gray-400 hover:text-green-400'
+                                    : 'text-gray-600 hover:text-green-600'
+                                }`}
+                                title="Edit"
+                              >
+                                <Edit size={16} />
+                              </button>
+                            )}
+                            {actions.canDelete && (
+                              <button
+                                onClick={() => handleDelete(expense)}
+                                className={`p-2 rounded transition-colors ${
+                                  isDarkMode
+                                    ? 'text-gray-400 hover:text-red-400'
+                                    : 'text-gray-600 hover:text-red-600'
+                                }`}
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

@@ -13,6 +13,7 @@ import ApplicationVisitFormModal from '../../modals/ApplicationVisitFormModal';
 import { JobOrderData } from '../../services/jobOrderService';
 import { ApplicationVisitData, getApplicationVisits } from '../../services/applicationVisitService';
 import { settingsColorPaletteService, ColorPalette } from '../../services/settingsColorPaletteService';
+import { usePermissions } from '../../hooks/usePermissions';
 
 interface ApplicationDetailsProps {
   application: {
@@ -32,6 +33,11 @@ interface ApplicationDetailsProps {
 }
 
 const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, onClose, onApplicationUpdate }) => {
+  // Move to JO and the quick status row each have their own key
+  // (application-management.move-to-jo / .quick-status).
+  const { can } = usePermissions();
+  const canMoveToJo = can('application-management.move-to-jo');
+  const canQuickStatus = can('application-management.quick-status');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailedApplication, setDetailedApplication] = useState<any>(null);
@@ -652,6 +658,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         </View>
         
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          {canMoveToJo && (
           <Pressable 
             style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 2, flexDirection: 'row', alignItems: 'center', backgroundColor: colorPalette?.primary || '#7c3aed' }}
             onPress={handleMoveToJO}
@@ -659,6 +666,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
           >
             <Text style={{ color: '#ffffff' }}>Move to JO</Text>
           </Pressable>
+          )}
           <Pressable 
             style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 2, flexDirection: 'row', alignItems: 'center', backgroundColor: colorPalette?.primary || '#7c3aed' }}
             onPress={handleScheduleVisit}
@@ -677,6 +685,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         </View>
       </View>
       
+      {canQuickStatus && (
       <View style={{ paddingVertical: 12, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, backgroundColor: isDarkMode ? '#111827' : '#f3f4f6', borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }}>
         <Pressable 
           style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
@@ -733,6 +742,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
           <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>Clear Status</Text>
         </Pressable>
       </View>
+      )}
       
       {error && (
         <View style={{ padding: 12, margin: 12, borderRadius: 4, backgroundColor: isDarkMode ? 'rgba(127, 29, 29, 0.2)' : '#fef2f2', borderWidth: 1, borderColor: isDarkMode ? '#991b1b' : '#fca5a5' }}>
@@ -830,6 +840,13 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         onSave={handleSaveJOForm}
         applicationData={{
           ...detailedApplication,
+          // The detail fetch may not have landed (or may have failed) when the
+          // form opens. Without these the form prefilled no referral, and saving
+          // wrote referred_by: null onto both the job order and the application.
+          id: detailedApplication?.id ?? application.id,
+          referred_by: detailedApplication?.referred_by ?? (application as any).referred_by ?? '',
+          referred_by_agent_id:
+            detailedApplication?.referred_by_agent_id ?? (application as any).referred_by_agent_id ?? null,
           installation_address: detailedApplication?.installation_address || application.address,
         }}
       />

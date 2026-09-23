@@ -6,6 +6,17 @@
 -- the AgentIncentiveService cron: a Job Order present here is NEVER
 -- counted again, so re-running the cron can never double-pay incentives.
 --
+-- Job Orders that have NOT yet completed a quota are simply absent from this
+-- table, which is what makes an unfinished quota accumulate across runs instead
+-- of resetting: the next run finds them still uncounted and adds them to the
+-- same progress. Once a quota completes, every Job Order in it is written here
+-- carrying the `batch_number` of that cycle, and is locked out of every later
+-- one.
+--
+-- `agent_invoice_id` closes the loop on the paying side: it names the weekly
+-- invoice that billed a completed quota, so the same incentive can never be
+-- billed on a second invoice.
+--
 -- Ready to copy/paste directly into phpMyAdmin (MySQL / MariaDB).
 -- ============================================================
 
@@ -17,7 +28,9 @@ CREATE TABLE IF NOT EXISTS `agent_incentive_history` (
     `batch_number`    INT NOT NULL DEFAULT 0,                         -- per-agent incrementing quota cycle number this JO belonged to
     `incentive_value` DECIMAL(15,2) NOT NULL DEFAULT 0.00,           -- incentive amount awarded for the cycle this JO belonged to
     `organization_id` BIGINT NULL DEFAULT NULL,                       -- copied from agent_balance for multi-tenant reporting
-    `processed_at`    TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,       -- when the cron processed/awarded this JO
+    `processed_at`    TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,       -- when the cron awarded this JO; decides which billing week it belongs to
+    `agent_invoice_id` BIGINT UNSIGNED NULL DEFAULT NULL,             -- invoice that billed this quota; NULL = earned but not yet billed
+    `invoiced_at`     TIMESTAMP NULL DEFAULT NULL,                    -- when the weekly invoice run claimed it
     `created_at`      TIMESTAMP NULL DEFAULT NULL,
     `updated_at`      TIMESTAMP NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
@@ -31,5 +44,10 @@ CREATE TABLE IF NOT EXISTS `agent_incentive_history` (
     KEY `idx_aih_agent_id` (`agent_id`),
     KEY `idx_aih_agent_job` (`agent_id`, `job_order_id`),
     KEY `idx_aih_agent_batch` (`agent_id`, `batch_number`),
-    KEY `idx_aih_organization_id` (`organization_id`)
+    KEY `idx_aih_organization_id` (`organization_id`),
+
+    -- The shape of the weekly invoice run's claim query: this agent, not yet
+    -- billed, awarded inside this billing week.
+    KEY `idx_aih_invoice` (`agent_invoice_id`),
+    KEY `idx_aih_agent_invoice_processed` (`agent_id`, `agent_invoice_id`, `processed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

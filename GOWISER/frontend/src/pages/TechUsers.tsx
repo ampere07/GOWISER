@@ -6,8 +6,14 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import TechnicianModal from '../modals/TechnicianModal';
 import { useTechnicianStore } from '../store/technicianStore';
 import { technicianService } from '../services/technicianService';
+import { usePageActions } from '../hooks/usePageActions';
 
 const TechUsers: React.FC = () => {
+    // Add, Edit and Delete are granted separately. The same keys the API
+    // demands, so a control is only drawn when the request behind it would
+    // succeed.
+    const actions = usePageActions('tech-users');
+
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -97,6 +103,7 @@ const TechUsers: React.FC = () => {
     };
 
     const handleDeleteTech = async (id: number) => {
+        if (!actions.canDelete) return;
         if (window.confirm('Are you sure you want to delete this technician?')) {
             try {
                 const res = await technicianService.deleteTechnician(id);
@@ -155,6 +162,7 @@ const TechUsers: React.FC = () => {
                         >
                             <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
                         </button>
+                        {actions.canCreate && (
                         <button
                             onClick={() => { setSelectedTech(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
@@ -162,6 +170,7 @@ const TechUsers: React.FC = () => {
                         >
                             <Plus size={20} />
                         </button>
+                        )}
                     </div>
                 </div>
 
@@ -218,18 +227,22 @@ const TechUsers: React.FC = () => {
                                         </td>
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-2">
+                                                {actions.canEdit && (
                                                 <button
                                                     onClick={() => { setSelectedTech(tech); setShowModal(true); }}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                 >
                                                     <Edit size={16} />
                                                 </button>
+                                                )}
+                                                {actions.canDelete && (
                                                 <button
                                                     onClick={() => handleDeleteTech(tech.id)}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                 >
                                                     <Trash2 size={16} />
                                                 </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>

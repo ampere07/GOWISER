@@ -24,6 +24,16 @@ import DisconnectionLogs from './DisconnectionLogs';
 import ReconnectionLogs from './ReconnectionLogs';
 import Sidebar from './Sidebar';
 import DashboardContent from '../components/DashboardContent';
+import AccessDenied from '../components/AccessDenied';
+import apiClient from '../config/api';
+import { usePermissions } from '../hooks/usePermissions';
+import {
+    SHELL_PREFETCH_KEYS,
+    homeSectionFor,
+    permissionForSection,
+    permissionsAllow,
+    permissionsFor,
+} from '../config/permissions';
 // import UserManagement from './UserManagement';
 // import OrganizationManagement from './OrganizationManagement';
 // import { BillingProvider } from '../contexts/BillingContext';
@@ -108,6 +118,7 @@ import AgentHistory from './AgentHistory';
 import Achievement from './Achievement';
 import Commission from './Commission';
 import AgentPayout from './AgentPayout';
+import AgentInvoice from './AgentInvoice';
 import Bills from './Bills';
 import Menu from './Menu';
 import ApplicationForm from './ApplicationForm';
@@ -137,6 +148,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     const [isTechModalOpen, setIsTechModalOpen] = useState(false);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [billsInitialTab, setBillsInitialTab] = useState<'soa' | 'invoices' | 'payments'>('soa');
+    // Permissions for the signed-in user. `userData` is loaded below; passing it
+    // in means this does not read AsyncStorage a second time.
+    const { can, home, ready: permissionsReady } = usePermissions(userData);
+    /**
+     * Which of the shell providers' lists to load on sign-in. Each is loaded
+     * only for a user the API would serve it to (SHELL_PREFETCH_KEYS); for
+     * anyone else no screen they can open reads it. Worked out from userData
+     * itself, which is set in the same render that mounts the providers, so a
+     * role holding the key starts its fetch exactly when it always has.
+     */
+    const shellPrefetch = useMemo(() => {
+        const held = permissionsFor(userData);
+        return {
+            applications: permissionsAllow(held, SHELL_PREFETCH_KEYS.applications),
+            jobOrders: permissionsAllow(held, SHELL_PREFETCH_KEYS.jobOrders),
+            serviceOrders: permissionsAllow(held, SHELL_PREFETCH_KEYS.serviceOrders),
+            inventory: permissionsAllow(held, SHELL_PREFETCH_KEYS.inventory),
+        };
+    }, [userData]);
     // const [customerInitialSearch, setCustomerInitialSearch] = useState('');
     // const [customerAutoOpenAccountNo, setCustomerAutoOpenAccountNo] = useState('');
     const isDarkMode = false; // Forced light mode as per user request
@@ -149,6 +179,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     }, []);
 
     useEffect(() => {
+        // Set on unmount (sign-out). A /me/permissions answer that lands after
+        // that must not write authData back, or the next launch would find a
+        // "signed-in" user whose session and cookies are already gone.
+        let unmounted = false;
+
         const initializeUserData = async () => {
             try {
                 const authData = await AsyncStorage.getItem('authData');
@@ -156,22 +191,60 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     const user = JSON.parse(authData);
                     setUserData(user);
 
-                    // Use the initialized user data if available
-                    if (user.role === 'customer') {
-                        setActiveSection('customer-dashboard');
-                    } else if (user.role?.toLowerCase() === 'agent') {
-                        setActiveSection('agent-dashboard');
-                    } else if (String(user.role_id) === '6' || user.role?.toLowerCase() === 'osp') {
-                        setActiveSection('work-order');
-                    } else if (user.role === 'technician' || String(user.role_id) === '4') {
-                        setActiveSection('job-order');
-                    } else if (user.role?.toLowerCase() === 'inventorystaff' || String(user.role_id) === '5') {
-                        setActiveSection('inventory');
-                    } else if (user.role?.toLowerCase() === 'headtech' || String(user.role_id) === '7' || String(user.role_id) === '8') {
-                        setActiveSection('applicationManagement');
-                    }
+                    // Where this role lands. Seeded roles keep the screen they
+                    // have always opened on (config/permissions MOBILE_ROLE_HOME);
+                    // a custom role lands on a page it holds.
+                    const initialHome = homeSectionFor(user);
+                    setActiveSection(initialHome);
 
+                    // Reconcile against the server, which is the authority on
+                    // what this role holds. The stored list is a snapshot taken
+                    // at sign-in; asking once per launch means a role edited
+                    // while somebody is signed in takes effect on their next
+                    // launch. Not awaited, so the first screen does not wait on
+                    // the network, and failure is not fatal: the stored list, or
+                    // the role table for a seeded role, carries on being used.
+                    apiClient.get<{
+                        success: boolean;
+                        data: { role_id?: number; role?: string; permissions: string[]; home: string | null };
+                    }>('/me/permissions')
+                        .then(async (response) => {
+                            const fresh = response.data?.data;
+                            if (unmounted || !response.data?.success || !Array.isArray(fresh?.permissions)) return;
 
+                            // Merge into what is stored now, not the launch
+                            // snapshot, and only while the same user is still
+                            // signed in.
+                            const currentRaw = await AsyncStorage.getItem('authData');
+                            if (unmounted || !currentRaw) return;
+                            const current = JSON.parse(currentRaw);
+                            if (current?.id !== user.id) return;
+
+                            // The role itself may have changed since sign-in; a
+                            // seeded role is answered from the table by role_id,
+                            // so a stale id would keep the old role's screens.
+                            const freshRoleId = Number(fresh.role_id);
+                            const updated = {
+                                ...current,
+                                ...(Number.isFinite(freshRoleId) && freshRoleId > 0 ? { role_id: freshRoleId } : {}),
+                                ...(typeof fresh.role === 'string' && fresh.role !== '' ? { role: fresh.role } : {}),
+                                permissions: fresh.permissions,
+                                home: fresh.home ?? null,
+                            };
+                            await AsyncStorage.setItem('authData', JSON.stringify(updated));
+                            if (unmounted) return;
+                            setUserData(updated);
+                            // Only move somebody who is still on the screen they
+                            // were first shown.
+                            const nextHome = homeSectionFor(updated);
+                            setActiveSection(prev => (prev === initialHome ? nextHome : prev));
+                        })
+                        .catch((err) => {
+                            // Expected while the backend predates this endpoint
+                            // (404) or the session has lapsed (401): the stored
+                            // list, or the role table, stays in use.
+                            console.warn('Failed to refresh permissions:', err?.response?.status ?? err?.message ?? err);
+                        });
                 }
             } catch (error) {
                 console.error('Error parsing user data:', error);
@@ -181,6 +254,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         };
 
         initializeUserData();
+
+        return () => {
+            unmounted = true;
+        };
     }, []);
 
 
@@ -220,6 +297,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     }, [width]);
 
     const content = useMemo(() => {
+        /**
+         * The section guard. A section is reachable from more than the tab bar
+         * (a button on another screen, a restored session), so the check sits
+         * where the section is rendered. It is the same key the API demands.
+         */
+        if (permissionsReady && !can(permissionForSection(activeSection))) {
+            return <AccessDenied section={activeSection} onGoHome={() => handleSectionChange(home)} />;
+        }
+
         switch (activeSection) {
             // Customer Routes
             case 'customer-dashboard':
@@ -230,6 +316,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Commission />;
             case 'agent-payout':
                 return <AgentPayout />;
+            case 'agent-invoices':
+                return <AgentInvoice />;
             case 'agent-history':
                 return <AgentHistory />;
             case 'achievement':
@@ -388,7 +476,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <DashboardContent />;
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeSection, billsInitialTab, userData?.role_id, onLogout, handleSectionChange]);
+    }, [activeSection, billsInitialTab, userData?.role_id, onLogout, handleSectionChange, can, permissionsReady, home]);
 
     const handleSearch = (query: string) => {
         setSearchQuery(query);
@@ -444,12 +532,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         //                         <DCNoticeProvider>
         //                             <StaggeredPaymentProvider>
         //                                 <DiscountProvider>
-        <ApplicationProvider>
+        <ApplicationProvider prefetch={shellPrefetch.applications}>
             <CustomerDataProvider>
                 {/* <ApplicationVisitProvider> */}
-                <JobOrderProvider>
-                    <ServiceOrderProvider>
-                        <InventoryProvider>
+                <JobOrderProvider prefetch={shellPrefetch.jobOrders}>
+                    <ServiceOrderProvider prefetch={shellPrefetch.serviceOrders}>
+                        <InventoryProvider prefetchItems={shellPrefetch.inventory}>
                             <View style={{
                                 height: '100%',
                                 flexDirection: 'column',
@@ -477,6 +565,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                                         userRole={userData?.role || ''}
                                         userEmail={userData?.email || ''}
                                         roleId={userData?.role_id}
+                                        auth={userData}
                                     />
                                 )}
 

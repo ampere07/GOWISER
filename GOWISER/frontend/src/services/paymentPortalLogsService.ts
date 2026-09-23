@@ -123,7 +123,9 @@ export const paymentPortalLogsService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it.
+          withCredentials: true,
         }
       );
 
@@ -153,7 +155,9 @@ export const paymentPortalLogsService = {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : ''
-          }
+          },
+          // The session cookie, as the shared API client sends it.
+          withCredentials: true,
         }
       );
 

@@ -1,31 +1,60 @@
 import React, { useState, useEffect } from 'react';
-import {
-    View,
-    Text,
-    TouchableOpacity,
-    FlatList,
-    RefreshControl,
-    ActivityIndicator,
-    Platform,
-    useWindowDimensions,
-} from 'react-native';
+import { View, Text, TouchableOpacity, Platform, useWindowDimensions } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Download, RefreshCw, Plus, History, Gift, Filter } from 'lucide-react-native';
+import { Plus } from 'lucide-react-native';
 import { exportToPDF } from '../utils/exportUtils';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useCommissionStore } from '../store/commissionStore';
 import { CommissionData, PayoutHistoryData } from '../types/commission';
 import CommissionDetails from '../components/CommissionDetails';
 import CommissionPayoutModal from '../modals/CommissionPayoutModal';
-import IncentivesPayoutModal from '../modals/IncentivesPayoutModal';
 import BonusPayoutModal from '../modals/BonusPayoutModal';
+import AgentPayoutModal from '../modals/AgentPayoutModal';
+import { usePayoutApproval } from '../hooks/usePayoutApproval';
 import { useAgentStore } from '../store/agentStore';
-import GlobalSearch from './globalfunctions/GlobalSearch';
-
-type TabKey = 'payouts' | 'incentives' | 'bonus';
+import { usePermissions } from '../hooks/usePermissions';
+import { StandardPage, RecordCard } from '../components/common';
 
 // Forced light mode to match the ~50 already-migrated pages.
 const isDarkMode = false;
+
+// Roles that read this page as an administrator rather than as an agent, so the
+// list is NOT narrowed to their own id. Mirrors CommissionController::ADMIN_ROLES,
+// which decides the same thing server-side.
+const ADMIN_ROLES = ['administrator', 'superadmin', 'headtech'];
+
+// Keys that make the API return every agent's rows (AgentAccess::READ_ALL_KEYS).
+const READ_ALL_KEYS = [
+    'commission', 'agent-payout', 'agent-management', 'team-agent', 'agent-payout.approve',
+    'bonus-history.payout', 'agent-invoices.generate', 'agent-invoices.status',
+    'agent-invoices.payout', 'commission.create',
+];
+
+// The transaction kind, labelled the way the web Agent Payout table labels it.
+//
+// `type` is a loose column on agent_commission_history — commission, incentives,
+// incentives_payout, Bonus, Bonus_payout, all, achievement — so an unrecognised
+// value is shown as stored rather than hidden, and a row carrying no type at all
+// still appears. Splitting this page into Commission / Incentives / Bonus tabs
+// is what used to hide records: the Commission tab matched only `commission` or
+// null, so a real payout written as `all` fell through every tab and the agent
+// saw an empty list.
+const TYPE_LABELS: Record<string, string> = {
+    incentives_payout: 'Payout',
+    incentives: 'Add Incentives',
+    Bonus_payout: 'Payout',
+    Bonus: 'Add Bonus',
+};
+
+const typeLabel = (type?: string | null): string => (type ? TYPE_LABELS[type] || type : '---');
+
+// Money out of the agent's balance, and money into it. Everything else — a
+// commission payout, an `all` payout — reads plain, exactly as on the web.
+const isPayoutType = (type?: string | null): boolean =>
+    type === 'incentives_payout' || type === 'Bonus_payout';
+const isAddType = (type?: string | null): boolean =>
+    type === 'incentives' || type === 'Bonus';
 
 const toDateString = (d: Date | null): string => {
     if (!d) return '';
@@ -42,38 +71,58 @@ const formatAmount = (val: any): string => {
 };
 
 const Commission: React.FC = () => {
-    const store = useCommissionStore();
     const {
         payoutHistory,
         isLoading,
         fetchCommissions,
         fetchUpdates,
-    } = store;
-
-    // Incentive/bonus history & totals are not present on the reduced RN store; default to [].
-    const incentiveHistory: any[] = (store as any).incentiveHistory ?? [];
-    const bonusHistory: any[] = (store as any).bonusHistory ?? [];
+    } = useCommissionStore();
 
     const { width } = useWindowDimensions();
     const isTablet = width >= 768;
 
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
-    const [activeTab, setActiveTab] = useState<TabKey>('payouts');
     const [searchTerm, setSearchTerm] = useState('');
     const [refreshing, setRefreshing] = useState(false);
+
+    // Who is reading the page. An agent sees only the agent_commission_history
+    // rows carrying their own id; an administrator sees every agent's, which is
+    // what their "Pay Out/In" screen is for.
+    const [userId, setUserId] = useState<number | null>(null);
+    const [isAdminViewer, setIsAdminViewer] = useState(false);
+    const [identityReady, setIdentityReady] = useState(false);
 
     // Date range state
     const [dateFrom, setDateFrom] = useState<Date | null>(null);
     const [dateTo, setDateTo] = useState<Date | null>(null);
     const [showFromPicker, setShowFromPicker] = useState(false);
     const [showToPicker, setShowToPicker] = useState(false);
-    const [showFilters, setShowFilters] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
+
+    // An agent opens this page to read their own history. Recording a payout
+    // needs commission.create, adding a bonus bonus-history.payout, and settling
+    // a Pending payout agent-payout.approve (all seeded to Administrator and
+    // SuperAdmin only). The API checks the same keys, so a control is only
+    // offered to someone whose request would succeed.
+    const { can, ready: permissionsReady } = usePermissions();
+    const canPayOut = permissionsReady && can('commission.create');
+    const canAddBonus = permissionsReady && can('bonus-history.payout');
+    const canApprovePayout = permissionsReady && can('agent-payout.approve');
+    // A custom role granted this page (or any agent-module admin key) is served
+    // every agent's rows by the API (AgentAccess::canReadAll); narrowing those
+    // to its own id would leave it an empty list. Seeded roles are unaffected:
+    // 1 and 7 are already admin viewers by name, and the Agent holds none of
+    // these keys.
+    const readsEveryAgent = isAdminViewer || (permissionsReady && can(READ_ALL_KEYS));
 
     const [selectedRecord, setSelectedRecord] = useState<CommissionData | PayoutHistoryData | null>(null);
     const [showDetails, setShowDetails] = useState(false);
 
     const [showPayoutModal, setShowPayoutModal] = useState(false);
-    const [showIncentiveModal, setShowIncentiveModal] = useState(false);
+    // "Add Bonus", as the pre-port page offered on its Bonus tab. It writes to
+    // agent_bonus_history (POST /commissions/bonus-history), which this list
+    // does not show; the record is created Pending.
     const [showBonusModal, setShowBonusModal] = useState(false);
 
     const { fetchAgents } = useAgentStore();
@@ -81,6 +130,17 @@ const Commission: React.FC = () => {
     const fetchData = async () => {
         await fetchCommissions(true);
     };
+
+    // Approve / reject a Pending payout (canApprovePayout). See
+    // hooks/usePayoutApproval.
+    const { handleApproval, approvalPending, approveRecord, setApproveRecord } = usePayoutApproval(
+        (settled, status) => {
+            setSelectedRecord((current: any) =>
+                current && current.id === settled?.id ? { ...current, status } : current
+            );
+            handleRefresh();
+        }
+    );
 
     const handleRefresh = async () => {
         setRefreshing(true);
@@ -92,6 +152,21 @@ const Commission: React.FC = () => {
             setRefreshing(false);
         }
     };
+
+    useEffect(() => {
+        AsyncStorage.getItem('authData').then((raw) => {
+            if (raw) {
+                try {
+                    const ud = JSON.parse(raw);
+                    setUserId(ud.id ?? ud.user_id ?? null);
+                    setIsAdminViewer(ADMIN_ROLES.includes(String(ud.role || '').toLowerCase().trim()));
+                } catch (err) {
+                    console.error('[Commission Page] Failed to parse auth data:', err);
+                }
+            }
+            setIdentityReady(true);
+        });
+    }, []);
 
     useEffect(() => {
         const fetchPalette = async () => {
@@ -112,33 +187,47 @@ const Commission: React.FC = () => {
         return () => clearInterval(intervalId);
     }, [fetchUpdates]);
 
-    // Data for the active tab.
-    const rawData: any[] = activeTab === 'payouts'
-        ? payoutHistory.filter((item: any) => !item.type || item.type === 'commission')
-        : activeTab === 'incentives'
-            ? incentiveHistory
-            : bonusHistory;
-
     const filteredData = React.useMemo(() => {
-        const normalizedQuery = searchTerm.toLowerCase().replace(/\s+/g, '');
-        return rawData.filter((row: any) => {
-            const checkValue = (val: any): boolean => {
-                if (val === null || val === undefined) return false;
-                if (typeof val === 'object') return Object.values(val).some((v) => checkValue(v));
-                return String(val).toLowerCase().replace(/\s+/g, '').includes(normalizedQuery);
-            };
-            const matchesSearch = searchTerm === '' || checkValue(row);
+        // Nothing is listed until the reader is known, so an agent never sees
+        // another agent's history, even for a single frame.
+        if (!identityReady) return [];
 
-            if (dateFrom || dateTo) {
-                const dateVal = row.date || row.created_at || row.processed_at;
+        const normalizedQuery = searchTerm.toLowerCase().replace(/\s+/g, '');
+        const hasSearch = searchTerm !== '';
+
+        // Built once. Declared inside the filter it was a fresh closure per row,
+        // and its own recursion re-created it again for every nested value.
+        const checkValue = (val: any): boolean => {
+            if (val === null || val === undefined) return false;
+            if (typeof val === 'object') return Object.values(val).some((v) => checkValue(v));
+            return String(val).toLowerCase().replace(/\s+/g, '').includes(normalizedQuery);
+        };
+
+        const from = dateFrom ? dateFrom.getTime() : null;
+        const to = dateTo ? dateTo.getTime() : null;
+
+        return payoutHistory.filter((row: any) => {
+            // The whole of agent_commission_history, narrowed to this agent's own
+            // rows. The API already does this for a non-admin account; repeating
+            // it here means a role the server counts as an administrator can
+            // never leak another agent's payouts into an agent's screen.
+            if (!readsEveryAgent) {
+                if (userId === null) return false;
+                if (Number(row.agent_id) !== Number(userId)) return false;
+            }
+
+            const matchesSearch = !hasSearch || checkValue(row);
+
+            if (from !== null || to !== null) {
+                const dateVal = row.created_at || (row as any).date || (row as any).processed_at;
                 if (!dateVal) return matchesSearch;
                 const itemDate = new Date(dateVal).getTime();
-                if (dateFrom && itemDate < dateFrom.getTime()) return false;
-                if (dateTo && itemDate > dateTo.getTime()) return false;
+                if (from !== null && itemDate < from) return false;
+                if (to !== null && itemDate > to) return false;
             }
             return matchesSearch;
         });
-    }, [rawData, searchTerm, dateFrom, dateTo]);
+    }, [payoutHistory, identityReady, readsEveryAgent, userId, searchTerm, dateFrom, dateTo]);
 
     const handleRowClick = (record: CommissionData | PayoutHistoryData) => {
         setSelectedRecord(record);
@@ -159,58 +248,30 @@ const Commission: React.FC = () => {
         }
     };
 
-    const handleOpenPayout = () => {
-        if (activeTab === 'incentives') {
-            setShowIncentiveModal(true);
-        } else if (activeTab === 'bonus') {
-            setShowBonusModal(true);
-        } else {
-            setShowPayoutModal(true);
-        }
-    };
-
     const handleExport = () => {
-        // Export the visible rows for the active tab. RN exportToPDF falls back to CSV share.
-        const columnMap: Record<TabKey, { key: string; label: string }[]> = {
-            payouts: [
-                { key: 'id', label: 'ID' },
-                { key: 'ref_number', label: 'Ref Number' },
-                { key: 'total_amount', label: 'Total Amount' },
-                { key: 'commission_id_list', label: 'Job Orders' },
-                { key: 'created_by', label: 'Processed By' },
-            ],
-            incentives: [
-                { key: 'id', label: 'ID' },
-                { key: 'agent_name', label: 'Agent' },
-                { key: 'job_order_id', label: 'Job Order' },
-                { key: 'batch_number', label: 'Batch' },
-                { key: 'quota_reached', label: 'Quota Reached' },
-                { key: 'incentive_value', label: 'Incentive Value' },
-                { key: 'processed_at', label: 'Processed At' },
-            ],
-            bonus: [
-                { key: 'id', label: 'ID' },
-                { key: 'ref_number', label: 'Ref Number' },
-                { key: 'type', label: 'Type' },
-                { key: 'total_amount', label: 'Total Amount' },
-                { key: 'created_by', label: 'Processed By' },
-            ],
-        };
+        // The same columns the web Agent Payout exports, so the two reports read
+        // alike. RN exportToPDF falls back to CSV share.
+        const columns = [
+            { key: 'id', label: 'ID' },
+            { key: 'ref_number', label: 'Ref Number' },
+            { key: 'type', label: 'Type' },
+            { key: 'total_amount', label: 'Total Amount' },
+            { key: 'commission_id_list', label: 'Job Orders' },
+            { key: 'created_by', label: 'Created By' },
+            { key: 'status', label: 'Status' },
+            { key: 'approved_by', label: 'Approved By' },
+        ];
 
         const getExportValue = (row: any, key: string) => {
             const val = row[key];
-            if (key === 'total_amount' || key === 'amount' || key === 'incentive_value') return formatAmount(val);
-            if (key === 'created_at' || key === 'date' || key === 'processed_at') return val ? new Date(val).toLocaleString() : '-';
+            if (key === 'total_amount') return formatAmount(val);
+            if (key === 'type') return typeLabel(val);
+            if (key === 'status') return val || 'Pending';
+            if (key === 'created_at') return val ? new Date(val).toLocaleString() : '-';
             return val ?? '-';
         };
 
-        const titleMap: Record<TabKey, string> = {
-            payouts: 'Commission Payout History Report',
-            incentives: 'Incentives History Report',
-            bonus: 'Bonus Payout History Report',
-        };
-
-        exportToPDF(titleMap[activeTab], `commission_${activeTab}_export`, columnMap[activeTab], filteredData, getExportValue);
+        exportToPDF('Commission History Report', 'commission_history_export', columns, filteredData, getExportValue);
     };
 
     const primaryColor = colorPalette?.primary || '#7c3aed';
@@ -221,309 +282,230 @@ const Commission: React.FC = () => {
     const mutedColor = '#6b7280';
     const faintColor = '#9ca3af';
 
-    const TabButton = ({ id, label, icon: Icon }: { id: TabKey; label: string; icon: any }) => {
-        const active = activeTab === id;
-        return (
-            <TouchableOpacity
-                onPress={() => {
-                    setActiveTab(id);
-                    setShowDetails(false);
-                    setSelectedRecord(null);
-                }}
-                style={{
-                    flex: 1,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                    paddingVertical: 12,
-                    borderBottomWidth: 2,
-                    borderBottomColor: active ? primaryColor : 'transparent',
-                }}
-            >
-                <Icon size={16} color={active ? primaryColor : mutedColor} />
-                <Text style={{ fontSize: 13, fontWeight: '600', color: active ? primaryColor : mutedColor }}>{label}</Text>
-            </TouchableOpacity>
-        );
-    };
+    const dateRangeLabel = [dateFrom ? toDateString(dateFrom) : '…', dateTo ? toDateString(dateTo) : '…'].join(' → ');
 
-    const renderCard = ({ item }: { item: any }) => {
-        const isIncentive = activeTab === 'incentives';
-        const isBonus = activeTab === 'bonus';
-
-        // Primary amount + label per tab.
-        let amountNode: React.ReactNode = null;
-        if (isIncentive) {
-            amountNode = (
-                <Text style={{ fontSize: 15, fontWeight: '700', color: '#16a34a' }}>
-                    +{formatAmount(item.incentive_value)}
+    // The date range lives in the standard left drawer now, the way the
+    // application list's filters do, instead of pushing the list down the
+    // screen with an inline panel.
+    const dateRangeDrawer = (
+        <View style={{ paddingTop: 60, paddingHorizontal: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: faintColor }}>
+                    Date Range
                 </Text>
-            );
-        } else {
-            const isPayoutType = item.type === 'incentives_payout';
-            const isAddType = item.type === 'incentives';
-            const amtColor = isPayoutType ? '#ef4444' : isAddType ? '#16a34a' : textColor;
-            const sign = isPayoutType ? '-' : isAddType ? '+' : '';
-            amountNode = (
-                <Text style={{ fontSize: 15, fontWeight: '700', color: amtColor }}>
-                    {sign}{formatAmount(item.total_amount)}
-                </Text>
-            );
-        }
-
-        return (
-            <TouchableOpacity
-                onPress={() => handleRowClick(item)}
-                activeOpacity={0.7}
-                style={{
-                    backgroundColor: cardBg,
-                    borderWidth: 1,
-                    borderColor,
-                    borderRadius: 10,
-                    padding: 14,
-                    marginBottom: 10,
-                }}
-            >
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <View style={{ flex: 1, paddingRight: 10 }}>
-                        {isIncentive ? (
-                            <>
-                                <Text style={{ fontSize: 14, fontWeight: '600', color: textColor }}>
-                                    {item.agent_name || '---'}
-                                </Text>
-                                <Text style={{ fontSize: 12, color: '#3b82f6', marginTop: 2 }}>
-                                    JO #{item.job_order_id ?? '---'}
-                                    {item.batch_number != null ? `  ·  Batch ${item.batch_number}` : ''}
-                                </Text>
-                                {item.quota_reached != null ? (
-                                    <Text style={{ fontSize: 12, color: mutedColor, marginTop: 2 }}>
-                                        Quota Reached: {item.quota_reached}
-                                    </Text>
-                                ) : null}
-                                <Text style={{ fontSize: 11, color: faintColor, marginTop: 4 }}>
-                                    {item.processed_at ? new Date(item.processed_at).toLocaleString() : '---'}
-                                </Text>
-                            </>
-                        ) : (
-                            <>
-                                <Text style={{ fontSize: 14, fontWeight: '600', color: '#3b82f6', fontVariant: ['tabular-nums'] }}>
-                                    {item.ref_number || `#${item.id}`}
-                                </Text>
-                                {isBonus && item.type ? (
-                                    <View style={{ alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: item.type === 'Bonus_payout' ? '#fee2e2' : '#dcfce7' }}>
-                                        <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: item.type === 'Bonus_payout' ? '#b91c1c' : '#15803d' }}>
-                                            {item.type === 'Bonus_payout' ? 'Payout' : 'Add Bonus'}
-                                        </Text>
-                                    </View>
-                                ) : null}
-                                {item.agent_name ? (
-                                    <Text style={{ fontSize: 12, color: mutedColor, marginTop: 2 }}>{item.agent_name}</Text>
-                                ) : null}
-                                {item.commission_id_list ? (
-                                    <Text style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }} numberOfLines={1}>
-                                        {item.commission_id_list.split(',').map((id: string) => `#${id.trim()}`).join(', ')}
-                                    </Text>
-                                ) : null}
-                                <Text style={{ fontSize: 11, color: faintColor, marginTop: 4 }}>
-                                    {item.created_at ? new Date(item.created_at).toLocaleString() : '---'}
-                                    {item.created_by ? `  ·  ${item.created_by}` : ''}
-                                </Text>
-                            </>
-                        )}
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>{amountNode}</View>
-                </View>
-            </TouchableOpacity>
-        );
-    };
-
-    const headerTitle = activeTab === 'incentives' ? 'Incentives History' : activeTab === 'bonus' ? 'Bonus History' : 'Commission History';
-
-    if (isLoading && payoutHistory.length === 0) {
-        return (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: pageBg }}>
-                <ActivityIndicator size="large" color={primaryColor} />
+                {(dateFrom || dateTo) ? (
+                    <TouchableOpacity onPress={() => { setDateFrom(null); setDateTo(null); }}>
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: primaryColor }}>Clear</Text>
+                    </TouchableOpacity>
+                ) : null}
             </View>
-        );
-    }
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>From</Text>
+                    <TouchableOpacity
+                        onPress={() => setShowFromPicker(true)}
+                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateFrom ? primaryColor : borderColor, backgroundColor: cardBg }}
+                    >
+                        <Text style={{ fontSize: 13, color: dateFrom ? textColor : faintColor }}>
+                            {dateFrom ? toDateString(dateFrom) : 'Select date'}
+                        </Text>
+                    </TouchableOpacity>
+                    {showFromPicker ? (
+                        <DateTimePicker
+                            value={dateFrom || new Date()}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(_e, date) => {
+                                setShowFromPicker(false);
+                                if (date) setDateFrom(date);
+                            }}
+                        />
+                    ) : null}
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>To</Text>
+                    <TouchableOpacity
+                        onPress={() => setShowToPicker(true)}
+                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateTo ? primaryColor : borderColor, backgroundColor: cardBg }}
+                    >
+                        <Text style={{ fontSize: 13, color: dateTo ? textColor : faintColor }}>
+                            {dateTo ? toDateString(dateTo) : 'Select date'}
+                        </Text>
+                    </TouchableOpacity>
+                    {showToPicker ? (
+                        <DateTimePicker
+                            value={dateTo || new Date()}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(_e, date) => {
+                                setShowToPicker(false);
+                                if (date) setDateTo(date);
+                            }}
+                        />
+                    ) : null}
+                </View>
+            </View>
+        </View>
+    );
 
     return (
-        <View style={{ flex: 1, backgroundColor: pageBg }}>
-            {/* Header */}
-            <View style={{
-                paddingTop: isTablet ? 16 : 60,
-                paddingHorizontal: 16,
-                paddingBottom: 12,
-                backgroundColor: cardBg,
-                borderBottomWidth: 1,
-                borderBottomColor: borderColor,
-            }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <Text style={{ fontSize: 18, fontWeight: '700', color: textColor }}>{headerTitle}</Text>
-                    {activeTab !== 'incentives' ? (
+        <StandardPage<any>
+            data={filteredData}
+            keyExtractor={(item, index) => String(item.id ?? index)}
+            renderItem={(item) => {
+                const payout = isPayoutType(item.type);
+                const add = isAddType(item.type);
+                const amtColor = payout ? '#ef4444' : add ? '#16a34a' : textColor;
+                const sign = payout ? '-' : add ? '+' : '';
+
+                // Approval state, read the same way as the web table: settled in
+                // green, awaiting action in amber, declined in red.
+                const status = item.status || 'Pending';
+                const settled = status === 'Paid' || status === 'Approved';
+                const rejected = status === 'Rejected';
+                const statusBg = settled ? '#dcfce7' : rejected ? '#fee2e2' : '#fef3c7';
+                const statusFg = settled ? '#15803d' : rejected ? '#b91c1c' : '#b45309';
+
+                return (
+                    <RecordCard
+                        title={item.ref_number || `#${item.id}`}
+                        normalizeTitle={false}
+                        titleStyle={{ color: '#3b82f6', fontWeight: '600', fontVariant: ['tabular-nums'] }}
+                        badges={
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2, marginBottom: 4 }}>
+                                <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: payout ? '#fee2e2' : '#dcfce7' }}>
+                                    <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: payout ? '#b91c1c' : '#15803d' }}>
+                                        {typeLabel(item.type)}
+                                    </Text>
+                                </View>
+                                <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: statusBg }}>
+                                    <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: statusFg }}>
+                                        {status}
+                                    </Text>
+                                </View>
+                            </View>
+                        }
+                        subtitle={item.agent_name || undefined}
+                        showStatus={false}
+                        selected={selectedRecord?.id === item.id}
+                        onPress={() => handleRowClick(item)}
+                        right={
+                            <Text style={{ fontSize: 15, fontWeight: '700', color: amtColor }}>
+                                {sign}{formatAmount(item.total_amount)}
+                            </Text>
+                        }
+                    >
+                        {item.commission_id_list ? (
+                            <Text style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }} numberOfLines={1}>
+                                {item.commission_id_list.split(',').map((id: string) => `#${id.trim()}`).join(', ')}
+                            </Text>
+                        ) : null}
+                        <Text style={{ fontSize: 11, color: faintColor, marginTop: 4 }}>
+                            {item.created_at ? new Date(item.created_at).toLocaleString() : '---'}
+                            {item.created_by ? `  ·  ${item.created_by}` : ''}
+                        </Text>
+                    </RecordCard>
+                );
+            }}
+            searchQuery={searchTerm}
+            onSearchChange={setSearchTerm}
+            searchPlaceholder="Search history..."
+            drawerContent={dateRangeDrawer}
+            drawerActive={!!(dateFrom || dateTo)}
+            rangeChip={
+                dateFrom || dateTo
+                    ? { label: 'Date range', value: dateRangeLabel, onClear: () => { setDateFrom(null); setDateTo(null); } }
+                    : null
+            }
+            onExport={handleExport}
+            exportDisabled={filteredData.length === 0}
+            onRefresh={handleRefresh}
+            isRefreshing={isLoading}
+            onPullRefresh={handleRefresh}
+            pullRefreshing={refreshing}
+            isLoading={isLoading && payoutHistory.length === 0}
+            emptyText="No matching records found"
+            currentPage={currentPage}
+            onPageChange={setCurrentPage}
+            itemsPerPage={itemsPerPage}
+            onItemsPerPageChange={setItemsPerPage}
+            colorPalette={colorPalette}
+            isDarkMode={isDarkMode}
+            detail={
+                showDetails && selectedRecord ? (
+                    <CommissionDetails
+                        data={selectedRecord}
+                        type="payouts"
+                        isMobile
+                        onApprove={canApprovePayout ? (record) => handleApproval(record, 'approve') : undefined}
+                        onReject={canApprovePayout ? (record) => handleApproval(record, 'reject') : undefined}
+                        approvalPending={approvalPending}
+                        onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
+                        onPrevious={currentIndex > 0 ? handlePrevious : undefined}
+                        onNext={currentIndex !== -1 && currentIndex < filteredData.length - 1 ? handleNext : undefined}
+                    />
+                ) : null
+            }
+            toolbarActions={
+                canPayOut || canAddBonus ? (
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                        {canPayOut && (
                         <TouchableOpacity
-                            onPress={handleOpenPayout}
-                            style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, backgroundColor: primaryColor }}
+                            onPress={() => setShowPayoutModal(true)}
+                            style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, backgroundColor: primaryColor }}
                         >
                             <Plus size={14} color="#ffffff" />
                             <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '600' }}>Add</Text>
                         </TouchableOpacity>
-                    ) : null}
-                </View>
-
-                {/* Search + actions */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <GlobalSearch
-                        searchQuery={searchTerm}
-                        setSearchQuery={setSearchTerm}
-                        isDarkMode={isDarkMode}
-                        colorPalette={colorPalette}
-                        placeholder="Search history..."
-                    />
-                    <TouchableOpacity
-                        onPress={() => setShowFilters((v) => !v)}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor: (dateFrom || dateTo) ? primaryColor : borderColor, backgroundColor: cardBg }}
-                    >
-                        <Filter size={18} color={(dateFrom || dateTo) ? primaryColor : mutedColor} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handleExport}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor, backgroundColor: cardBg }}
-                    >
-                        <Download size={18} color={mutedColor} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handleRefresh}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor, backgroundColor: cardBg }}
-                    >
-                        <RefreshCw size={18} color={primaryColor} />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Date range filters */}
-                {showFilters ? (
-                    <View style={{ marginTop: 12 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: faintColor }}>
-                                Date Range
-                            </Text>
-                            {(dateFrom || dateTo) ? (
-                                <TouchableOpacity onPress={() => { setDateFrom(null); setDateTo(null); }}>
-                                    <Text style={{ fontSize: 12, fontWeight: '600', color: primaryColor }}>Clear</Text>
-                                </TouchableOpacity>
-                            ) : null}
-                        </View>
-                        <View style={{ flexDirection: 'row', gap: 8 }}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>From</Text>
-                                <TouchableOpacity
-                                    onPress={() => setShowFromPicker(true)}
-                                    style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateFrom ? primaryColor : borderColor, backgroundColor: cardBg }}
-                                >
-                                    <Text style={{ fontSize: 13, color: dateFrom ? textColor : faintColor }}>
-                                        {dateFrom ? toDateString(dateFrom) : 'Select date'}
-                                    </Text>
-                                </TouchableOpacity>
-                                {showFromPicker ? (
-                                    <DateTimePicker
-                                        value={dateFrom || new Date()}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        onChange={(_e, date) => {
-                                            setShowFromPicker(false);
-                                            if (date) setDateFrom(date);
-                                        }}
-                                    />
-                                ) : null}
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>To</Text>
-                                <TouchableOpacity
-                                    onPress={() => setShowToPicker(true)}
-                                    style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateTo ? primaryColor : borderColor, backgroundColor: cardBg }}
-                                >
-                                    <Text style={{ fontSize: 13, color: dateTo ? textColor : faintColor }}>
-                                        {dateTo ? toDateString(dateTo) : 'Select date'}
-                                    </Text>
-                                </TouchableOpacity>
-                                {showToPicker ? (
-                                    <DateTimePicker
-                                        value={dateTo || new Date()}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        onChange={(_e, date) => {
-                                            setShowToPicker(false);
-                                            if (date) setDateTo(date);
-                                        }}
-                                    />
-                                ) : null}
-                            </View>
-                        </View>
+                        )}
+                        {canAddBonus && (
+                        <TouchableOpacity
+                            onPress={() => setShowBonusModal(true)}
+                            style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: primaryColor, backgroundColor: '#ffffff' }}
+                        >
+                            <Plus size={14} color={primaryColor} />
+                            <Text style={{ color: primaryColor, fontSize: 13, fontWeight: '600' }}>Bonus</Text>
+                        </TouchableOpacity>
+                        )}
                     </View>
-                ) : null}
-            </View>
-
-            {/* Tabs */}
-            <View style={{ flexDirection: 'row', backgroundColor: cardBg, borderBottomWidth: 1, borderBottomColor: borderColor }}>
-                <TabButton id="payouts" label="Commission" icon={History} />
-                <TabButton id="incentives" label="Incentives" icon={Gift} />
-                <TabButton id="bonus" label="Bonus" icon={Gift} />
-            </View>
-
-            {/* List */}
-            <FlatList
-                data={filteredData}
-                keyExtractor={(item, index) => String(item.id ?? index)}
-                renderItem={renderCard}
-                contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />
-                }
-                ListEmptyComponent={
-                    <View style={{ paddingVertical: 48, alignItems: 'center' }}>
-                        <Text style={{ fontSize: 14, fontStyle: 'italic', color: faintColor }}>No matching records found</Text>
-                        {activeTab === 'incentives' && incentiveHistory.length === 0 ? (
-                            <Text style={{ fontSize: 12, color: faintColor, marginTop: 4, textAlign: 'center' }}>
-                                Incentive history is not available on mobile yet.
-                            </Text>
-                        ) : null}
-                    </View>
-                }
-            />
-
-            {/* Details overlay */}
-            {showDetails && selectedRecord ? (
-                <CommissionDetails
-                    data={selectedRecord}
-                    type={activeTab}
-                    isMobile
-                    onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
-                    onPrevious={currentIndex > 0 ? handlePrevious : undefined}
-                    onNext={currentIndex !== -1 && currentIndex < filteredData.length - 1 ? handleNext : undefined}
-                />
-            ) : null}
-
-            {/* Commission Payout Modal */}
+                ) : null
+            }
+        >
             <CommissionPayoutModal
                 isOpen={showPayoutModal}
                 onClose={() => setShowPayoutModal(false)}
                 onSuccess={() => { setShowPayoutModal(false); fetchData(); }}
             />
 
-            {/* Incentives Payout Modal */}
-            <IncentivesPayoutModal
-                isOpen={showIncentiveModal}
-                onClose={() => setShowIncentiveModal(false)}
-                onSuccess={() => { setShowIncentiveModal(false); handleRefresh(); }}
-            />
-
-            {/* Bonus Payout Modal */}
+            {/* Shows the server's own message on success, which says the bonus
+                is Pending until an administrator approves it. */}
             <BonusPayoutModal
                 isOpen={showBonusModal}
                 onClose={() => setShowBonusModal(false)}
                 onSuccess={() => { setShowBonusModal(false); fetchData(); }}
             />
-        </View>
+
+            {/* Approval form, only for a Pending record still missing its amount
+                / proof (raised from an invoice). Keeps the record's own type. */}
+            <AgentPayoutModal
+                isOpen={approveRecord !== null}
+                onClose={() => setApproveRecord(null)}
+                onSuccess={() => {
+                    const settled = approveRecord;
+                    setApproveRecord(null);
+                    setSelectedRecord((current: any) =>
+                        current && current.id === settled?.id ? { ...current, status: 'Approved' } : current
+                    );
+                    handleRefresh();
+                }}
+                approveId={approveRecord?.id}
+                approveRefNumber={approveRecord?.ref_number}
+                approveType={approveRecord?.type ?? null}
+                approveAmount={approveRecord?.total_amount ?? null}
+                agentId={approveRecord?.agent_id}
+                agentName={approveRecord?.agent_name}
+            />
+        </StandardPage>
     );
 };
 

@@ -3,6 +3,7 @@ import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, Linking, P
 import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin, Paperclip } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
+import { referredByEcho } from '../utils/referredByField';
 import { updateJobOrder, approveJobOrder } from '../services/jobOrderService';
 import { getBillingStatuses, BillingStatus } from '../services/lookupService';
 import { JobOrderDetailsProps } from '../types/jobOrder';
@@ -500,7 +501,8 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
       }
 
       await updateJobOrder(jobOrder.id, {
-        Referred_By: formData.referredBy,
+        // The id the record carries, unless somebody typed over the name.
+        Referred_By: referredByEcho(jobOrder, formData.referredBy),
         Date_Installed: formData.dateInstalled,
         Usage_Type: formData.usageType,
         First_Name: formData.firstName,

@@ -200,6 +200,9 @@ export const getBillingRecordDetails = async (id: string): Promise<BillingDetail
         withholdingPercentage: item.Withholding_Percentage != null ? Number(item.Withholding_Percentage) : null,
         lcpnapport: item.LCPNAPPORT || '',
         referredBy: item.Referred_By || '',
+        // The id behind the name, so CustomerDetailsEditModal can write the
+        // same referral back instead of re-matching the displayed name.
+        referredByAgentId: item.Referred_By_Agent_ID ?? null,
         referrersAccountNumber: '',
         group: item.Group_ID ? `Group ${item.Group_ID}` : '',
         groupName: item.Group_Name || item.group_name || '',

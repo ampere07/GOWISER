@@ -1,17 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import {
-    View,
-    Text,
-    TouchableOpacity,
-    FlatList,
-    RefreshControl,
-    ActivityIndicator,
-    Platform,
-    useWindowDimensions,
-} from 'react-native';
+import { View, Text, TouchableOpacity, Platform, useWindowDimensions, Alert } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Download, RefreshCw, Plus, Filter } from 'lucide-react-native';
+import { Plus } from 'lucide-react-native';
 import { exportToPDF } from '../utils/exportUtils';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useCommissionStore } from '../store/commissionStore';
@@ -21,7 +12,10 @@ import AgentPayoutModal from '../modals/AgentPayoutModal';
 import { useAgentStore } from '../store/agentStore';
 import { userService } from '../services/userService';
 import { User } from '../types/api';
-import GlobalSearch from './globalfunctions/GlobalSearch';
+import { StandardPage, RecordCard } from '../components/common';
+import apiClient from '../config/api';
+import { usePermissions } from '../hooks/usePermissions';
+import { usePayoutApproval } from '../hooks/usePayoutApproval';
 
 // Forced light mode to match the ~50 already-migrated pages.
 const isDarkMode = false;
@@ -54,7 +48,8 @@ const AgentPayout: React.FC = () => {
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [refreshing, setRefreshing] = useState(false);
-    const [showFilters, setShowFilters] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [itemsPerPage, setItemsPerPage] = useState(25);
 
     // Date range state
     const [dateFrom, setDateFrom] = useState<Date | null>(null);
@@ -69,11 +64,32 @@ const AgentPayout: React.FC = () => {
     const [showDetails, setShowDetails] = useState(false);
     const [showAgentPayoutModal, setShowAgentPayoutModal] = useState(false);
 
+    // Settling a pending payout needs agent-payout.approve (seeded:
+    // Administrator and SuperAdmin), and the API refuses it for anyone else, so
+    // a reader without the key never sees the buttons rather than seeing them
+    // and being refused.
+    const { can, ready: permissionsReady } = usePermissions();
+    const canApprove = permissionsReady && can('agent-payout.approve');
     const { fetchAgents } = useAgentStore();
 
     const fetchData = async () => {
         await fetchCommissions(true);
     };
+
+    /**
+     * Approve / reject a Pending payout. See hooks/usePayoutApproval: a record
+     * that already has an amount and proof is approved as it stands (after a
+     * confirmation), never re-typed; only an invoice-raised record without
+     * those details opens the approval form below. Rejecting also confirms.
+     */
+    const { handleApproval, approvalPending, approveRecord, setApproveRecord } = usePayoutApproval(
+        (settled, status) => {
+            setSelectedRecord((current: any) =>
+                current && current.id === settled?.id ? { ...current, status } : current
+            );
+            handleRefresh();
+        }
+    );
 
     const handleRefresh = async () => {
         setRefreshing(true);
@@ -208,39 +224,149 @@ const AgentPayout: React.FC = () => {
     const summaryIncentives = Number(agentBalance.incentives || 0);
     const summaryBonus = Number(agentBalance.bonus || agentBalance.Bonus || 0);
 
-    const renderCard = ({ item }: { item: any }) => {
-        const isPayoutType = item.type === 'incentives_payout';
-        const isAddType = item.type === 'incentives';
-        const amtColor = isPayoutType ? '#ef4444' : isAddType ? '#16a34a' : textColor;
-        const sign = isPayoutType ? '-' : isAddType ? '+' : '';
+    const dateRangeLabel = [dateFrom ? toDateString(dateFrom) : '…', dateTo ? toDateString(dateTo) : '…'].join(' → ');
+    const agentFiltered = selectedAgentId !== 'all';
 
-        return (
-            <TouchableOpacity
-                onPress={() => handleRowClick(item)}
-                activeOpacity={0.7}
-                style={{
-                    backgroundColor: cardBg,
-                    borderWidth: 1,
-                    borderColor,
-                    borderRadius: 10,
-                    padding: 14,
-                    marginBottom: 10,
-                }}
-            >
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <View style={{ flex: 1, paddingRight: 10 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#3b82f6', fontVariant: ['tabular-nums'] }}>
-                            {item.ref_number || `#${item.id}`}
+    // Agent choice and date range both live in the standard left drawer, the
+    // way the application list's filters do. The inline panel they replace
+    // pushed the list down the screen every time it opened.
+    const filterDrawer = (
+        <View style={{ paddingTop: 60, paddingHorizontal: 16 }}>
+            <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: faintColor, marginBottom: 8 }}>
+                Agent
+            </Text>
+            <View style={{ marginBottom: 20, borderWidth: 1, borderColor, borderRadius: 6, backgroundColor: cardBg }}>
+                <Picker
+                    selectedValue={String(selectedAgentId)}
+                    onValueChange={(val) => setSelectedAgentId(val === 'all' ? 'all' : Number(val))}
+                    dropdownIconColor={textColor}
+                    style={{ color: textColor }}
+                >
+                    <Picker.Item label={`All Agents (${agentList.length})`} value="all" />
+                    {agentList.map((agent) => {
+                        const agentName = `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim();
+                        return <Picker.Item key={String(agent.id)} label={agentName || agent.username} value={String(agent.id)} />;
+                    })}
+                </Picker>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: faintColor }}>
+                    Date Range
+                </Text>
+                {(dateFrom || dateTo) ? (
+                    <TouchableOpacity onPress={() => { setDateFrom(null); setDateTo(null); }}>
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: primaryColor }}>Clear</Text>
+                    </TouchableOpacity>
+                ) : null}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>From</Text>
+                    <TouchableOpacity
+                        onPress={() => setShowFromPicker(true)}
+                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateFrom ? primaryColor : borderColor, backgroundColor: cardBg }}
+                    >
+                        <Text style={{ fontSize: 13, color: dateFrom ? textColor : faintColor }}>
+                            {dateFrom ? toDateString(dateFrom) : 'Select date'}
                         </Text>
-                        {item.type ? (
-                            <View style={{ alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: isPayoutType ? '#fee2e2' : '#dcfce7' }}>
-                                <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: isPayoutType ? '#b91c1c' : '#15803d' }}>
-                                    {isPayoutType ? 'Payout' : isAddType ? 'Add Incentives' : String(item.type)}
-                                </Text>
-                            </View>
-                        ) : null}
+                    </TouchableOpacity>
+                    {showFromPicker ? (
+                        <DateTimePicker
+                            value={dateFrom || new Date()}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(_e, date) => {
+                                setShowFromPicker(false);
+                                if (date) setDateFrom(date);
+                            }}
+                        />
+                    ) : null}
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>To</Text>
+                    <TouchableOpacity
+                        onPress={() => setShowToPicker(true)}
+                        style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateTo ? primaryColor : borderColor, backgroundColor: cardBg }}
+                    >
+                        <Text style={{ fontSize: 13, color: dateTo ? textColor : faintColor }}>
+                            {dateTo ? toDateString(dateTo) : 'Select date'}
+                        </Text>
+                    </TouchableOpacity>
+                    {showToPicker ? (
+                        <DateTimePicker
+                            value={dateTo || new Date()}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(_e, date) => {
+                                setShowToPicker(false);
+                                if (date) setDateTo(date);
+                            }}
+                        />
+                    ) : null}
+                </View>
+            </View>
+        </View>
+    );
+
+    const summaryCards = selectedAgent ? (
+        <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: cardBg, borderBottomWidth: 1, borderBottomColor: borderColor }}>
+            <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
+                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Balance</Text>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: primaryColor }}>
+                    ₱{summaryBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </Text>
+            </View>
+            <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
+                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Incentives</Text>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: '#16a34a' }}>
+                    ₱{summaryIncentives.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </Text>
+            </View>
+            <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
+                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Bonus</Text>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: '#3b82f6' }}>
+                    ₱{summaryBonus.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </Text>
+            </View>
+        </View>
+    ) : null;
+
+    return (
+        <StandardPage<any>
+            data={filteredData}
+            keyExtractor={(item, index) => String(item.id ?? index)}
+            renderItem={(item) => {
+                const isPayoutType = item.type === 'incentives_payout';
+                const isAddType = item.type === 'incentives';
+                const amtColor = isPayoutType ? '#ef4444' : isAddType ? '#16a34a' : textColor;
+                const sign = isPayoutType ? '-' : isAddType ? '+' : '';
+
+                return (
+                    <RecordCard
+                        title={item.ref_number || `#${item.id}`}
+                        normalizeTitle={false}
+                        titleStyle={{ color: '#3b82f6', fontWeight: '600', fontVariant: ['tabular-nums'] }}
+                        badges={
+                            item.type ? (
+                                <View style={{ alignSelf: 'flex-start', marginBottom: 4, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, backgroundColor: isPayoutType ? '#fee2e2' : '#dcfce7' }}>
+                                    <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: isPayoutType ? '#b91c1c' : '#15803d' }}>
+                                        {isPayoutType ? 'Payout' : isAddType ? 'Add Incentives' : String(item.type)}
+                                    </Text>
+                                </View>
+                            ) : null
+                        }
+                        showStatus={false}
+                        selected={selectedRecord?.id === item.id}
+                        onPress={() => handleRowClick(item)}
+                        right={
+                            <Text style={{ fontSize: 15, fontWeight: '700', color: amtColor }}>
+                                {sign}{formatAmount(item.total_amount)}
+                            </Text>
+                        }
+                    >
                         {item.commission_id_list ? (
-                            <Text style={{ fontSize: 12, color: '#60a5fa', marginTop: 4 }} numberOfLines={1}>
+                            <Text style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }} numberOfLines={1}>
                                 {item.commission_id_list.split(',').map((id: string) => `#${id.trim()}`).join(', ')}
                             </Text>
                         ) : null}
@@ -248,210 +374,59 @@ const AgentPayout: React.FC = () => {
                             {item.created_at ? new Date(item.created_at).toLocaleString() : '---'}
                             {item.created_by ? `  ·  ${item.created_by}` : ''}
                         </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: amtColor }}>
-                            {sign}{formatAmount(item.total_amount)}
-                        </Text>
-                    </View>
-                </View>
-            </TouchableOpacity>
-        );
-    };
-
-    if (isLoading && payoutHistory.length === 0) {
-        return (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: pageBg }}>
-                <ActivityIndicator size="large" color={primaryColor} />
-            </View>
-        );
-    }
-
-    return (
-        <View style={{ flex: 1, backgroundColor: pageBg }}>
-            {/* Header */}
-            <View style={{
-                paddingTop: isTablet ? 16 : 60,
-                paddingHorizontal: 16,
-                paddingBottom: 12,
-                backgroundColor: cardBg,
-                borderBottomWidth: 1,
-                borderBottomColor: borderColor,
-            }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <Text style={{ fontSize: 18, fontWeight: '700', color: textColor }}>Payout History</Text>
-                    <TouchableOpacity
-                        onPress={handleOpenPayout}
-                        style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, backgroundColor: primaryColor }}
-                    >
-                        <Plus size={14} color="#ffffff" />
-                        <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '600' }}>Add</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Agent filter (replaces desktop sidebar agent list) */}
-                <View style={{ marginBottom: 8, borderWidth: 1, borderColor, borderRadius: 6, backgroundColor: cardBg }}>
-                    <Picker
-                        selectedValue={String(selectedAgentId)}
-                        onValueChange={(val) => setSelectedAgentId(val === 'all' ? 'all' : Number(val))}
-                        dropdownIconColor={textColor}
-                        style={{ color: textColor }}
-                    >
-                        <Picker.Item label={`All Agents (${agentList.length})`} value="all" />
-                        {agentList.map((agent) => {
-                            const agentName = `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim();
-                            return (
-                                <Picker.Item key={String(agent.id)} label={agentName || agent.username} value={String(agent.id)} />
-                            );
-                        })}
-                    </Picker>
-                </View>
-
-                {/* Search + actions */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <GlobalSearch
-                        searchQuery={searchTerm}
-                        setSearchQuery={setSearchTerm}
-                        isDarkMode={isDarkMode}
-                        colorPalette={colorPalette}
-                        placeholder="Search history..."
+                    </RecordCard>
+                );
+            }}
+            searchQuery={searchTerm}
+            onSearchChange={setSearchTerm}
+            searchPlaceholder="Search history..."
+            drawerContent={filterDrawer}
+            drawerActive={!!(dateFrom || dateTo) || agentFiltered}
+            rangeChip={
+                dateFrom || dateTo
+                    ? { label: 'Date range', value: dateRangeLabel, onClear: () => { setDateFrom(null); setDateTo(null); } }
+                    : null
+            }
+            onExport={handleExport}
+            exportDisabled={filteredData.length === 0}
+            onRefresh={handleRefresh}
+            isRefreshing={isLoading}
+            onPullRefresh={handleRefresh}
+            pullRefreshing={refreshing}
+            isLoading={isLoading && payoutHistory.length === 0}
+            emptyText="No matching records found"
+            currentPage={currentPage}
+            onPageChange={setCurrentPage}
+            itemsPerPage={itemsPerPage}
+            onItemsPerPageChange={setItemsPerPage}
+            colorPalette={colorPalette}
+            isDarkMode={isDarkMode}
+            header={summaryCards}
+            detail={
+                showDetails && selectedRecord ? (
+                    <CommissionDetails
+                        data={selectedRecord}
+                        type="payouts"
+                        isMobile
+                        onApprove={canApprove ? (record) => handleApproval(record, 'approve') : undefined}
+                        onReject={canApprove ? (record) => handleApproval(record, 'reject') : undefined}
+                        approvalPending={approvalPending}
+                        onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
+                        onPrevious={currentIndex > 0 ? handlePrevious : undefined}
+                        onNext={currentIndex !== -1 && currentIndex < filteredData.length - 1 ? handleNext : undefined}
                     />
-                    <TouchableOpacity
-                        onPress={() => setShowFilters((v) => !v)}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor: (dateFrom || dateTo) ? primaryColor : borderColor, backgroundColor: cardBg }}
-                    >
-                        <Filter size={18} color={(dateFrom || dateTo) ? primaryColor : mutedColor} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handleExport}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor, backgroundColor: cardBg }}
-                    >
-                        <Download size={18} color={mutedColor} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={handleRefresh}
-                        style={{ padding: 9, borderRadius: 6, borderWidth: 1, borderColor, backgroundColor: cardBg }}
-                    >
-                        <RefreshCw size={18} color={primaryColor} />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Date range filters */}
-                {showFilters ? (
-                    <View style={{ marginTop: 12 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: faintColor }}>
-                                Date Range
-                            </Text>
-                            {(dateFrom || dateTo) ? (
-                                <TouchableOpacity onPress={() => { setDateFrom(null); setDateTo(null); }}>
-                                    <Text style={{ fontSize: 12, fontWeight: '600', color: primaryColor }}>Clear</Text>
-                                </TouchableOpacity>
-                            ) : null}
-                        </View>
-                        <View style={{ flexDirection: 'row', gap: 8 }}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>From</Text>
-                                <TouchableOpacity
-                                    onPress={() => setShowFromPicker(true)}
-                                    style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateFrom ? primaryColor : borderColor, backgroundColor: cardBg }}
-                                >
-                                    <Text style={{ fontSize: 13, color: dateFrom ? textColor : faintColor }}>
-                                        {dateFrom ? toDateString(dateFrom) : 'Select date'}
-                                    </Text>
-                                </TouchableOpacity>
-                                {showFromPicker ? (
-                                    <DateTimePicker
-                                        value={dateFrom || new Date()}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        onChange={(_e, date) => {
-                                            setShowFromPicker(false);
-                                            if (date) setDateFrom(date);
-                                        }}
-                                    />
-                                ) : null}
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 4 }}>To</Text>
-                                <TouchableOpacity
-                                    onPress={() => setShowToPicker(true)}
-                                    style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: dateTo ? primaryColor : borderColor, backgroundColor: cardBg }}
-                                >
-                                    <Text style={{ fontSize: 13, color: dateTo ? textColor : faintColor }}>
-                                        {dateTo ? toDateString(dateTo) : 'Select date'}
-                                    </Text>
-                                </TouchableOpacity>
-                                {showToPicker ? (
-                                    <DateTimePicker
-                                        value={dateTo || new Date()}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        onChange={(_e, date) => {
-                                            setShowToPicker(false);
-                                            if (date) setDateTo(date);
-                                        }}
-                                    />
-                                ) : null}
-                            </View>
-                        </View>
-                    </View>
-                ) : null}
-            </View>
-
-            {/* Summary cards for a selected agent */}
-            {selectedAgent ? (
-                <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
-                    <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
-                        <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Balance</Text>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: primaryColor }}>
-                            ₱{summaryBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </Text>
-                    </View>
-                    <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
-                        <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Incentives</Text>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: '#16a34a' }}>
-                            ₱{summaryIncentives.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </Text>
-                    </View>
-                    <View style={{ flex: 1, padding: 10, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: cardBg }}>
-                        <Text style={{ fontSize: 11, color: mutedColor, marginBottom: 2 }}>Bonus</Text>
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: '#3b82f6' }}>
-                            ₱{summaryBonus.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </Text>
-                    </View>
-                </View>
-            ) : null}
-
-            {/* List */}
-            <FlatList
-                data={filteredData}
-                keyExtractor={(item, index) => String(item.id ?? index)}
-                renderItem={renderCard}
-                contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />
-                }
-                ListEmptyComponent={
-                    <View style={{ paddingVertical: 48, alignItems: 'center' }}>
-                        <Text style={{ fontSize: 14, fontStyle: 'italic', color: faintColor }}>No matching records found</Text>
-                    </View>
-                }
-            />
-
-            {/* Details overlay */}
-            {showDetails && selectedRecord ? (
-                <CommissionDetails
-                    data={selectedRecord}
-                    type="payouts"
-                    isMobile
-                    onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
-                    onPrevious={currentIndex > 0 ? handlePrevious : undefined}
-                    onNext={currentIndex !== -1 && currentIndex < filteredData.length - 1 ? handleNext : undefined}
-                />
-            ) : null}
-
-            {/* Agent Payout Modal */}
+                ) : null
+            }
+            toolbarActions={
+                <TouchableOpacity
+                    onPress={handleOpenPayout}
+                    style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, backgroundColor: primaryColor }}
+                >
+                    <Plus size={14} color="#ffffff" />
+                    <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '600' }}>Add</Text>
+                </TouchableOpacity>
+            }
+        >
             <AgentPayoutModal
                 isOpen={showAgentPayoutModal}
                 onClose={() => setShowAgentPayoutModal(false)}
@@ -460,7 +435,35 @@ const AgentPayout: React.FC = () => {
                     handleRefresh();
                 }}
             />
-        </View>
+
+            {/* The same form in approve mode, only for a record still missing its
+                amount / proof (raised from an invoice). It keeps the record's
+                own type and writes onto the record rather than raising a new one. */}
+            <AgentPayoutModal
+                isOpen={approveRecord !== null}
+                onClose={() => setApproveRecord(null)}
+                onSuccess={() => {
+                    const settled = approveRecord;
+                    setApproveRecord(null);
+
+                    // The detail pane hides Approve/Reject for anything that is
+                    // not Pending, so marking it here is what takes the buttons
+                    // away without closing the pane the approver is reading.
+                    setSelectedRecord((current: any) =>
+                        current && current.id === settled?.id
+                            ? { ...current, status: 'Approved' }
+                            : current
+                    );
+                    handleRefresh();
+                }}
+                approveId={approveRecord?.id}
+                approveRefNumber={approveRecord?.ref_number}
+                approveType={approveRecord?.type ?? null}
+                approveAmount={approveRecord?.total_amount ?? null}
+                agentId={approveRecord?.agent_id}
+                agentName={approveRecord?.agent_name}
+            />
+        </StandardPage>
     );
 };
 

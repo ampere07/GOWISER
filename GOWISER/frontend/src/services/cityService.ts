@@ -79,6 +79,46 @@ export const getCities = async (): Promise<City[]> => {
   }
 };
 
+// Get cities for a single region (lazy-loaded to avoid fetching every city in the country)
+export const getCitiesByRegionId = async (regionId: number): Promise<City[]> => {
+  try {
+    const response = await apiClient.get(`/locations/regions/${regionId}/cities`);
+    const data = response.data as any;
+
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (data.success && Array.isArray(data.data)) {
+      return data.data;
+    }
+
+    return [];
+  } catch (error: any) {
+    return [];
+  }
+};
+
+// Get barangays for a single city (lazy-loaded to avoid fetching every barangay in the country)
+export const getBarangaysByCityId = async (cityId: number): Promise<Borough[]> => {
+  try {
+    const response = await apiClient.get(`/locations/cities/${cityId}/barangays`);
+    const data = response.data as any;
+
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (data.success && Array.isArray(data.data)) {
+      return data.data;
+    }
+
+    return [];
+  } catch (error: any) {
+    return [];
+  }
+};
+
 // Get locations by type from the location management system
 export const getLocationsByType = async (type: 'region' | 'city' | 'borough' | 'village'): Promise<Location[]> => {
   try {

@@ -170,7 +170,16 @@ class CustomerApiController extends Controller
                 'group_id' => 'nullable|exists:groups,id',
                 'updated_by' => 'nullable|exists:users,id'
             ]);
-            
+
+            // Other endpoints show an agent-id referral as the agent's name; a form
+            // echoing that name back must not overwrite the stored id with it.
+            if (array_key_exists('referred_by', $validated)) {
+                $validated['referred_by'] = \App\Support\AgentReferral::preserveOnWrite(
+                    $validated['referred_by'],
+                    $customer->referred_by
+                );
+            }
+
             $customer->update($validated);
             
             return response()->json([

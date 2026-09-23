@@ -4,6 +4,13 @@ import { commissionService } from '../services/commissionService';
 
 interface CommissionState {
     earnings: CommissionData[];
+    // The whole of agent_commission_history for whoever is signed in, which is
+    // the single list both the History screen and Agent Payout read.
+    //
+    // The Incentives and Bonus lists that used to sit beside it are gone: they
+    // existed only for the History screen's Incentives / Bonus tabs, and those
+    // tabs split one table three ways and hid any row whose `type` matched none
+    // of them. Both endpoints were swept on every load for nothing else.
     payoutHistory: PayoutHistoryData[];
     stats: CommissionStats | null;
     totalEarnings: number;
@@ -11,7 +18,7 @@ interface CommissionState {
     isLoading: boolean;
     lastUpdated: Date | null;
     currentFetchId: number | null;
-    
+
     fetchCommissions: (force?: boolean) => Promise<void>;
     fetchUpdates: () => Promise<void>;
     setData: (data: CommissionData[]) => void;

@@ -18,6 +18,10 @@ import { createJobOrderItems, JobOrderItem } from '../services/jobOrderItemServi
 import apiClient from '../config/api';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import {
+  referredByFields,
+  referredByForSave,
+} from '../utils/referredByField';
 
 interface Region {
   id: number;
@@ -41,7 +45,10 @@ interface ModalConfig {
 }
 
 interface JobOrderEditFormData {
+  // The agent's NAME, which is what the field shows. What gets stored is the
+  // id in referredById — see utils/referredByField.ts.
   referredBy: string;
+  referredById: number | null;
   dateInstalled: string;
   usageType: string;
   firstName: string;
@@ -146,6 +153,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
   const [formData, setFormData] = useState<JobOrderEditFormData>({
     referredBy: '',
+    referredById: null,
     dateInstalled: getTodayDate(),
     usageType: '',
     firstName: '',
@@ -730,7 +738,9 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
               setFormData(prev => ({
                 ...prev,
-                referredBy: jobOrderData.Referred_By || jobOrderData.referred_by || '',
+                // Only the stored value and the id beside it; the name is
+                // filled in by the effect that runs once agents have loaded.
+                ...referredByFields(jobOrderData, []),
                 dateInstalled: jobOrderData.Date_Installed || jobOrderData.date_installed || getTodayDate(),
                 usageType: jobOrderData.Usage_Type || jobOrderData.usage_type || '',
                 firstName: jobOrderData.First_Name || jobOrderData.first_name || '',
@@ -780,7 +790,9 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
       const loadDefaultFormData = () => {
         setFormData(prev => ({
           ...prev,
-          referredBy: jobOrderData.Referred_By || jobOrderData.referred_by || '',
+          // Only the stored value and the id beside it; the name is filled
+          // in by the effect that runs once agents have loaded.
+          ...referredByFields(jobOrderData, []),
           dateInstalled: jobOrderData.Date_Installed || jobOrderData.date_installed || getTodayDate(),
           usageType: jobOrderData.Usage_Type || jobOrderData.usage_type || '',
           firstName: jobOrderData.First_Name || jobOrderData.first_name || '',
@@ -1166,7 +1178,10 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
       const applicationId = jobOrderData.Application_ID || jobOrderData.application_id;
 
       const jobOrderUpdateData: any = {
-        Referred_By: updatedFormData.referredBy,
+        Referred_By: referredByForSave(
+          { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
+          agents
+        ),
         First_Name: updatedFormData.firstName,
         Middle_Initial: updatedFormData.middleInitial,
         Last_Name: updatedFormData.lastName,
@@ -1298,7 +1313,10 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
           city: updatedFormData.city,
           region: updatedFormData.region,
           desired_plan: updatedFormData.choosePlan,
-          referred_by: updatedFormData.referredBy,
+          referred_by: referredByForSave(
+            { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
+            agents
+          ),
           status: updatedFormData.status
         };
 
@@ -1415,7 +1433,9 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                       setReferredBySearch(e.target.value);
                       setIsReferredByOpen(true);
                       if (!isReferredByOpen) {
-                        handleInputChange('referredBy', e.target.value);
+                        // Typed text is not a picked agent, so the id loaded with
+                        // the record must not ride along with it.
+                        setFormData(prev => ({ ...prev, referredBy: e.target.value, referredById: null }));
                       }
                     }}
                     onFocus={() => {
@@ -1428,7 +1448,9 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        handleInputChange('referredBy', '');
+                        // Clearing must drop the id too, or save writes the old
+                        // agent back (referredByForSave prefers the id).
+                        setFormData(prev => ({ ...prev, referredBy: '', referredById: null }));
                         setReferredBySearch('');
                         setIsReferredByOpen(false);
                       }}
@@ -1465,7 +1487,13 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                               key={agent.id}
                               className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.referredBy === fullName ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                               onClick={() => {
-                                handleInputChange('referredBy', fullName);
+                                // The id comes off the row that was clicked, not
+                                // from the name — two agents can share a name.
+                                setFormData(prev => ({
+                                  ...prev,
+                                  referredBy: fullName,
+                                  referredById: Number(agent.id) || null,
+                                }));
                                 setIsReferredByOpen(false);
                                 setReferredBySearch('');
                               }}

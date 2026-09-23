@@ -6,6 +6,7 @@ import { ColorPalette } from '../services/settingsColorPaletteService';
 import { useBillingStore } from '../store/billingStore';
 import { getUserDisplayName } from '../utils/userDisplay';
 import LoadingModal from './common/LoadingModalGlobal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface TransactionsRevertDetailsProps {
     revert: TransactionRevert;
@@ -24,6 +25,7 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
     colorPalette,
     onUpdate,
 }) => {
+    const { can } = usePermissions();
     const [detailsWidth, setDetailsWidth] = useState<number>(600);
     const [isResizing, setIsResizing] = useState<boolean>(false);
     const startXRef = useRef<number>(0);
@@ -128,28 +130,6 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
         return '';
     };
 
-    const getCurrentUserRole = () => {
-        try {
-            const authData = localStorage.getItem('authData');
-            if (authData) {
-                const parsed = JSON.parse(authData);
-                return parsed.role_name || '';
-            }
-        } catch (e) { }
-        return '';
-    };
-
-    const getCurrentUserRoleId = () => {
-        try {
-            const authData = localStorage.getItem('authData');
-            if (authData) {
-                const parsed = JSON.parse(authData);
-                return String(parsed.role_id || '');
-            }
-        } catch (e) { }
-        return '';
-    };
-
     const handleRevertConfirm = async () => {
         setShowConfirmRevert(false);
         setLoading(true);
@@ -233,8 +213,8 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
                     </div>
 
                     <div className="flex items-center space-x-3">
-                        {/* Show Revert button only if status is pending and user is a superadmin or role_id 7 */}
-                        {isPending && (getCurrentUserRole().toLowerCase() === 'superadmin' || getCurrentUserRoleId() === '7') && (
+                        {/* Show Revert button only while pending, to a role holding transactions-revert.approve (SuperAdmin among the seeded roles). */}
+                        {isPending && can('transactions-revert.approve') && (
                             <button
                                 onClick={() => setShowConfirmRevert(true)}
                                 disabled={loading}

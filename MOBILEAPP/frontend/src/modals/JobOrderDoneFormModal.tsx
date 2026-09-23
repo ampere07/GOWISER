@@ -12,6 +12,7 @@ import { UserData } from '../types/api';
 import { updateJobOrder } from '../services/jobOrderService';
 import { updateApplication } from '../services/applicationService';
 import { userService } from '../services/userService';
+import { referredByEcho } from '../utils/referredByField';
 import { planService, Plan } from '../services/planService';
 import { routerModelService, RouterModel } from '../services/routerModelService';
 import { getAllPorts, Port } from '../services/portService';
@@ -1263,7 +1264,9 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       }
 
       const jobOrderUpdateData: any = {
-        Referred_By: updatedFormData.referredBy,
+        // The box shows the resolved name; what goes back is the id the
+        // record carried, unless somebody has typed over it.
+        Referred_By: referredByEcho(jobOrderData, updatedFormData.referredBy),
         First_Name: updatedFormData.firstName,
         Middle_Initial: updatedFormData.middleInitial,
         Last_Name: updatedFormData.lastName,
@@ -1368,7 +1371,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
           region: updatedFormData.region,
           location: updatedFormData.location,
           desired_plan: updatedFormData.choosePlan,
-          referred_by: updatedFormData.referredBy,
+          referred_by: referredByEcho(jobOrderData, updatedFormData.referredBy),
           status: updatedFormData.status
         };
 

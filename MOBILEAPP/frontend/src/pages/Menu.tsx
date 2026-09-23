@@ -58,8 +58,133 @@ import { useCustomerDataContext } from '../contexts/CustomerDataContext';
 import NotificationModal from '../modals/NotificationModal';
 import AboutAppModal from '../modals/AboutAppModal';
 import TimeInOutModal from '../modals/TimeInOutModal';
+import { usePermissions } from '../hooks/usePermissions';
+import {
+    ADMIN_SURFACE_GROUPS,
+    isLockedRole,
+    lockedRoleHasAdminMenu,
+    permissionForSection,
+} from '../config/permissions';
 import packageJson from '../../package.json';
 const version = packageJson.version;
+
+/**
+ * The administrative sections, in the order the menu lists them.
+ *
+ * Ids are mobile section ids, which is what onSectionChange expects; several
+ * differ from the permission key that guards them (`organizations` against
+ * `organization`, `lcp-list` against `lcp`), and permissionForSection()
+ * translates between the two.
+ */
+const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label: string; icon: any }> }> = [
+        {
+            title: 'Operations',
+            items: [
+                { id: 'live-monitor', label: 'Monitoring', icon: Activity },
+                { id: 'applicationManagement', label: 'Applications', icon: ClipboardList },
+                { id: 'applicationVisit', label: 'App Visits', icon: MapPinCheck },
+                { id: 'job-order', label: 'Job Order', icon: Wrench },
+                { id: 'service-order', label: 'Service Order', icon: Wrench },
+                { id: 'work-order', label: 'Work Order', icon: Wrench },
+                { id: 'lcp-nap-location', label: 'LCP/NAP Location', icon: MapPin },
+                { id: 'sms-blast', label: 'SMS Blast', icon: Zap },
+                { id: 'reports', label: 'Reports', icon: BarChart2 },
+            ]
+        },
+        {
+            title: 'Billing',
+            items: [
+                { id: 'customer', label: 'Customer', icon: User },
+                { id: 'transaction-list', label: 'Transaction List', icon: Receipt },
+                { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw },
+                { id: 'payment-portal', label: 'Payment Portal', icon: DollarSign },
+                { id: 'soa', label: 'Statements', icon: FileText },
+                { id: 'soa-generation', label: 'SOA Generation', icon: FileText },
+                { id: 'invoice', label: 'Invoice', icon: Receipt },
+                { id: 'overdue', label: 'Overdue', icon: Clock },
+                { id: 'so-charges', label: 'SO Charge', icon: Coins },
+                { id: 'dc-notice', label: 'DC Notice', icon: FileWarning },
+                { id: 'rebate', label: 'Rebates', icon: Coins },
+                { id: 'discounts', label: 'Discounts', icon: Tag },
+                { id: 'billing', label: 'Billing List', icon: CreditCard },
+                { id: 'staggered-payment', label: 'Staggered Payment', icon: CreditCard },
+            ]
+        },
+        {
+            title: 'Agent',
+            items: [
+                { id: 'commission', label: 'Pay Out/In', icon: DollarSign },
+                { id: 'team-agent', label: 'Team Agents', icon: Users },
+                { id: 'agent-management', label: 'Agent Management', icon: UserCog },
+                { id: 'agent-payout', label: 'Agent Payout', icon: Wallet },
+                { id: 'agent-invoices', label: 'Invoices', icon: FileText },
+                { id: 'group-management', label: 'Affiliates', icon: Users },
+            ]
+        },
+        {
+            title: 'Inventory',
+            items: [
+                { id: 'inventory', label: 'Inventory', icon: Package },
+                { id: 'inventory-category-list', label: 'Inventory Category List', icon: List },
+            ]
+        },
+        {
+            title: 'Configurations',
+            items: [
+                { id: 'promo-list', label: 'Promo', icon: Ticket },
+                { id: 'plan-list', label: 'Plan', icon: Layers },
+                { id: 'location-list', label: 'Location', icon: MapPin },
+                { id: 'lcp-list', label: 'LCP', icon: Network },
+                { id: 'nap-list', label: 'NAP', icon: Network },
+                { id: 'usage-type-list', label: 'Usage Type', icon: Gauge },
+                { id: 'payment-method-list', label: 'Payment Method', icon: CreditCard },
+                { id: 'work-category-list', label: 'Work Category', icon: Tags },
+                { id: 'status-remarks-list', label: 'Status Remarks', icon: MessageSquare },
+                { id: 'router-model-list', label: 'Router Models', icon: Router },
+                { id: 'ports', label: 'Ports', icon: Cable },
+                { id: 'radius-config', label: 'Radius Config', icon: Wifi },
+                { id: 'smart-olt-config', label: 'SmartOLT Config', icon: Server },
+                { id: 'sms-config', label: 'SMS Config', icon: Send },
+                { id: 'sms-template', label: 'SMS Template', icon: MessageSquare },
+                { id: 'email-templates', label: 'Email Templates', icon: Mail },
+                { id: 'pppoe-setup', label: 'PPPoE Setup', icon: RouterIcon },
+                { id: 'concern-config', label: 'Concern Config', icon: AlertCircle },
+                { id: 'billing-config', label: 'Billing Configurations', icon: Receipt },
+            ]
+        },
+        {
+            title: 'Users',
+            items: [
+                { id: 'user-management', label: 'Users Management', icon: Users },
+                { id: 'tech-users', label: 'Tech Users', icon: Wrench },
+                { id: 'organizations', label: 'Organizations', icon: Building },
+                { id: 'roles', label: 'Roles', icon: Shield },
+            ]
+        },
+        {
+            title: 'Logs',
+            items: [
+                { id: 'disconnection-logs', label: 'Disconnected Logs', icon: AlertTriangle },
+                { id: 'reconnection-logs', label: 'Reconnection Logs', icon: RefreshCw },
+                { id: 'sms-logs', label: 'SMS Logs', icon: MessageSquareText },
+                { id: 'email-logs', label: 'Email Logs', icon: Mail },
+                { id: 'data-logs', label: 'Data Logs', icon: Database },
+                { id: 'file-log-viewer', label: 'Smart OLT Logs', icon: FileText },
+                { id: 'radius-logs', label: 'Radius Logs', icon: Activity },
+                { id: 'activity-logs', label: 'System Logs', icon: ScrollText },
+                { id: 'sms-blast-logs', label: 'SMS Blast Logs', icon: ScrollText },
+                { id: 'expenses-log', label: 'Expenses', icon: Wallet },
+            ]
+        },
+        {
+            title: 'System',
+            items: [
+                { id: 'database-setup', label: 'Database Setup', icon: HardDrive },
+                { id: 'database-test', label: 'Database Test', icon: TestTube2 },
+                { id: 'settings', label: 'Settings', icon: Settings },
+            ]
+        },
+];
 
 interface MenuProps {
     onLogout?: () => void;
@@ -124,7 +249,31 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
 
     const normalizedRole = (typeof userData?.role === 'string' ? userData.role : userData?.role?.name)?.toLowerCase() || '';
     const isTechnician = normalizedRole === 'technician' || userData?.role_id === 2;
-    const isAdmin = normalizedRole === 'administrator' || String(userData?.role_id) === '1';
+
+    // Handed this screen's own copy of the account so the menu and the section
+    // it opens are decided from one reading.
+    const { can, roleId: resolvedRoleId } = usePermissions(userData);
+
+    /**
+     * The administrative block, or nothing at all.
+     *
+     * Whether an account gets the block at all: a seeded role keeps the rule the
+     * app has always used, the Administrator alone (lockedRoleHasAdminMenu). A
+     * custom role gets it when it holds something in an administrative group
+     * (ADMIN_SURFACE_GROUPS), so a field-style custom role is not handed a menu
+     * duplicating its own navigation. Which entries: those whose key is held.
+     */
+    const adminGroups = (() => {
+        const visible = ADMIN_MENU_GROUPS
+            .map(group => ({ ...group, items: group.items.filter(item => can(permissionForSection(item.id))) }))
+            .filter(group => group.items.length > 0);
+
+        if (isLockedRole(resolvedRoleId)) {
+            return lockedRoleHasAdminMenu(resolvedRoleId) ? visible : [];
+        }
+
+        return visible.some(group => ADMIN_SURFACE_GROUPS.includes(group.title)) ? visible : [];
+    })();
 
     const menuGroups = [
         {
@@ -136,115 +285,7 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
                 { id: 'release-notes', label: 'Release Notes', icon: Clock },
             ]
         },
-        // Admin groups — mirror the localcbms Sidebar.tsx structure.
-        ...(isAdmin ? [
-            {
-                title: 'Operations',
-                items: [
-                    { id: 'live-monitor', label: 'Monitoring', icon: Activity },
-                    { id: 'applicationManagement', label: 'Applications', icon: ClipboardList },
-                    { id: 'applicationVisit', label: 'App Visits', icon: MapPinCheck },
-                    { id: 'job-order', label: 'Job Order', icon: Wrench },
-                    { id: 'service-order', label: 'Service Order', icon: Wrench },
-                    { id: 'work-order', label: 'Work Order', icon: Wrench },
-                    { id: 'lcp-nap-location', label: 'LCP/NAP Location', icon: MapPin },
-                    { id: 'sms-blast', label: 'SMS Blast', icon: Zap },
-                    { id: 'reports', label: 'Reports', icon: BarChart2 },
-                ]
-            },
-            {
-                title: 'Billing',
-                items: [
-                    { id: 'customer', label: 'Customer', icon: User },
-                    { id: 'transaction-list', label: 'Transaction List', icon: Receipt },
-                    { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw },
-                    { id: 'payment-portal', label: 'Payment Portal', icon: DollarSign },
-                    { id: 'soa', label: 'Statements', icon: FileText },
-                    { id: 'soa-generation', label: 'SOA Generation', icon: FileText },
-                    { id: 'invoice', label: 'Invoice', icon: Receipt },
-                    { id: 'overdue', label: 'Overdue', icon: Clock },
-                    { id: 'so-charges', label: 'SO Charge', icon: Coins },
-                    { id: 'dc-notice', label: 'DC Notice', icon: FileWarning },
-                    { id: 'rebate', label: 'Rebates', icon: Coins },
-                    { id: 'discounts', label: 'Discounts', icon: Tag },
-                    { id: 'billing', label: 'Billing List', icon: CreditCard },
-                    { id: 'staggered-payment', label: 'Staggered Payment', icon: CreditCard },
-                ]
-            },
-            {
-                title: 'Agent',
-                items: [
-                    { id: 'commission', label: 'Pay Out/In', icon: DollarSign },
-                    { id: 'team-agent', label: 'Team Agents', icon: Users },
-                    { id: 'agent-management', label: 'Agent Management', icon: UserCog },
-                    { id: 'agent-payout', label: 'Agent Payout', icon: Wallet },
-                    { id: 'group-management', label: 'Affiliates', icon: Users },
-                ]
-            },
-            {
-                title: 'Inventory',
-                items: [
-                    { id: 'inventory', label: 'Inventory', icon: Package },
-                    { id: 'inventory-category-list', label: 'Inventory Category List', icon: List },
-                ]
-            },
-            {
-                title: 'Configurations',
-                items: [
-                    { id: 'promo-list', label: 'Promo', icon: Ticket },
-                    { id: 'plan-list', label: 'Plan', icon: Layers },
-                    { id: 'location-list', label: 'Location', icon: MapPin },
-                    { id: 'lcp-list', label: 'LCP', icon: Network },
-                    { id: 'nap-list', label: 'NAP', icon: Network },
-                    { id: 'usage-type-list', label: 'Usage Type', icon: Gauge },
-                    { id: 'payment-method-list', label: 'Payment Method', icon: CreditCard },
-                    { id: 'work-category-list', label: 'Work Category', icon: Tags },
-                    { id: 'status-remarks-list', label: 'Status Remarks', icon: MessageSquare },
-                    { id: 'router-model-list', label: 'Router Models', icon: Router },
-                    { id: 'ports', label: 'Ports', icon: Cable },
-                    { id: 'radius-config', label: 'Radius Config', icon: Wifi },
-                    { id: 'smart-olt-config', label: 'SmartOLT Config', icon: Server },
-                    { id: 'sms-config', label: 'SMS Config', icon: Send },
-                    { id: 'sms-template', label: 'SMS Template', icon: MessageSquare },
-                    { id: 'email-templates', label: 'Email Templates', icon: Mail },
-                    { id: 'pppoe-setup', label: 'PPPoE Setup', icon: RouterIcon },
-                    { id: 'concern-config', label: 'Concern Config', icon: AlertCircle },
-                    { id: 'billing-config', label: 'Billing Configurations', icon: Receipt },
-                ]
-            },
-            {
-                title: 'Users',
-                items: [
-                    { id: 'user-management', label: 'Users Management', icon: Users },
-                    { id: 'tech-users', label: 'Tech Users', icon: Wrench },
-                    { id: 'organizations', label: 'Organizations', icon: Building },
-                    { id: 'roles', label: 'Roles', icon: Shield },
-                ]
-            },
-            {
-                title: 'Logs',
-                items: [
-                    { id: 'disconnection-logs', label: 'Disconnected Logs', icon: AlertTriangle },
-                    { id: 'reconnection-logs', label: 'Reconnection Logs', icon: RefreshCw },
-                    { id: 'sms-logs', label: 'SMS Logs', icon: MessageSquareText },
-                    { id: 'email-logs', label: 'Email Logs', icon: Mail },
-                    { id: 'data-logs', label: 'Data Logs', icon: Database },
-                    { id: 'file-log-viewer', label: 'Smart OLT Logs', icon: FileText },
-                    { id: 'radius-logs', label: 'Radius Logs', icon: Activity },
-                    { id: 'activity-logs', label: 'System Logs', icon: ScrollText },
-                    { id: 'sms-blast-logs', label: 'SMS Blast Logs', icon: ScrollText },
-                    { id: 'expenses-log', label: 'Expenses', icon: Wallet },
-                ]
-            },
-            {
-                title: 'System',
-                items: [
-                    { id: 'database-setup', label: 'Database Setup', icon: HardDrive },
-                    { id: 'database-test', label: 'Database Test', icon: TestTube2 },
-                    { id: 'settings', label: 'Settings', icon: Settings },
-                ]
-            },
-        ] : []),
+        ...adminGroups,
     ];
 
     const displayName = customerDetail?.fullName || userData?.full_name || userData?.name || 'User Name';

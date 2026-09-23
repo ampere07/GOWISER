@@ -25,6 +25,10 @@ import { pppoeService, UsernamePattern } from '../services/pppoeService';
 import { technicianService } from '../services/technicianService';
 import { agentService } from '../services/agentService';
 import { GroupedOption } from '../components/common/SearchableField';
+import {
+  referredByFields,
+  referredByForSave,
+} from '../utils/referredByField';
 import SearchableField from '../components/common/SearchableField';
 
 
@@ -49,7 +53,10 @@ interface JobOrderDoneFormData {
   connectionType: string;
   routerModel: string;
   modemSN: string;
+  // The agent's NAME, which is what the read-only box shows. What gets stored
+  // is the id in referredById — see utils/referredByField.ts.
   referredBy: string;
+  referredById: number | null;
 
   region: string;
   city: string;
@@ -155,6 +162,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     routerModel: '',
     modemSN: '',
     referredBy: '',
+    referredById: null,
 
     region: '',
     city: '',
@@ -820,7 +828,19 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 addressCoordinates: getValue(jobOrderData.Address_Coordinates || jobOrderData.address_coordinates, 'addressCoordinates'),
                 billingDay: (jobOrderData.billing_day !== undefined && jobOrderData.billing_day !== null) ? String(jobOrderData.billing_day) : (jobOrderData.Billing_Day !== undefined && jobOrderData.Billing_Day !== null) ? String(jobOrderData.Billing_Day) : '',
                 isLastDayOfMonth: jobOrderData.billing_day === 0 || jobOrderData.Billing_Day === 0,
-                referredBy: getValue(appData.referred_by || jobOrderData.Referred_By || jobOrderData.referred_by, 'referredBy')
+                // The box is read-only here, so this only has to survive the round
+        // trip: the id loaded with the record is what gets written back.
+        ...referredByFields(
+          {
+            referred_by: appData.referred_by || jobOrderData.Referred_By || jobOrderData.referred_by,
+            referred_by_agent_id:
+              appData.referred_by_agent_id ?? jobOrderData.Referred_By_Agent_ID ?? jobOrderData.referred_by_agent_id ?? null,
+          },
+          // The roster is not needed to carry the id through, and reading it
+          // here would make it a dependency of this whole prefill — a late
+          // agent list would then reset every field already filled in.
+          []
+        )
               };
 
               setFormData(prev => ({
@@ -1241,7 +1261,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         visit_with_other: updatedFormData.visit_with_other,
         updated_by_user_email: currentUserEmail,
         desired_plan: updatedFormData.choosePlan,
-        referred_by: updatedFormData.referredBy || null,
+        referred_by: referredByForSave(
+          { label: updatedFormData.referredBy, agentId: updatedFormData.referredById ?? null },
+          agents
+        ),
         billing_day: updatedFormData.isLastDayOfMonth ? 0 : (parseInt(updatedFormData.billingDay) || null)
       };
 
@@ -1535,7 +1558,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             city: updatedFormData.city,
             barangay: updatedFormData.barangay,
             desired_plan: updatedFormData.choosePlan,
-            referred_by: updatedFormData.referredBy || null,
+            referred_by: referredByForSave(
+              { label: updatedFormData.referredBy, agentId: updatedFormData.referredById ?? null },
+              agents
+            ),
             promo: promo,
             updated_by: currentUserEmail
           };

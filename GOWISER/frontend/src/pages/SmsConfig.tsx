@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface SmsConfigData {
   id: number;
@@ -32,6 +33,11 @@ interface ModalConfig {
 }
 
 const SmsConfig: React.FC = () => {
+  // Add, Edit and Delete are granted separately. The same keys the API
+  // demands, so a control is only drawn when the request behind it would
+  // succeed.
+  const actions = usePageActions('sms-config');
+
   const [smsConfigs, setSmsConfigs] = useState<SmsConfigData[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
@@ -129,11 +135,13 @@ const SmsConfig: React.FC = () => {
   };
 
   const handleStartCreate = () => {
+    if (!actions.canCreate) return;
     resetForm();
     setIsCreating(true);
   };
 
   const handleStartEdit = (config: SmsConfigData) => {
+    if (!actions.canEdit) return;
     setFormData({
       provider: config.provider || 'itexmo',
       code: config.code || '',
@@ -214,6 +222,7 @@ const SmsConfig: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    if (!actions.canDelete) return;
     setIdToDelete(id);
     setConfirmInput('');
     setIsDeleteModalOpen(true);
@@ -276,7 +285,7 @@ const SmsConfig: React.FC = () => {
               SMS Configuration
             </h2>
           </div>
-          {canCreateNew && !isCreating && editingId === null && (
+          {actions.canCreate && canCreateNew && !isCreating && editingId === null && (
             <button
               onClick={handleStartCreate}
               className="px-3 py-1.5 text-white text-sm rounded transition-colors"
@@ -500,6 +509,7 @@ const SmsConfig: React.FC = () => {
                       <h3 className={`text-base font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
                         }`}>Configuration #{config.id}</h3>
                       <div className="flex items-center gap-2">
+                        {actions.canEdit && (
                         <button
                           onClick={() => handleStartEdit(config)}
                           className={`px-3 py-1 text-sm rounded transition-colors ${isDarkMode
@@ -509,6 +519,8 @@ const SmsConfig: React.FC = () => {
                         >
                           Edit
                         </button>
+                        )}
+                        {actions.canDelete && (
                         <button
                           onClick={() => handleDelete(config.id)}
                           className={`px-3 py-1 text-sm rounded transition-colors ${isDarkMode
@@ -518,6 +530,7 @@ const SmsConfig: React.FC = () => {
                         >
                           Delete
                         </button>
+                        )}
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

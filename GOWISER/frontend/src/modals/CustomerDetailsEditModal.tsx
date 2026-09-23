@@ -17,6 +17,12 @@ import { getAllInventoryItems, InventoryItem } from '../services/inventoryItemSe
 import apiClient from '../config/api';
 import SearchableField, { GroupedOption } from '../components/common/SearchableField';
 import { agentService } from '../services/agentService';
+import {
+  buildAgentGroups,
+  referredByFields,
+  referredByForSave,
+  selectionFromOption,
+} from '../utils/referredByField';
 import { userService } from '../services/userService';
 
 interface CustomerDetailsEditModalProps {
@@ -225,7 +231,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           barangay: recordData.barangay || '',
           addressCoordinates: recordData.addressCoordinates || recordData.address_coordinates || '',
           housingStatus: recordData.housingStatus || recordData.housing_status || '',
-          referredBy: recordData.referredBy || recordData.referred_by || '',
+          // Only the stored value and the id inside it. The name is filled in by
+          // the effect below once the agent list has loaded — reading `agents`
+          // here would make it a dependency of this whole prefill, and a late
+          // agent list would then reset every field the user had already typed.
+          ...referredByFields(recordData, []),
           groupName: recordData.groupName || recordData.group_name || recordData.group || '',
           houseFrontPicture: houseFrontPictureUrl
         };
@@ -603,6 +613,54 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     }
   };
 
+  /**
+   * Keep the agent's name on screen and their id in the form.
+   *
+   * SearchableField hands over the option it rendered, so the id comes from the
+   * row that was clicked rather than being looked back up by name — which is
+   * what keeps two agents sharing a name distinct.
+   */
+  const handleReferredBySelect = (label: string, option?: any) => {
+    const selection = selectionFromOption(label, option);
+    setFormData((prev: any) => ({
+      ...prev,
+      referredBy: selection.label,
+      referredById: selection.agentId,
+    }));
+  };
+
+  // The agent list is fetched while the modal is opening, so a record prefilled
+  // before it arrives has no name to show for an id-form referral and holds the
+  // stored value instead. Resolving again once the list lands fills the name in.
+  //
+  // The guard is on the LABEL, not the id: prefill already reads the id out of
+  // the stored value, so a guard on the id would never let this run. A label
+  // that still equals what was stored is one nobody has picked over.
+  const referredByRaw = recordData?.referredBy ?? recordData?.referred_by ?? '';
+  const referredByAgentIdProp =
+    recordData?.referredByAgentId ?? recordData?.referred_by_agent_id ?? null;
+
+  useEffect(() => {
+    if (!isOpen || !agents.length || editType !== 'customer_details') return;
+
+    setFormData((prev: any) => {
+      if ((prev.referredBy ?? '') !== String(referredByRaw ?? '')) return prev;
+
+      const resolved = referredByFields(
+        { referred_by: referredByRaw, referred_by_agent_id: referredByAgentIdProp },
+        agents
+      );
+
+      // Returning prev unchanged is what stops this looping: the parent rebuilds
+      // its props on every render, and React bails out of a set that produces
+      // the identical state.
+      if (resolved.referredBy === prev.referredBy && resolved.referredById === prev.referredById) {
+        return prev;
+      }
+      return { ...prev, ...resolved };
+    });
+  }, [isOpen, agents, editType, referredByRaw, referredByAgentIdProp]);
+
   const handleInputChange = (field: string, value: any) => {
     // Any change to the Modem SN invalidates a prior validation, so a swapped serial can never
     // be saved on the strength of the previous one's check.
@@ -673,48 +731,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     return allBarangays.filter(brgy => brgy.city_id === selectedCity.id);
   };
 
-  const getGroupedAgents = (): GroupedOption[] => {
-    if (!agents.length) return [];
-
-    const groups: Record<number, any[]> = {};
-    const noTeam: any[] = [];
-
-    agents.forEach(agent => {
-      if (agent.agent_id) {
-        if (!groups[agent.agent_id]) groups[agent.agent_id] = [];
-        groups[agent.agent_id].push({
-          name: `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim(),
-          ...agent
-        });
-      } else {
-        noTeam.push({
-          name: `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim(),
-          ...agent
-        });
-      }
-    });
-
-    const grouped: GroupedOption[] = [];
-
-    teams.forEach(team => {
-      const teamAgents = groups[team.id];
-      if (teamAgents && teamAgents.length > 0) {
-        grouped.push({
-          label: team.team_name || `Team ${team.id}`,
-          options: teamAgents
-        });
-      }
-    });
-
-    if (noTeam.length > 0) {
-      grouped.push({
-        label: 'No Team',
-        options: noTeam
-      });
-    }
-
-    return grouped;
-  };
+  const getGroupedAgents = (): GroupedOption[] => buildAgentGroups(agents, teams);
 
   const filteredCities = getFilteredCities();
   const filteredBarangays = getFilteredBarangays();
@@ -1054,6 +1071,16 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
        * and every save of a prepaid account would otherwise raise one for a change nobody made.
        */
       delete dataWithUpdatedBy.prepaid_expires_at;
+      // referredBy is the name the field showed; the column takes the agent's
+      // id. Only touched when this form carries the field at all — the billing
+      // and technical tabs share this handler and have no referral on them.
+      if ('referredBy' in formData) {
+        dataWithUpdatedBy.referredBy = referredByForSave(
+          { label: formData.referredBy, agentId: formData.referredById ?? null },
+          agents
+        );
+        delete dataWithUpdatedBy.referredById;
+      }
 
       const saveResult: any = await onSave(dataWithUpdatedBy, editType);
 
@@ -1503,15 +1530,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                 </div>
 
+                {/*
+                  Team names are group headings here, not choices. A referral has
+                  to name one agent: referred_by is what the commission is settled
+                  against when the job order is approved, and a team name matches
+                  no agent, so it would silently leave the referral unpaid. Teams
+                  stay searchable — typing one still lists its members to pick from.
+                */}
                 <SearchableField
                   label="Referred By"
                   value={formData.referredBy}
-                  onSelect={(val) => handleInputChange('referredBy', val)}
+                  onSelect={(val, option) => handleReferredBySelect(val, option)}
                   groupedOptions={groupedAgents}
                   optionLabelKey="name"
                   isDarkMode={isDarkMode}
                   placeholder="Search Agent..."
-                  isHeaderSelectable={true}
+                  isHeaderSelectable={false}
                 />
 
                 <ImagePreview

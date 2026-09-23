@@ -642,7 +642,23 @@ class MonitorController extends Controller
                     ->orderByDesc('value')
                     ->limit(20);
 
-                return response()->json(['status' => 'success', 'data' => $qb->get(), 'barangays' => $response['barangays']]);
+                // Grouped on the stored value so the counts stay exact, then
+                // relabelled: a referral made through the agent picker holds
+                // the agent's user id, and the chart names the agent.
+                $ranked = $qb->get();
+                \App\Support\AgentReferral::prime($ranked->pluck('label'));
+                $ranked = $ranked->map(function ($row) {
+                    $row->label = \App\Support\AgentReferral::displayName($row->label);
+                    return $row;
+                })
+                    // An agent referred both by id (picker) and by their typed
+                    // name would otherwise appear as two bars with one label.
+                    ->groupBy('label')
+                    ->map(fn ($rows, $label) => (object) ['label' => $label, 'value' => (int) $rows->sum('value')])
+                    ->sortByDesc('value')
+                    ->values();
+
+                return response()->json(['status' => 'success', 'data' => $ranked, 'barangays' => $response['barangays']]);
             }
 
             // 12) INVOICE OVERALL (invoices.status)
@@ -1234,6 +1250,11 @@ class MonitorController extends Controller
 
                 $all = $jobs->union($services)->get();
 
+                // Referrals made through the agent picker hold a user id; the
+                // queue is grouped and read by team name, so resolve the whole
+                // page in one query before mapping over it.
+                \App\Support\AgentReferral::prime($all->pluck('team_name'));
+
                 $data = $all->map(function ($item) {
                     $startStr = $item->start_time_str ?? null;
                     $endStr = $item->end_time_str ?? null;
@@ -1242,7 +1263,7 @@ class MonitorController extends Controller
 
                     if (!$start) {
                         return [
-                            'team_name' => $item->team_name,
+                            'team_name' => \App\Support\AgentReferral::displayName($item->team_name),
                             'type' => $item->type,
                             'customer' => $item->customer,
                             'address' => trim($item->address),
@@ -1271,7 +1292,7 @@ class MonitorController extends Controller
                     $duration .= $diff->s . "s";
 
                     return [
-                        'team_name' => $item->team_name,
+                        'team_name' => \App\Support\AgentReferral::displayName($item->team_name),
                         'type' => $item->type,
                         'customer' => $item->customer,
                         'address' => trim($item->address),

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { DollarSign, Download, Filter, Search, Loader2, TrendingUp, Calendar, ArrowUpRight, ArrowDownRight, Clock, Receipt, History, ExternalLink, ChevronRight, ChevronLeft, RefreshCw, Columns, Plus, ChevronUp, ChevronDown, GripVertical, Columns3, ArrowUp, ArrowDown, ChevronsLeft, ChevronsRight, Gift } from 'lucide-react';
+import { DollarSign, Download, Filter, Search, Loader2, TrendingUp, Calendar, ArrowUpRight, ArrowDownRight, Clock, Receipt, History, ExternalLink, ChevronRight, ChevronLeft, RefreshCw, Columns, ChevronUp, ChevronDown, GripVertical, Columns3, ArrowUp, ArrowDown, ChevronsLeft, ChevronsRight, Gift } from 'lucide-react';
 import { exportToCSV, exportToPDF } from '../utils/exportUtils';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useCommissionStore } from '../store/commissionStore';
@@ -12,6 +12,9 @@ import { Agent, User } from '../types/api';
 import { userService } from '../services/userService';
 import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
 import { useFunnelFilter } from '../filter/useFunnelFilter';
+import apiClient from '../config/api';
+import { getAgentAccess } from '../utils/agentAccess';
+import { agentInvoiceService } from '../services/agentInvoiceService';
 
 interface ColumnDefinition {
     key: string;
@@ -35,7 +38,11 @@ const payoutColumns: ColumnDefinition[] = [
     { key: 'ref_number', label: 'Ref Number', minWidth: 150 },
     { key: 'total_amount', label: 'Total Amount', minWidth: 150 },
     { key: 'commission_id_list', label: 'Job Orders', minWidth: 200 },
-    { key: 'created_by', label: 'Processed By', minWidth: 150 },
+    // Who raised the record, and who signed it off. Paired deliberately, the
+    // same way the Transaction List shows them.
+    { key: 'created_by', label: 'Created By', minWidth: 180 },
+    { key: 'status', label: 'Status', minWidth: 120 },
+    { key: 'approved_by', label: 'Approved By', minWidth: 180 },
 ];
 
 /**
@@ -50,8 +57,34 @@ const payoutFunnelColumns: FunnelColumn[] = [
     { key: 'ref_number', label: 'Ref Number', dataType: 'varchar' },
     { key: 'total_amount', label: 'Total Amount', dataType: 'decimal' },
     { key: 'commission_id_list', label: 'Job Orders', dataType: 'varchar' },
-    { key: 'created_by', label: 'Processed By', dataType: 'checklist' },
+    { key: 'created_by', label: 'Created By', dataType: 'checklist' },
+    { key: 'status', label: 'Status', dataType: 'checklist' },
+    { key: 'approved_by', label: 'Approved By', dataType: 'checklist' },
 ];
+
+/**
+ * Reconcile a saved column order with the columns that exist today.
+ *
+ * The order each user arranges is remembered in their browser, so a column
+ * added later would never appear for anyone who has already used the page.
+ * Keys that no longer exist are dropped and new ones appended, which keeps a
+ * user's arrangement intact while still surfacing new columns.
+ */
+const mergeColumnOrder = (saved: string | null, columns: ColumnDefinition[]): string[] => {
+    const valid = columns.map(c => c.key);
+    if (!saved) return valid;
+
+    try {
+        const parsed = JSON.parse(saved);
+        if (!Array.isArray(parsed)) return valid;
+
+        const merged = parsed.filter((key: string) => valid.includes(key));
+        valid.forEach(key => { if (!merged.includes(key)) merged.push(key); });
+        return merged;
+    } catch {
+        return valid;
+    }
+};
 
 interface PaginationControlsProps {
     totalPages: number;
@@ -162,6 +195,11 @@ const AgentPayout: React.FC = () => {
         fetchUpdates
     } = useCommissionStore();
 
+    // Signing a payout off is an administrator's act. The buttons were
+    // previously wired straight to the handler for anyone who could open the
+    // page; the API refuses anyone else, so the two agree.
+    const canApprove = React.useMemo(() => getAgentAccess().canApprovePayout, []);
+
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
     const [showMobileFilters, setShowMobileFilters] = useState<boolean>(false);
@@ -182,6 +220,12 @@ const AgentPayout: React.FC = () => {
 
     const [selectedRecord, setSelectedRecord] = useState<CommissionData | PayoutHistoryData | null>(null);
     const [showDetails, setShowDetails] = useState(false);
+    // True while an approve/reject request is in flight, so the buttons cannot be
+    // pressed twice and apply a payout more than once.
+    const [approvalPending, setApprovalPending] = useState(false);
+    // The pending payout being approved, or null. Approving opens the payout
+    // form so its details can be entered before it is applied.
+    const [approveRecord, setApproveRecord] = useState<any | null>(null);
     const [agentList, setAgentList] = useState<User[]>([]);
     const [selectedAgentId, setSelectedAgentId] = useState<string | number>('all');
     const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
@@ -196,13 +240,10 @@ const AgentPayout: React.FC = () => {
     const [isRefreshingManual, setIsRefreshingManual] = useState(false);
     const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
     const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
-    const [showAgentPayoutModal, setShowAgentPayoutModal] = useState(false);
-    const [payoutAgent, setPayoutAgent] = useState<Agent | null>(null);
     const { agents, fetchAgents } = useAgentStore();
-    const [columnOrderPayouts, setColumnOrderPayouts] = useState<string[]>(() => {
-        const saved = localStorage.getItem('agentPayoutPayoutColumnOrder');
-        return saved ? JSON.parse(saved) : payoutColumns.map(c => c.key);
-    });
+    const [columnOrderPayouts, setColumnOrderPayouts] = useState<string[]>(
+        () => mergeColumnOrder(localStorage.getItem('agentPayoutPayoutColumnOrder'), payoutColumns)
+    );
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -410,15 +451,9 @@ const AgentPayout: React.FC = () => {
         setDragOverColumn(null);
     };
 
-    const handleOpenPayout = () => {
-        setPayoutAgent(null);
-        setShowAgentPayoutModal(true);
-    };
-
-    const handleSelectAgentForPayout = (agent: Agent) => {
-        setPayoutAgent(agent);
-        setShowAgentPayoutModal(true);
-    };
+    // No handler raises a payout from this page any more. One is raised from the
+    // agent invoice it settles, which is what gives it a reference tying back to
+    // that document; this page approves and rejects what already exists.
 
     const sortedData = React.useMemo(() => {
         const rawData = payoutHistory;
@@ -447,7 +482,12 @@ const AgentPayout: React.FC = () => {
         const normalizedQuery = searchTerm.toLowerCase().replace(/\s+/g, '');
         return sortedData.filter((row: any) => {
             if (selectedAgentId !== 'all') {
-                if (row.agent_id && String(row.agent_id) !== String(selectedAgentId)) return false;
+                // Compared as strings because the id arrives as a number from
+                // the API and as whatever the sidebar button held. A row with no
+                // agent_id belongs to no agent, so it is excluded rather than
+                // shown under every one of them — which is what the old
+                // `row.agent_id &&` guard did.
+                if (String(row.agent_id ?? '') !== String(selectedAgentId)) return false;
             }
 
             const checkValue = (val: any): boolean => {
@@ -470,7 +510,9 @@ const AgentPayout: React.FC = () => {
 
             return matchesSearch;
         });
-    }, [sortedData, searchTerm, dateFrom, dateTo]);
+        // selectedAgentId belongs here: the filter reads it, so leaving it out
+        // meant picking an agent recomputed nothing and the list never changed.
+    }, [sortedData, searchTerm, dateFrom, dateTo, selectedAgentId]);
 
     // Applied on the searched set so the counts and the table describe the same rows - the point
     // Customer.tsx applies its own funnel.
@@ -493,6 +535,100 @@ const AgentPayout: React.FC = () => {
     const handleRowClick = (record: CommissionData | PayoutHistoryData) => {
         setSelectedRecord(record);
         setShowDetails(true);
+    };
+
+    /**
+     * Approve or reject a pending payout.
+     *
+     * The approver is never sent from here — the server records the signed-in
+     * user, exactly as it does when a transaction is approved.
+     */
+    /**
+     * Open the agent invoice a payout settled, by its number.
+     *
+     * A payout raised from an invoice carries that invoice's number as its
+     * reference, which is the only link back to it — there is no invoice id on
+     * the payout row. The number is searched for and matched exactly, so a
+     * reference that merely contains another invoice's number cannot open the
+     * wrong document.
+     *
+     * Best effort: a hand-entered payout has a random reference matching no
+     * invoice, and nothing opens. That is not a failure worth interrupting the
+     * approver with, so it is logged rather than raised.
+     */
+    const openInvoicePdfByNumber = async (refNumber: string) => {
+        try {
+            const list = await agentInvoiceService.list({ search: refNumber, per_page: 10 });
+            const invoice = (list?.data || []).find(i => i.invoice_number === refNumber);
+
+            if (!invoice) {
+                console.info('[AgentPayout] No agent invoice matches the reference', refNumber);
+                return;
+            }
+
+            const source = await agentInvoiceService.pdfBlob(invoice.id, false);
+
+            if (source.kind === 'url') {
+                window.open(source.url, '_blank', 'noopener');
+                return;
+            }
+
+            const url = window.URL.createObjectURL(source.blob);
+            window.open(url, '_blank', 'noopener');
+            window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+        } catch (err) {
+            console.error('[AgentPayout] Could not open the invoice PDF:', err);
+        }
+    };
+
+    const handleApproval = async (record: any, action: 'approve' | 'reject') => {
+        if (approvalPending) return;
+
+        // Approving collects the payout's details first — amount, type, proof
+        // and remarks — because a payout raised from an invoice was recorded
+        // without them. The modal posts to the same approve endpoint once they
+        // are entered, so this returns rather than approving with nothing.
+        //
+        // A record that was raised WITH its details — the Commission and
+        // Incentives payout modals on the Pay Out/In page require amount, proof
+        // and remarks — is approved as it stands. Sending it through the form
+        // would re-type it as 'all' (the form's only payout type) and make the
+        // approval drain every bucket, or turn an "Add Incentives" credit into
+        // a debit.
+        const hasDetails = Number(record?.total_amount || 0) > 0 && !!record?.proof_of_payment;
+        if (action === 'approve' && !hasDetails) {
+            setApproveRecord(record);
+            return;
+        }
+
+        if (action === 'approve') {
+            const amount = Number(record.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
+            if (!window.confirm(`Approve ${record.ref_number || 'this payout'} (₱${amount}) for ${record.agent_name || 'this agent'}? This applies it to the agent's balance.`)) {
+                return;
+            }
+        }
+
+        // This screen lists the commission ledger; bonus records are approved
+        // or rejected from the Bonus tab on the Pay Out/In (Commission) page.
+        const url = `/commissions/history/${record.id}/${action}`;
+
+        setApprovalPending(true);
+        try {
+            const res = await apiClient.post<{ success: boolean; message?: string }>(url);
+
+            if (!res.data?.success) {
+                throw new Error(res.data?.message || `Failed to ${action} the payout.`);
+            }
+
+            await fetchData();
+            setShowDetails(false);
+            setSelectedRecord(null);
+        } catch (err: any) {
+            const message = err?.response?.data?.message || err?.message || `Failed to ${action} the payout.`;
+            window.alert(message);
+        } finally {
+            setApprovalPending(false);
+        }
     };
 
     const handlePrevious = () => {
@@ -522,29 +658,12 @@ const AgentPayout: React.FC = () => {
             {/* Sidebar */}
             <div className={`hidden md:flex border-r flex-shrink-0 flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`} style={{ width: `${sidebarWidth}px` }}>
                 <div className={`p-4 border-b flex-shrink-0 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-                    <div className="flex items-center justify-between mb-1">
+                    {/* No Add here: a payout is raised from the agent invoice it
+                        settles, so the reference ties back to that document. */}
+                    <div className="flex items-center mb-1">
                         <h2 className={`text-lg font-semibold uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                             PAYOUT HISTORY
                         </h2>
-                        <button
-                            onClick={handleOpenPayout}
-                            className="px-3 py-1.5 rounded text-white text-sm font-medium flex items-center gap-1.5 transition-colors shadow-sm"
-                            style={{ backgroundColor: colorPalette?.primary || '#ef4444' }}
-                            onMouseEnter={(e) => {
-                                if (colorPalette?.accent) {
-                                    e.currentTarget.style.backgroundColor = colorPalette.accent;
-                                } else {
-                                    e.currentTarget.style.backgroundColor = '#dc2626';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = colorPalette?.primary || '#ef4444';
-                            }}
-                            title="New Payout"
-                        >
-                            <Plus size={14} />
-                            Add
-                        </button>
                     </div>
                 </div>
 
@@ -637,29 +756,49 @@ const AgentPayout: React.FC = () => {
 
             {/* Main Content */}
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                {/* 3 Summary Cards */}
+                {/* Summary cards. One colour for every figure: they are four
+                    readings of the same thing — money the agent holds — and a
+                    green/blue split implied a meaning none of them carry. */}
                 {selectedAgentId !== 'all' && (
-                    <div className={`p-4 border-b flex-shrink-0 grid grid-cols-1 md:grid-cols-3 gap-4 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
+                    <div className={`p-4 border-b flex-shrink-0 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
                         {(() => {
-                            const selectedAgent = agentList.find(a => a.id === selectedAgentId);
-                            const balance = selectedAgent?.agent_balance?.balance || 0;
-                            const incentives = selectedAgent?.agent_balance?.incentives || 0;
+                            // Compared as numbers: the id comes back from the API
+                            // as a number and a strict === against a string id
+                            // silently found nobody, which read as every card
+                            // being zero.
+                            const selectedAgent = agentList.find(a => Number(a.id) === Number(selectedAgentId));
+                            const bal = selectedAgent?.agent_balance;
+                            // COMMISSION, not `balance`. What an agent has earned
+                            // from approved job orders lives in commission_value;
+                            // `commission` is the per-referral rate and `balance`
+                            // is a separate spendable bucket that is 0 for every
+                            // agent here. Showing balance meant the cards read
+                            // zero while the money sat in the column beside it.
+                            // These four now match the payout modal's tiles.
                             // @ts-ignore
-                            const bonus = selectedAgent?.agent_balance?.bonus || selectedAgent?.agent_balance?.Bonus || 0;
+                            const commission = bal?.commission_value || 0;
+                            const incentives = bal?.incentives || 0;
+                            // @ts-ignore
+                            const bonus = bal?.bonus || bal?.Bonus || 0;
+                            // @ts-ignore
+                            const achievement = bal?.achievement || 0;
+
+                            const valueColor = colorPalette?.primary || '#ef4444';
+                            const card = (label: string, value: any) => (
+                                <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                                    <div className="text-xs text-gray-500 mb-1">{label}</div>
+                                    <div className="text-xl font-bold" style={{ color: valueColor }}>
+                                        ₱{Number(value).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                    </div>
+                                </div>
+                            );
+
                             return (
                                 <>
-                                    <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-                                        <div className="text-xs text-gray-500 mb-1">Balance</div>
-                                        <div className="text-xl font-bold" style={{ color: colorPalette?.primary || '#7c3aed' }}>₱{Number(balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                                    </div>
-                                    <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-                                        <div className="text-xs text-gray-500 mb-1">Incentives</div>
-                                        <div className="text-xl font-bold text-green-500">₱{Number(incentives).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                                    </div>
-                                    <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-                                        <div className="text-xs text-gray-500 mb-1">Bonus</div>
-                                        <div className="text-xl font-bold text-blue-500">₱{Number(bonus).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                                    </div>
+                                    {card('Commission', commission)}
+                                    {card('Incentives', incentives)}
+                                    {card('Bonus', bonus)}
+                                    {card('Achievement', achievement)}
                                 </>
                             );
                         })()}
@@ -681,17 +820,6 @@ const AgentPayout: React.FC = () => {
                                 style={searchTerm ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}}
                             />
                         </div>
-
-                        {isMobile && (
-                            <button
-                                onClick={handleOpenPayout}
-                                className="p-2 rounded border transition-colors flex-shrink-0 text-white"
-                                style={{ backgroundColor: colorPalette?.primary || '#ef4444', borderColor: colorPalette?.primary || '#ef4444' }}
-                                title="Add Record"
-                            >
-                                <Plus size={18} />
-                            </button>
-                        )}
 
                         {isMobile && (
                             <button
@@ -890,11 +1018,15 @@ const AgentPayout: React.FC = () => {
                                                         {colKey === 'id' ? (
                                                             <span className={`font-mono font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{val}</span>
                                                         ) : colKey === 'status' ? (
-                                                            <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${val === 'Paid'
+                                                            // Approval state, using the same reading as the Transaction List:
+                                                            // settled states in green, awaiting action in amber, declined in red.
+                                                            <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${(val === 'Paid' || val === 'Approved')
                                                                 ? isDarkMode ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-green-100 text-green-700'
-                                                                : isDarkMode ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-amber-100 text-amber-700'
+                                                                : val === 'Rejected'
+                                                                    ? isDarkMode ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-red-100 text-red-700'
+                                                                    : isDarkMode ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-amber-100 text-amber-700'
                                                                 }`}>
-                                                                {val}
+                                                                {val || 'Pending'}
                                                             </span>
                                                         ) : colKey === 'type' ? (
                                                             <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${row.type === 'incentives_payout'
@@ -967,6 +1099,9 @@ const AgentPayout: React.FC = () => {
                         data={selectedRecord}
                         type="payouts"
                         isMobile={isMobile}
+                        approvalPending={approvalPending}
+                        onApprove={canApprove ? (record) => handleApproval(record, 'approve') : undefined}
+                        onReject={canApprove ? (record) => handleApproval(record, 'reject') : undefined}
                         onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
                         onPrevious={currentData.findIndex(r => r.id === (selectedRecord as any).id) > 0 ? handlePrevious : undefined}
                         onNext={currentData.findIndex(r => r.id === (selectedRecord as any).id) < currentData.length - 1 ? handleNext : undefined}
@@ -974,16 +1109,38 @@ const AgentPayout: React.FC = () => {
                 </div>
             )}
 
-            {/* Agent Payout Modal */}
+            {/* Approving a pending payout: the same form, every field required,
+                writing its details onto the record and applying it. */}
             <AgentPayoutModal
-                isOpen={showAgentPayoutModal}
-                onClose={() => setShowAgentPayoutModal(false)}
+                isOpen={approveRecord !== null}
+                onClose={() => setApproveRecord(null)}
                 onSuccess={() => {
-                    setShowAgentPayoutModal(false);
+                    const settled = approveRecord;
+                    setApproveRecord(null);
+
+                    // The record on screen is now Approved, and the detail pane
+                    // hides Approve/Reject for anything that is not Pending — so
+                    // marking it here is what takes the buttons away, without
+                    // closing the pane the approver is reading.
+                    setSelectedRecord((current: any) =>
+                        current && current.id === settled?.id
+                            ? { ...current, status: 'Approved' }
+                            : current
+                    );
+
                     handleRefresh();
+
+                    // The invoice this payout settled, opened so the approver
+                    // sees the document they just paid.
+                    if (settled?.ref_number) {
+                        openInvoicePdfByNumber(String(settled.ref_number));
+                    }
                 }}
-                agentId={payoutAgent?.id}
-                agentName={payoutAgent?.team_name}
+                approveId={approveRecord?.id}
+                approveRefNumber={approveRecord?.ref_number}
+                approveType={approveRecord?.type}
+                agentId={approveRecord?.agent_id}
+                agentName={approveRecord?.agent_name}
             />
 
             <TableFunnelFilter

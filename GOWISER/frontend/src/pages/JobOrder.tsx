@@ -14,6 +14,7 @@ import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
 import { User } from '../types/api';
+import { agentJobOrderBand, createAgentReferralMatcher, isAgentUser } from '../utils/agentReferral';
 import {
   deriveVipLabel,
   deriveVatTypeLabel,
@@ -110,6 +111,65 @@ const allColumns = [
   { key: 'duration', label: 'Duration', width: 'min-w-28' }
 ];
 
+/**
+ * The columns an agent sees: their referral's customer, address, billing detail
+ * and current status. Technical provisioning and documents are not included.
+ */
+const AGENT_COLUMNS = [
+  'timestamp',
+  'referredBy',
+  'fullName',
+  'contactNumber',
+  'emailAddress',
+  'address',
+  'installationFee',
+  'billingStatus',
+  'billingDay',
+  'dateInstalled',
+  'onsiteStatus',
+];
+
+/**
+ * The signed-in user's identity, read straight out of storage.
+ *
+ * Used to seed state before the first render so an agent's list is filtered from
+ * the very first paint. Returns blanks when nothing is stored, which reads as
+ * "not an agent" and leaves the unfiltered behaviour other roles rely on.
+ */
+const storedAuth = (): { role: string; roleId: string | number | null; id: number | null; fullName: string; email: string } => {
+  const empty = { role: '', roleId: null, id: null, fullName: '', email: '' };
+
+  try {
+    const raw = localStorage.getItem('authData');
+    if (!raw) return empty;
+
+    const userData = JSON.parse(raw);
+
+    // The login payload exposes full_name; fall back to the name parts for
+    // older sessions, matching how the rest of the agent screens build it.
+    let fullName: string = userData.full_name || '';
+    if (!fullName) {
+      const middleInitial = userData.middle_initial ? String(userData.middle_initial).trim() : '';
+      fullName = [
+        userData.first_name || '',
+        middleInitial ? `${middleInitial}.` : '',
+        userData.last_name || ''
+      ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    }
+
+    return {
+      role: userData.role || '',
+      roleId: userData.role_id || null,
+      // Referrals made through the picker are stored as this id, not a name.
+      id: userData.id ?? userData.user_id ?? null,
+      fullName,
+      email: userData.email || userData.email_address || '',
+    };
+  } catch {
+    return empty;
+  }
+};
+
 interface JobOrderPageProps {
   /**
    * Job order to open on arrival, sent when a "Job Done" notification is clicked.
@@ -138,15 +198,29 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
   const [isRefreshingManual, setIsRefreshingManual] = useState<boolean>(false);
   const [hasNewData, setHasNewData] = useState<boolean>(false);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<string | number | null>(null);
-  const [agentName, setAgentName] = useState<string>('');
+  // Resolved from storage synchronously, before the first paint.
+  //
+  // Reading this in an effect instead meant the first render had no identity, so
+  // the agent filter below was skipped and every job order in the organisation
+  // was painted for a frame before being replaced by the agent's own. Local
+  // storage is synchronous, so there is no reason to wait.
+  //
+  // Held as constants rather than state: who is signed in cannot change while
+  // the page is mounted, so there is nothing to set and no re-render to cause.
+  const { role: userRole, roleId, id: agentUserId, fullName: agentName, email: agentEmail } = useMemo(storedAuth, []);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(true);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
+    // Agents get their own column set, chosen here rather than in an effect so
+    // the table does not paint the full administrator layout first.
+    const auth = storedAuth();
+    if (isAgentUser(auth.role, auth.roleId)) {
+      return AGENT_COLUMNS;
+    }
+
     const saved = localStorage.getItem('jobOrderVisibleColumns');
     if (saved) {
       try {
@@ -165,6 +239,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
     }
     return [...DEFAULT_VISIBLE_COLUMNS];
   });
+  const isAgentViewer = isAgentUser(userRole, roleId);
   const [sortColumn, setSortColumn] = useState<string | null>('timestamp');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [hoveredColumn, setHoveredColumn] = useState<string | null>(null);
@@ -425,56 +500,22 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
     selectedJobOrderRef.current = selectedJobOrder;
   }, [selectedJobOrder]);
 
+  // The identity itself is resolved synchronously above, so this only has to
+  // cover the technician case, which does not affect what is painted first.
   useEffect(() => {
     const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        const role = userData.role || '';
-        const id = userData.role_id || null;
-        setUserRole(role);
-        setRoleId(id);
+    if (!authData) return;
 
-        const isAgent = role.toLowerCase() === 'agent' || String(id) === '4';
-        if (isAgent) {
-          setVisibleColumns([
-            'timestamp',
-            'referredBy',
-            'fullName',
-            'contactNumber',
-            'emailAddress',
-            'address',
-            'installationFee',
-            'billingStatus',
-            'billingDay',
-            'dateInstalled',
-            'onsiteStatus'
-          ]);
-        }
+    try {
+      const userData = JSON.parse(authData);
+      const isTechnician = (userData.role && userData.role.toLowerCase() === 'technician')
+        || String(userData.role_id) === '2';
 
-        // Try getting full_name directly first, then fallback to parts
-        let fullName = userData.full_name || '';
-
-        if (!fullName) {
-          const firstName = userData.first_name || '';
-          const middleInitial = userData.middle_initial ? userData.middle_initial.trim() : '';
-          const lastName = userData.last_name || '';
-
-          fullName = [
-            firstName,
-            middleInitial ? `${middleInitial}.` : '',
-            lastName
-          ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-        }
-
-        setAgentName(fullName);
-
-        if ((userData.role && userData.role.toLowerCase() === 'technician' || String(userData.role_id) === '2') && userData.email) {
-          setTechnicianEmail(userData.email);
-        }
-      } catch (error) {
-        console.error('Failed to parse auth data:', error);
+      if (isTechnician && userData.email) {
+        setTechnicianEmail(userData.email);
       }
+    } catch (error) {
+      console.error('Failed to parse auth data:', error);
     }
   }, []);
 
@@ -704,17 +745,35 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       }
     });
 
-    // Then filter by agent if applicable
-    const isAgent = userRole?.toLowerCase() === 'agent' || String(roleId) === '4';
-    if (isAgent && agentName) {
-      const lowerAgentName = agentName.toLowerCase().trim();
+    // Then filter by agent if applicable.
+    //
+    // An agent sees every referral they own, however long ago it was raised —
+    // there is no date cut-off, and finished ones are kept rather than dropped:
+    // they read at the bottom of the list (see sortedJobOrders) so the work
+    // still in flight leads.
+    //
+    // Matching mirrors the mobile app: tolerant of middle names, or an exact
+    // email match. The identity check is deliberately INSIDE the agent branch
+    // rather than guarding it: an agent whose name and email are somehow both
+    // missing must see nothing, never everyone's job orders.
+    if (isAgentUser(userRole, roleId)) {
+      if (!agentName && !agentEmail && agentUserId === null) return [];
+
+      // Built once for the whole scan rather than per row — see
+      // createAgentReferralMatcher.
+      const ownsReferral = createAgentReferralMatcher(agentName, agentEmail, agentUserId);
+      // Referred_By is now the display NAME the API resolved; the stored value
+      // (an agent id for picker-made referrals) is in Referred_By_Raw, which
+      // lets the matcher decide by id instead of by name.
       return filtered.filter((jo: JobOrder) => {
-        const referredBy = (jo.Referred_By || jo.referred_by || '').toLowerCase().trim();
-        return referredBy === lowerAgentName;
+        const raw = (jo as any).Referred_By_Raw;
+        return ownsReferral(
+          raw !== undefined && raw !== null && raw !== '' ? String(raw) : (jo.Referred_By || jo.referred_by || '')
+        );
       });
     }
     return filtered;
-  }, [jobOrders, userRole, roleId, agentName, currentUserOrgId]);
+  }, [jobOrders, userRole, roleId, agentUserId, agentName, agentEmail, currentUserOrgId]);
 
   // Update selectedJobOrder with fresh data after refresh
   useEffect(() => {
@@ -1113,15 +1172,33 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       return true;
     });
 
-    const presorted = [...filtered].sort((a, b) => {
+    // Agents read their list by status band — In Progress, then Reschedule,
+    // then Failed, with Done last — and newest first inside each band, so the
+    // visits still happening lead and the finished installations sit at the
+    // bottom. Every other role keeps the newest-first default untouched.
+    const byRecency = (a: JobOrder, b: JobOrder) => {
       const timeA = new Date(getVal(a, 'timestamp') || 0).getTime();
       const timeB = new Date(getVal(b, 'timestamp') || 0).getTime();
       if (timeA !== timeB) return timeB - timeA;
-      
+
       const idA = parseInt(String(a.id)) || 0;
       const idB = parseInt(String(b.id)) || 0;
       return idB - idA;
-    });
+    };
+
+    const presorted = isAgentViewer
+      ? (() => {
+        const bands = new Map<JobOrder, number>();
+        for (const jo of filtered) bands.set(jo, agentJobOrderBand(jo));
+
+        return [...filtered].sort((a, b) => {
+          const bandA = bands.get(a) ?? 0;
+          const bandB = bands.get(b) ?? 0;
+          if (bandA !== bandB) return bandA - bandB;
+          return byRecency(a, b);
+        });
+      })()
+      : [...filtered].sort(byRecency);
 
     if (sortColumn) {
       return [...presorted].sort((a, b) => {
@@ -1139,7 +1216,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       });
     }
     return presorted;
-  }, [globalFilteredJobOrders, selectedLocation, sortColumn, sortDirection]);
+  }, [globalFilteredJobOrders, selectedLocation, sortColumn, sortDirection, isAgentViewer]);
 
   const currentJobOrderIndex = useMemo(() => {
     if (!selectedJobOrder || !sortedJobOrders) return -1;
@@ -1493,14 +1570,18 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
         setMobileViewMode('list');
       } else {
         const authData = localStorage.getItem('authData');
-        let isTech = false;
+        let landOnList = false;
         if (authData) {
           try {
             const userData = JSON.parse(authData);
-            isTech = userData.role?.toLowerCase() === 'technician' || String(userData.role_id) === '2';
+            const isTech = userData.role?.toLowerCase() === 'technician' || String(userData.role_id) === '2';
+            // Technicians and agents go straight to their records on a phone — the same
+            // as the mobile app, where neither role sees the filter panel first. Agents
+            // can still reach the filters via the toolbar button.
+            landOnList = isTech || isAgentUser(userData.role, userData.role_id);
           } catch {}
         }
-        setMobileViewMode(isTech ? 'list' : 'sidebar');
+        setMobileViewMode(landOnList ? 'list' : 'sidebar');
       }
     };
     handleResize();

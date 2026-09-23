@@ -48,12 +48,13 @@ class ProcessAgentIncentives extends Command
         }
 
         $this->info(sprintf(
-            '[AGENT INCENTIVES CRON] Done — Evaluated: %d, Awarded: %d, Cycles: %d, Amount: %s, Job Orders Recorded: %d, Agents Skipped: %d, Job Orders Skipped: %d, Errors: %d',
+            '[AGENT INCENTIVES CRON] Done — Evaluated: %d, Awarded: %d, Cycles: %d, Amount: %s, Job Orders Recorded: %d, Carried (unfinished quotas): %d, Agents Skipped: %d, Job Orders Skipped: %d, Errors: %d',
             $results['agents_processed'],
             $results['agents_awarded'],
             $results['incentive_awards'],
             number_format($results['amount_awarded'], 2),
             $results['job_orders_recorded'],
+            $results['job_orders_carried'] ?? 0,
             $results['skipped'],
             $results['skipped_job_orders'],
             $results['errors']

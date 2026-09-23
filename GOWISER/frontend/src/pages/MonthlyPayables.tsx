@@ -28,6 +28,7 @@ import {
 import { getExpensesCategories, ExpensesCategory } from '../services/expensesCategoryService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import pusher from '../services/pusherService';
+import { usePageActions } from '../hooks/usePageActions';
 
 const peso = (value: number) =>
   `₱${(value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -51,6 +52,12 @@ const shiftMonth = (billingMonth: string, delta: number): string => {
 };
 
 const MonthlyPayables: React.FC = () => {
+  // Add, Edit and Delete are granted separately (monthly-payables.create / .edit /
+  // .delete), plus .generate for Generate Month and .pay for logging a payment:
+  // the same keys the API checks, so a control is drawn only when the request
+  // behind it would succeed.
+  const actions = usePageActions('monthly-payables');
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
@@ -183,11 +190,13 @@ const MonthlyPayables: React.FC = () => {
   };
 
   const handleAdd = () => {
+    if (!actions.canCreate) return;
     setEditing(null);
     setIsFormOpen(true);
   };
 
   const handleEdit = (payable: MonthlyPayable) => {
+    if (!actions.canEdit) return;
     setEditing(payable);
     setIsFormOpen(true);
   };
@@ -203,6 +212,7 @@ const MonthlyPayables: React.FC = () => {
   };
 
   const handleDelete = async (payable: MonthlyPayable) => {
+    if (!actions.canDelete) return;
     if (!window.confirm(`Delete "${payable.title}" (${peso(payable.amountDue)})?`)) return;
 
     try {
@@ -214,12 +224,14 @@ const MonthlyPayables: React.FC = () => {
   };
 
   const handleRecordPayment = async (payload: PaymentPayload) => {
+    if (!actions.can('pay')) return;
     if (!paying) return;
     await recordPayablePayment(paying.id, payload);
     await fetchData(true);
   };
 
   const handleDeletePayment = async (payment: PayablePayment) => {
+    if (!actions.can('pay')) return;
     if (!paying) return;
     await deletePayablePayment(paying.id, payment.id);
     await fetchData(true);
@@ -227,6 +239,7 @@ const MonthlyPayables: React.FC = () => {
 
   /** Carries last month's recurring bills into the period currently on screen. */
   const handleGenerate = async () => {
+    if (!actions.can('generate')) return;
     const source = shiftMonth(billingMonth, -1);
     if (
       !window.confirm(
@@ -322,27 +335,31 @@ const MonthlyPayables: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            className={`px-4 py-2 border rounded text-sm flex items-center gap-2 transition-colors disabled:opacity-50 ${
-              isDarkMode
-                ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
-                : 'border-gray-300 text-gray-700 hover:bg-gray-100'
-            }`}
-            title={`Copy recurring bills from ${shiftMonth(billingMonth, -1)} into ${billingMonth}`}
-          >
-            <Repeat size={16} className={generating ? 'animate-spin' : ''} />
-            <span>{generating ? 'Generating…' : 'Generate Month'}</span>
-          </button>
-          <button
-            onClick={handleAdd}
-            className="text-white px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
-            style={{ backgroundColor: accent }}
-          >
-            <Plus size={16} />
-            <span>Add Payable</span>
-          </button>
+          {actions.can('generate') && (
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className={`px-4 py-2 border rounded text-sm flex items-center gap-2 transition-colors disabled:opacity-50 ${
+                isDarkMode
+                  ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+              }`}
+              title={`Copy recurring bills from ${shiftMonth(billingMonth, -1)} into ${billingMonth}`}
+            >
+              <Repeat size={16} className={generating ? 'animate-spin' : ''} />
+              <span>{generating ? 'Generating…' : 'Generate Month'}</span>
+            </button>
+          )}
+          {actions.canCreate && (
+            <button
+              onClick={handleAdd}
+              className="text-white px-4 py-2 rounded text-sm flex items-center gap-2 transition-colors"
+              style={{ backgroundColor: accent }}
+            >
+              <Plus size={16} />
+              <span>Add Payable</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -620,22 +637,24 @@ const MonthlyPayables: React.FC = () => {
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => setPayingId(payable.id)}
-                              disabled={payable.status === 'cancelled'}
-                              className={`p-2 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                                isDarkMode
-                                  ? 'text-gray-400 hover:text-emerald-400'
-                                  : 'text-gray-600 hover:text-emerald-600'
-                              }`}
-                              title={
-                                payable.status === 'cancelled'
-                                  ? 'Cancelled — reopen it first'
-                                  : 'Log payment'
-                              }
-                            >
-                              <Banknote size={16} />
-                            </button>
+                            {actions.can('pay') && (
+                              <button
+                                onClick={() => setPayingId(payable.id)}
+                                disabled={payable.status === 'cancelled'}
+                                className={`p-2 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                                  isDarkMode
+                                    ? 'text-gray-400 hover:text-emerald-400'
+                                    : 'text-gray-600 hover:text-emerald-600'
+                                }`}
+                                title={
+                                  payable.status === 'cancelled'
+                                    ? 'Cancelled — reopen it first'
+                                    : 'Log payment'
+                                }
+                              >
+                                <Banknote size={16} />
+                              </button>
+                            )}
                             {payable.receiptPath ? (
                               <a
                                 href={payable.receiptPath}
@@ -652,28 +671,32 @@ const MonthlyPayables: React.FC = () => {
                                 <FileText size={16} />
                               </span>
                             )}
-                            <button
-                              onClick={() => handleEdit(payable)}
-                              className={`p-2 rounded transition-colors ${
-                                isDarkMode
-                                  ? 'text-gray-400 hover:text-green-400'
-                                  : 'text-gray-600 hover:text-green-600'
-                              }`}
-                              title="Edit"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(payable)}
-                              className={`p-2 rounded transition-colors ${
-                                isDarkMode
-                                  ? 'text-gray-400 hover:text-red-400'
-                                  : 'text-gray-600 hover:text-red-600'
-                              }`}
-                              title="Delete"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {actions.canEdit && (
+                              <button
+                                onClick={() => handleEdit(payable)}
+                                className={`p-2 rounded transition-colors ${
+                                  isDarkMode
+                                    ? 'text-gray-400 hover:text-green-400'
+                                    : 'text-gray-600 hover:text-green-600'
+                                }`}
+                                title="Edit"
+                              >
+                                <Edit size={16} />
+                              </button>
+                            )}
+                            {actions.canDelete && (
+                              <button
+                                onClick={() => handleDelete(payable)}
+                                className={`p-2 rounded transition-colors ${
+                                  isDarkMode
+                                    ? 'text-gray-400 hover:text-red-400'
+                                    : 'text-gray-600 hover:text-red-600'
+                                }`}
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

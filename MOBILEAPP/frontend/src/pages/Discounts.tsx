@@ -31,6 +31,7 @@ import { getRegions, Region } from '../services/regionService';
 import { getCities, City } from '../services/cityService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { exportToCSV } from '../utils/exportUtils';
+import { usePermissions } from '../hooks/usePermissions';
 
 const isDarkMode = false;
 
@@ -205,7 +206,6 @@ const Discounts: React.FC = () => {
   const [createdDateTo, setCreatedDateTo] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
 
   const [cities, setCities] = useState<City[]>([]);
@@ -260,23 +260,6 @@ const Discounts: React.FC = () => {
             null;
           setUserOrgId(orgId);
 
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch (e) {
-                perms = userData.permissions
-                  .split(',')
-                  .map((p: string) => p.trim())
-                  .filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (error) {
         console.error('Error parsing auth data in Discounts:', error);
@@ -285,18 +268,9 @@ const Discounts: React.FC = () => {
     loadAuth();
   }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (
-      lowerRole === 'administrator' ||
-      lowerRole === 'superadmin' ||
-      roleId === 1 ||
-      roleId === 7
-    ) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
+  const { can: hasPermission } = usePermissions();
 
   useEffect(() => {
     const fetchLocationData = async () => {

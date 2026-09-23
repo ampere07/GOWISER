@@ -24,9 +24,15 @@ export const useJobOrderContext = () => {
 
 interface JobOrderProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the list on mount. False for a user the API would not
+     * serve it to (see SHELL_PREFETCH_KEYS). An explicit refresh from a screen
+     * still fetches.
+     */
+    prefetch?: boolean;
 }
 
-export const JobOrderProvider: React.FC<JobOrderProviderProps> = ({ children }) => {
+export const JobOrderProvider: React.FC<JobOrderProviderProps> = ({ children, prefetch = true }) => {
     const [jobOrders, setJobOrders] = useState<JobOrder[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
@@ -99,11 +105,12 @@ export const JobOrderProvider: React.FC<JobOrderProviderProps> = ({ children }) 
 
     // Initial fetch effect
     useEffect(() => {
+        if (!prefetch) return;
         // Only fetch if empty, otherwise let the logic decide
         if (jobOrders.length === 0) {
             fetchJobOrders(false, false);
         }
-    }, [fetchJobOrders, jobOrders.length]);
+    }, [prefetch, fetchJobOrders, jobOrders.length]);
 
     return (
         <JobOrderContext.Provider

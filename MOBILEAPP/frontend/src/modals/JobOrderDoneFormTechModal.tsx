@@ -57,6 +57,7 @@ import { getAllInventoryItems, InventoryItem } from '../services/inventoryItemSe
 import { createJobOrderItems, JobOrderItem } from '../services/jobOrderItemService';
 import { updateApplication } from '../services/applicationService';
 import { formatToGMT8MySQL, formatToGMT8Display } from '../utils/dateUtils';
+import { referredByEcho } from '../utils/referredByField';
 import apiClient from '../config/api';
 import { getActiveImageSize } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -1579,7 +1580,12 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           const emailAddress = jobOrderData?.Email_Address || jobOrderData?.email_address || '';
           const installationAddress = jobOrderData?.Installation_Address || jobOrderData?.installation_address || '';
           const landmark = jobOrderData?.Landmark || jobOrderData?.landmark || '';
-          const referredBy = jobOrderData?.Referred_By || jobOrderData?.referred_by || '';
+          // Passed straight through, so the id the record carries is what goes
+          // out. The name beside it would lose which agent it was.
+          const referredBy = referredByEcho(
+            jobOrderData,
+            jobOrderData?.Referred_By || jobOrderData?.referred_by || ''
+          );
           const promo = jobOrderData?.Promo || jobOrderData?.promo || '';
 
           const applicationUpdateData: any = {

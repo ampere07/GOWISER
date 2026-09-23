@@ -35,6 +35,7 @@ import { transformServiceOrder } from '../store/serviceOrderStore';
 import ServiceOrderDetails from './ServiceOrderDetails';
 import LcpNapLocationDetails from './LcpNapLocationDetails';
 import { getOnlineStatusInfo, OnlineStatusInfo } from '../utils/onlineStatus';
+import { usePermissions } from '../hooks/usePermissions';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -410,7 +411,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userEmailCache, setUserEmailCache] = useState<Record<string, string>>({});
 
   // Modal states
@@ -448,20 +448,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
           const userData = JSON.parse(authDataStr);
           setUserRole(userData.role || '');
           setRoleId(userData.role_id || null);
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch {
-                perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (err) {
         console.error('Error loading authData:', err);
@@ -470,20 +456,9 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     loadAuth();
   }, []);
 
-  const hasPermission = (permission: string): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    if (
-      lowerRole === 'administrator' ||
-      lowerRole === 'superadmin' ||
-      roleId === 1 ||
-      roleId === 7 ||
-      lowerRole === 'headtech' ||
-      roleId === 8
-    ) {
-      return true;
-    }
-    return userPermissions.includes(permission);
-  };
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
+  const { can: hasPermission } = usePermissions();
 
   // ── Color palette ─────────────────────────────────────────────────────────
 

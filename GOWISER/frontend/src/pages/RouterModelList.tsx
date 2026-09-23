@@ -3,6 +3,7 @@ import { Search, Plus, Edit2, Trash2, Filter, Loader2 } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import AddRouterModelModal from '../modals/AddRouterModelModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePageActions } from '../hooks/usePageActions';
 
 interface RouterModel {
   SN: string;
@@ -17,6 +18,9 @@ interface RouterModel {
 }
 
 const RouterModelList: React.FC = () => {
+  // Add/edit/delete on this list. The same key the API demands, so a
+  // control is only drawn when the request behind it would succeed.
+  const actions = usePageActions('router-models');
   const [searchQuery, setSearchQuery] = useState('');
   const [routers, setRouters] = useState<RouterModel[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,6 +97,9 @@ const RouterModelList: React.FC = () => {
       console.log('Loading routers from API:', `${API_BASE_URL}/router-models`);
 
       const response = await fetch(`${API_BASE_URL}/router-models`, {
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking.
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -126,6 +133,7 @@ const RouterModelList: React.FC = () => {
   };
 
   const handleDelete = async (router: RouterModel) => {
+    if (!actions.canDelete) return;
     if (!window.confirm(`⚠️ PERMANENT DELETE WARNING ⚠️\n\nAre you sure you want to permanently delete router model "${router.brand} ${router.Model}"?\n\nThis will PERMANENTLY REMOVE the router model from the database and CANNOT BE UNDONE!\n\nClick OK to permanently delete, or Cancel to keep the router model.`)) {
       return;
     }
@@ -139,6 +147,7 @@ const RouterModelList: React.FC = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/router-models/${router.SN}`, {
         method: 'DELETE',
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -166,11 +175,13 @@ const RouterModelList: React.FC = () => {
   };
 
   const handleEdit = (router: RouterModel) => {
+    if (!actions.canEdit) return;
     setEditingRouter(router);
     setIsModalOpen(true);
   };
 
   const handleAddNew = () => {
+    if (!actions.canCreate) return;
     setEditingRouter(null);
     setIsModalOpen(true);
   };
@@ -238,25 +249,29 @@ const RouterModelList: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleEdit(router)}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
-              title="Edit"
-            >
-              <Edit2 className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => handleDelete(router)}
-              disabled={deletingItems.has(router.SN)}
-              className="p-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-              title={deletingItems.has(router.SN) ? 'Permanently Deleting...' : 'Permanently Delete'}
-            >
-              {deletingItems.has(router.SN) ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-            </button>
+            {actions.canEdit && (
+              <button
+                onClick={() => handleEdit(router)}
+                className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded"
+                title="Edit"
+              >
+                <Edit2 className="h-4 w-4" />
+              </button>
+            )}
+            {actions.canDelete && (
+              <button
+                onClick={() => handleDelete(router)}
+                disabled={deletingItems.has(router.SN)}
+                className="p-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                title={deletingItems.has(router.SN) ? 'Permanently Deleting...' : 'Permanently Delete'}
+              >
+                {deletingItems.has(router.SN) ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -272,24 +287,26 @@ const RouterModelList: React.FC = () => {
           <div className="flex items-center justify-between mb-4">
             <h1 className="text-xl font-semibold text-white">Router Models</h1>
             <div className="flex items-center gap-3">
-              <button
-                onClick={handleAddNew}
-                className="px-4 py-2 text-white rounded-lg flex items-center gap-2 transition-colors"
-                style={{
-                  backgroundColor: colorPalette?.primary || '#7c3aed'
-                }}
-                onMouseEnter={(e) => {
-                  if (colorPalette?.accent) {
-                    e.currentTarget.style.backgroundColor = colorPalette.accent;
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
-                }}
-              >
-                <Plus className="h-4 w-4" />
-                Add
-              </button>
+              {actions.canCreate && (
+                <button
+                  onClick={handleAddNew}
+                  className="px-4 py-2 text-white rounded-lg flex items-center gap-2 transition-colors"
+                  style={{
+                    backgroundColor: colorPalette?.primary || '#7c3aed'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (colorPalette?.accent) {
+                      e.currentTarget.style.backgroundColor = colorPalette.accent;
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              )}
               <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded">
                 <Filter className="h-5 w-5" />
               </button>

@@ -14,6 +14,39 @@ use App\Events\ApplicationViewingUpdate;
 
 class ApplicationController extends Controller
 {
+    /**
+     * How many applications the signed-in user has submitted.
+     *
+     * Counted on created_by_user_id, which store() stamps with the submitting
+     * account on every application. That answers "how many did I send" exactly,
+     * where the referred_by free text this used to match on answers a different
+     * question — who the customer was referred by, which someone else may have
+     * typed and which the agent's referral counts already report.
+     *
+     * Its own endpoint because index() is scoped to an organisation rather than
+     * to a caller, so an agent is refused it and could not count their own rows
+     * from the list.
+     *
+     * No organisation filter: the column already names the caller, and adding
+     * one would drop the applications of anyone since moved between them.
+     */
+    public function myCount(Request $request)
+    {
+        try {
+            $user = auth()->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            $count = Application::where('created_by_user_id', $user->id)->count();
+
+            return response()->json(['success' => true, 'count' => $count]);
+        } catch (\Exception $e) {
+            Log::error('ApplicationController::myCount failed: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed to count applications'], 500);
+        }
+    }
+
     public function index(Request $request)
     {
         try {
@@ -84,6 +117,10 @@ class ApplicationController extends Controller
                 $applications = $applications->slice(0, $limit);
             }
 
+            // One query for every agent-id referral on the page (displayName()
+            // alone is a query per id it has not seen).
+            \App\Support\AgentReferral::prime($applications->pluck('referred_by'));
+
             $formattedApplications = $applications->map(function ($app) use ($fastMode) {
                 $data = [
                     'id' => (string)$app->id,
@@ -114,7 +151,10 @@ class ApplicationController extends Controller
                         'desired_plan' => $app->desired_plan,
                         'promo' => $app->promo,
                         'referrer_account_id' => $app->referrer_account_id,
-                        'referred_by' => $app->referred_by,
+                        // Shown as a name; the id travels beside it so an edit form can
+                        // write the same referral back instead of turning it into a name.
+                        'referred_by' => \App\Support\AgentReferral::displayName($app->referred_by),
+                        'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($app->referred_by),
                         'proof_of_billing_url' => $app->proof_of_billing_url,
                         'government_valid_id_url' => $app->government_valid_id_url,
                         'secondary_government_valid_id_url' => $app->secondary_government_valid_id_url,
@@ -300,7 +340,10 @@ class ApplicationController extends Controller
                 'barangay' => $application->barangay,
                 'desired_plan' => $application->desired_plan,
                 'promo' => $application->promo,
-                'referred_by' => $application->referred_by,
+                // Shown as a name; the id travels beside it so an edit form can
+                // write the same referral back instead of turning it into a name.
+                'referred_by' => \App\Support\AgentReferral::displayName($application->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($application->referred_by),
                 'proof_of_billing_url' => $application->proof_of_billing_url,
                 'government_valid_id_url' => $application->government_valid_id_url,
                 'secondary_government_valid_id_url' => $application->secondary_government_valid_id_url,
@@ -378,7 +421,10 @@ class ApplicationController extends Controller
                 'desired_plan' => $application->desired_plan,
                 'promo' => $application->promo,
                 'referrer_account_id' => $application->referrer_account_id,
-                'referred_by' => $application->referred_by,
+                // Shown as a name; the id travels beside it so an edit form can
+                // write the same referral back instead of turning it into a name.
+                'referred_by' => \App\Support\AgentReferral::displayName($application->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($application->referred_by),
                 'proof_of_billing_url' => $application->proof_of_billing_url,
                 'government_valid_id_url' => $application->government_valid_id_url,
                 'secondary_government_valid_id_url' => $application->secondary_government_valid_id_url,
@@ -463,7 +509,16 @@ class ApplicationController extends Controller
                 $userEmail = 'System';
             }
             $validatedData['updated_by'] = $userEmail;
-            
+
+            // Responses show an agent-id referral as the agent's name; a form that
+            // echoes that name back must not overwrite the stored id with it.
+            if (array_key_exists('referred_by', $validatedData)) {
+                $validatedData['referred_by'] = \App\Support\AgentReferral::preserveOnWrite(
+                    $validatedData['referred_by'],
+                    $application->referred_by
+                );
+            }
+
             Log::info("=== VALIDATED DATA ===", $validatedData);
             
             $application->fill($validatedData);
