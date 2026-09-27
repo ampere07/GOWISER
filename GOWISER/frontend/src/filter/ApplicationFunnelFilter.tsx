@@ -51,7 +51,7 @@ export const allColumns: Column[] = [
   { key: 'desired_plan', label: 'Desired Plan', dataType: 'checklist' },
   { key: 'usage_type', label: 'Usage Type', dataType: 'varchar' },
   { key: 'ownership', label: 'Ownership', dataType: 'varchar' },
-  { key: 'proof_of_billing_url', label: 'Proof of Billing', dataType: 'varchar' },
+  { key: 'proof_of_billing_url', label: 'Client Photo Documentation', dataType: 'varchar' },
   { key: 'house_front_picture_url', label: 'House_Front_Image', dataType: 'varchar' },
   { key: 'government_valid_id_url', label: 'Valid ID', dataType: 'varchar' },
   { key: 'terms_agreed', label: 'I agree to the terms and conditions', dataType: 'checklist' },

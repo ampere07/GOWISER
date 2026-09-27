@@ -773,7 +773,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       vip_expiration: 'VIP Expiration Date',
       vip_remarks: 'VIP Remarks',
       accountNoCustomer: 'Customer Account No',
-      proofOfBillingUrl: 'Proof of Billing',
+      proofOfBillingUrl: 'Client Photo Documentation',
       governmentValidIdUrl: 'Government ID',
       secondGovernmentValidIdUrl: 'Second Government ID',
       documentAttachmentUrl: 'Document Attachment',
@@ -952,7 +952,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       ) : null,
       proofOfBillingUrl: () => billingRecord.proofOfBillingUrl ? (
         <div className="flex justify-between items-center gap-4">
-          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Proof of Billing</span>
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Photo Documentation</span>
           <button
             onClick={() => window.open(billingRecord.proofOfBillingUrl, '_blank')}
             className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'} flex items-center space-x-1 min-w-0`}

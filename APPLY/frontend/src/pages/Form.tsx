@@ -1245,7 +1245,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
               </label>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {[
-                  { label: 'Proof of Billing', state: showProofOfBilling, setter: setShowProofOfBilling },
+                  { label: 'Client Photo Documentation', state: showProofOfBilling, setter: setShowProofOfBilling },
                   { label: 'Primary ID', state: showIdPrimary, setter: setShowIdPrimary },
                   { label: 'Secondary ID', state: showIdSecondary, setter: setShowIdSecondary },
                   { label: 'House Front Image', state: showHouseFront, setter: setShowHouseFront },
@@ -1727,7 +1727,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {showProofOfBilling === 'active' && (
                   <CameraFileInput
-                    label="Proof of Billing"
+                    label="Client Photo Documentation"
                     name="proofOfBilling"
                     required={false}
                     accept="image/*,application/pdf"

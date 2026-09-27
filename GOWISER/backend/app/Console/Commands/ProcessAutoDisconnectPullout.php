@@ -99,8 +99,9 @@ class ProcessAutoDisconnectPullout extends Command
                         }
                     }
                 } else {
-                    $this->error("[FAILED] Auto Disconnection Failed: " . ($dcResult['error'] ?? 'Unknown error'));
-                    return 1;
+                    // A DC failure (e.g. the worker lock is held/stale, or a config error)
+                    // must NOT prevent the pullout stage from running — log it and continue.
+                    $this->error("[FAILED] Auto Disconnection Failed: " . ($dcResult['error'] ?? 'Unknown error') . " — continuing to pullout stage");
                 }
 
                 $this->newLine();
@@ -256,7 +257,7 @@ class ProcessAutoDisconnectPullout extends Command
             
             if ($dcResult && $pulloutResult) {
                 $summaryRows = [
-                    ['Disconnections', $dcResult['processed'], $dcResult['skipped']],
+                    ['Disconnections', $dcResult['processed'] ?? 0, $dcResult['skipped'] ?? 0],
                     ['Pullout Requests', $pulloutResult['created'], $pulloutResult['skipped']]
                 ];
 

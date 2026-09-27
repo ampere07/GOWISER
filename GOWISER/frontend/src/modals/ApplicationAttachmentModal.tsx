@@ -362,7 +362,7 @@ const ApplicationAttachmentModal: React.FC<ApplicationAttachmentModalProps> = ({
                 loading={loading}
             >
                 <div className="space-y-6">
-                    <ImageUploadField label="Proof of Billing" field="proofOfBilling" preview={previews.proofOfBilling} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
+                    <ImageUploadField label="Client Photo Documentation" field="proofOfBilling" preview={previews.proofOfBilling} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="Government Valid ID" field="governmentValidId" preview={previews.governmentValidId} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="Secondary Government Valid ID" field="secondaryGovernmentValidId" preview={previews.secondaryGovernmentValidId} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="House Front Image" field="houseFrontImage" preview={previews.houseFrontImage} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />

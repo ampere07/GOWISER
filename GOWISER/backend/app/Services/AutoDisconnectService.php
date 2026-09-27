@@ -868,9 +868,29 @@ class AutoDisconnectService
                 $this->writeLog("[ACCOUNT] {$accountNo}");
                 
                 try {
+                    // One pullout per account per day, whatever became of it since.
+                    //
+                    // Deliberately blind to support_status, unlike the monthly guard
+                    // below: a pullout raised today and then closed or cancelled has
+                    // still been generated for today, and raising a second one would
+                    // duplicate work that has already been dispatched rather than
+                    // resume it. That gap is what let a re-run of the cron regenerate
+                    // an order it had created earlier the same day.
+                    $generatedToday = ServiceOrder::where('account_no', $accountNo)
+                        ->whereIn('concern', self::PULLOUT_CONCERNS)
+                        ->whereDate('created_at', Carbon::today())
+                        ->exists();
+
+                    if ($generatedToday) {
+                        $this->writeLog("  [SKIP] Pullout service order already generated for {$accountNo} today (" . Carbon::today()->format('Y-m-d') . ")");
+                        $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
+                        $skippedCount++;
+                        continue;
+                    }
+
                     // Check if pullout request already exists for this month
                     $existingPullout = ServiceOrder::where('account_no', $accountNo)
-                        ->whereIn('concern', ['Pullout', 'For Pullout', 'for pullout'])
+                        ->whereIn('concern', self::PULLOUT_CONCERNS)
                         ->whereNotIn('support_status', ['Closed', 'Cancelled'])
                         ->whereMonth('created_at', Carbon::now()->month)
                         ->whereYear('created_at', Carbon::now()->year)
@@ -931,47 +951,64 @@ class AutoDisconnectService
                     $username = $technicalDetail->username;
                     $this->writeLog("  [INFO] Username: {$username}");
 
-                    // 1. Create pullout service order
+                    // 1. Create pullout service order + set status Inactive atomically, so a
+                    //    failure never leaves a half-created pullout. RADIUS is attempted
+                    //    afterwards (best-effort). No disconnection fee is applied for pullouts.
                     $this->writeLog("  [CREATE] Creating pullout service order...");
-                    $this->createPulloutRequest($billingAccount, $pulloutOffset);
-                    $this->writeLog("  [CREATE] ✓ Pullout service order created");
+                    DB::beginTransaction();
+                    try {
+                        $serviceOrder = $this->createPulloutRequest($billingAccount, $pulloutOffset);
 
-                    // 2. Restrict user via RADIUS (also creates disconnected_logs entry)
-                    $this->writeLog("  [RADIUS] Restricting user via RADIUS...");
-                    $restrictResult = $this->radiusService->restrictedUser([
-                        'username' => $username,
-                        'accountNumber' => $accountNo,
-                        'remarks' => 'Pullout',
-                        'updatedBy' => 'System'
-                    ]);
+                        $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
+                        DB::table('billing_accounts')
+                            ->where('id', $billingAccount->id)
+                            ->update([
+                                'billing_status_id' => $inactiveStatusId,
+                                'updated_by' => 'System',
+                                'updated_at' => Carbon::now()
+                            ]);
 
-                    if ($restrictResult['status'] === 'success') {
-                        $this->writeLog("  [RADIUS] ✓ Successfully restricted");
-                    } else {
-                        $reason = $restrictResult['message'] ?? 'Unknown';
-                        $this->writeLog("  [RADIUS] ✗ Restrict failed: " . $reason);
-                        \Log::channel('radiusrelated')->error('[AUTO PULLOUT RADIUS FAILURE] Account: ' . $accountNo . ' - Reason: ' . $reason);
-                        // Queue the restriction so the RADIUS side is retried once the server recovers.
-                        $this->queueRadiusOperation(
-                            $billingAccount,
-                            $username,
-                            $accountNo,
-                            'restricted_user',
-                            'Pullout',
-                            'RADIUS restrict failed during auto-pullout: ' . $reason
-                        );
+                        DB::commit();
+                    } catch (Throwable $e) {
+                        DB::rollBack();
+                        $this->writeLog("  [ERROR] Pullout DB transaction rolled back for {$accountNo}: " . $e->getMessage());
+                        $this->writeLog("[{$counter}/{$totalCount}] ✗ ERROR");
+                        $errors[] = "Account {$accountNo}: " . $e->getMessage();
+                        $skippedCount++;
+                        continue;
                     }
 
-                    // 3. Update billing status to Inactive
-                    $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
-                    DB::table('billing_accounts')
-                        ->where('id', $billingAccount->id)
-                        ->update([
-                            'billing_status_id' => $inactiveStatusId,
-                            'updated_by' => 'System',
-                            'updated_at' => Carbon::now()
-                        ]);
+                    $this->writeLog("  [CREATE] ✓ Pullout service order created (SO #{$serviceOrder->id})");
                     $this->writeLog("  [DB] ✓ Billing status updated to Inactive (ID: {$inactiveStatusId})");
+
+                    // 2. Restrict user via RADIUS (best-effort; queued for retry if it fails).
+                    $this->writeLog("  [RADIUS] Restricting user via RADIUS...");
+                    try {
+                        if ($this->isRadiusReachable()) {
+                            $restrictResult = $this->radiusService->restrictedUser([
+                                'username' => $username,
+                                'accountNumber' => $accountNo,
+                                'remarks' => 'Pullout',
+                                'updatedBy' => 'System'
+                            ]);
+
+                            if (($restrictResult['status'] ?? null) === 'success') {
+                                $this->writeLog("  [RADIUS] ✓ Successfully restricted");
+                            } else {
+                                $reason = $restrictResult['message'] ?? 'Unknown';
+                                $this->writeLog("  [RADIUS] ✗ Restrict failed: " . $reason . " — queueing for retry");
+                                \Log::channel('radiusrelated')->error('[AUTO PULLOUT RADIUS FAILURE] Account: ' . $accountNo . ' - Reason: ' . $reason);
+                                $this->queueRadiusOperation($billingAccount, $username, $accountNo, 'restricted_user', 'Pullout', 'RADIUS restrict failed during auto-pullout: ' . $reason);
+                            }
+                        } else {
+                            $this->writeLog("  [RADIUS] Server unreachable — queueing restrict for retry");
+                            $this->queueRadiusOperation($billingAccount, $username, $accountNo, 'restricted_user', 'Pullout', 'RADIUS server unreachable during auto-pullout');
+                        }
+                    } catch (Throwable $e) {
+                        $this->writeLog("  [RADIUS] Exception during restrict: " . $e->getMessage() . " — queueing for retry");
+                        \Log::channel('radiusrelated')->error('[AUTO PULLOUT RADIUS EXCEPTION] Account: ' . $accountNo . ' - ' . $e->getMessage());
+                        $this->queueRadiusOperation($billingAccount, $username, $accountNo, 'restricted_user', 'Pullout', 'RADIUS exception during auto-pullout: ' . $e->getMessage());
+                    }
 
                     // 4. Send SMS notification
                     if ($this->smsService && $billingAccount->customer && $billingAccount->customer->contact_number_primary) {
@@ -1312,9 +1349,11 @@ class AutoDisconnectService
     }
 
     /**
-     * Create a pullout service order
+     * Create a pullout service order.
+     *
+     * Returns the saved row so the caller can name it in the log.
      */
-    private function createPulloutRequest(BillingAccount $billingAccount, int $pulloutOffset): void
+    private function createPulloutRequest(BillingAccount $billingAccount, int $pulloutOffset): ServiceOrder
     {
         $serviceOrder = new ServiceOrder();
         $serviceOrder->Timestamp = Carbon::now();
@@ -1326,6 +1365,8 @@ class AutoDisconnectService
         $serviceOrder->created_by_user = 'System';
         $serviceOrder->updated_by_user = 'System';
         $serviceOrder->save();
+
+        return $serviceOrder;
     }
 
     /**

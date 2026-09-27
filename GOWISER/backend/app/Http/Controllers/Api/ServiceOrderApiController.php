@@ -1141,11 +1141,16 @@ class ServiceOrderApiController extends Controller
 
             $isAlreadyResolvedReconnect = (($originalConcern === 'Reconnect' || $originalConcern === 'Upgrade/Downgrade Plan') && $originalSupportStatus === 'resolved');
             $isAlreadyResolvedRestrict = (($originalConcern === 'Restrict' || $originalConcern === 'Disconnect') && $originalSupportStatus === 'resolved');
-            $pulloutCategories = ['pullout', 'for pullout'];
-            $isAlreadyPulloutDone = (
-                    in_array(strtolower(trim($originalRepairCategory)), $pulloutCategories, true)
-                    || in_array(strtolower(trim($originalConcern)), $pulloutCategories, true)
-                ) && $originalVisitStatus === 'done';
+            // Mirrors the trigger below, by asking the same object the same
+            // question against the row as it was BEFORE this write. Its job is to
+            // stop a re-save of a finished pullout from running it a second time,
+            // so it has to agree with the trigger or it will suppress a pullout
+            // that has not happened yet.
+            $isAlreadyPulloutDone = \App\Support\PulloutCategory::deactivatesPortalLogin(
+                $originalRepairCategory,
+                $originalVisitStatus,
+                $originalConcern
+            );
             $isAlreadyMigrationDone = (in_array($originalRepairCategory, ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port']) && $originalVisitStatus === 'done');
 
             $reconnectStatus = null;
@@ -1280,15 +1285,35 @@ class ServiceOrderApiController extends Controller
                 $repairCategory = strtolower(trim($serviceOrder->repair_category));
             }
 
-            $pulloutCategories = ['pullout', 'for pullout'];
-            $pulloutConcern = strtolower(trim((string) ($serviceOrder->concern ?? $request->input('concern') ?? '')));
-            if ((in_array($repairCategory, $pulloutCategories, true) || in_array($pulloutConcern, $pulloutCategories, true)) && $visitStatus === 'done' && !$isAlreadyPulloutDone) {
+            // The pullout itself is decided on what the ticket says AFTER this
+            // request's write, not on $request and not on the pre-update copy above.
+            //
+            // This is the write that disables the customer's portal login, so the
+            // request-or-stored fallbacks are too loose for it in both directions:
+            //   • a request that only sets the category to Pullout would inherit a
+            //     'Done' left behind by an earlier, unrelated visit, and disable the
+            //     login without any pullout visit having been completed;
+            //   • a request that merely claims visit_status=Done would be trusted
+            //     even if that value never reached the row.
+            // Reading the row back closes both: no completed pullout visit on the
+            // record, no deactivation.
+            $pulloutRow = DB::table('service_orders')->where('id', $id)->first();
+
+            // Repair category OR concern, any spelling — see App\Support\PulloutCategory,
+            // which holds the whole rule.
+            $isPulloutVisitDone = \App\Support\PulloutCategory::deactivatesPortalLogin(
+                $pulloutRow->repair_category ?? null,
+                $pulloutRow->visit_status ?? null,
+                $pulloutRow->concern ?? null
+            );
+
+            if ($isPulloutVisitDone && !$isAlreadyPulloutDone) {
                 $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
                 if ($billingAccount) {
                     \Log::info('Triggering auto-pullout for Service Order with Pullout repair category', [
                         'account_no' => $serviceOrder->account_no
                     ]);
-                    $pulloutStatus = $this->attemptPullout($billingAccount, $updatedByUser, $organizationId);
+                    $pulloutStatus = $this->attemptPullout($billingAccount, $updatedByUser, $organizationId, (int) ($pulloutRow->id ?? $id));
                 }
             }
 
@@ -2112,7 +2137,7 @@ class ServiceOrderApiController extends Controller
         }
     }
 
-    private function attemptPullout($billingAccount, $updatedByUser = 'System', ?int $organizationId = null): string
+    private function attemptPullout($billingAccount, $updatedByUser = 'System', ?int $organizationId = null, ?int $serviceOrderId = null): string
     {
         try {
             // Reload billing account
@@ -2186,6 +2211,30 @@ class ServiceOrderApiController extends Controller
             $billingAccount->save();
 
             \Log::info('[API SERVICE ORDER PULLOUT DB] Updated billing_status_id to 5 (Pullout) for Account: ' . $accountNo);
+
+            // Preserve the hardware serial on the pullout service order before clearing technical_details
+            // so downstream reconciliation can still identify the device that was collected.
+            if (!empty($routerModemSn)) {
+                $soUpdateQuery = DB::table('service_orders')
+                    ->where('account_no', $accountNo)
+                    ->where(function ($q) {
+                        $q->whereNull('old_router_modem_sn')->orWhere('old_router_modem_sn', '');
+                    });
+
+                if ($serviceOrderId) {
+                    $soUpdateQuery->where('id', $serviceOrderId);
+                } else {
+                    $soUpdateQuery->where(function ($q) {
+                        $q->whereIn(DB::raw("LOWER(TRIM(COALESCE(concern, '')))"), ['pullout', 'for pullout'])
+                          ->orWhere(DB::raw("LOWER(TRIM(COALESCE(repair_category, '')))"), '=', 'pullout');
+                    });
+                }
+
+                $soUpdateQuery->update([
+                    'old_router_modem_sn' => $routerModemSn,
+                    'updated_at' => now(),
+                ]);
+            }
 
             // Clear the ONU name in SmartOLT before wiping the SN from technical_details (best-effort)
             if (!empty($routerModemSn)) {

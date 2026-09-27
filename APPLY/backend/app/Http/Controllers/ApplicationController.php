@@ -105,10 +105,20 @@ class ApplicationController extends Controller
                 $application->terms_agreed = true;
                 $application->status = 'pending';
                 
-                $application->proof_of_billing_url = 'processing';
-                $application->government_valid_id_url = 'processing';
-                $application->house_front_picture_url = 'processing';
-                
+                // 'processing' is a placeholder the image queue replaces with the Drive
+                // URL. Only set it for a field that actually has a file: an optional or
+                // hidden field left empty has no queue row, so nothing would ever replace
+                // it and the record would show 'processing' forever.
+                foreach ([
+                    'proofOfBilling' => 'proof_of_billing_url',
+                    'governmentIdPrimary' => 'government_valid_id_url',
+                    'houseFrontPicture' => 'house_front_picture_url',
+                ] as $requestKey => $dbField) {
+                    if ($request->hasFile($requestKey)) {
+                        $application->$dbField = 'processing';
+                    }
+                }
+
                 if ($request->has('created_by_email')) {
                     $user = DB::table('users')->where('email_address', $request->created_by_email)->first();
                     if ($user) {

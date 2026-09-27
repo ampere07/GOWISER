@@ -76,7 +76,7 @@ class ImageProcessingService
                 }
             } catch (\Exception $e) {
                 Log::error("Image Processing Error for queue ID {$imageQueue->id}: " . $e->getMessage());
-                $imageQueue->markAsFailed($e->getMessage());
+                $this->failImage($imageQueue, $e->getMessage());
                 $failed++;
             }
         }
@@ -104,7 +104,7 @@ class ImageProcessingService
                 'queue_id' => $imageQueue->id,
                 'application_id' => $imageQueue->application_id
             ]);
-            $imageQueue->markAsFailed($errorMsg);
+            $this->failImage($imageQueue, $errorMsg);
             return ['success' => false, 'error' => $errorMsg];
         }
 
@@ -191,7 +191,7 @@ class ImageProcessingService
                 'local_path' => $imageQueue->local_path,
                 'exception' => $e->getTraceAsString()
             ]);
-            $imageQueue->markAsFailed($errorMsg);
+            $this->failImage($imageQueue, $errorMsg);
             
             return [
                 'success' => false,

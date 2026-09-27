@@ -1842,7 +1842,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!proofOfBilling) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Proof of Billing</div>
+            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Photo Documentation</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{proofOfBilling}</span>
               <button
