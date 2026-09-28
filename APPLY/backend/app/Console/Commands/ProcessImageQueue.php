@@ -34,6 +34,14 @@ class ProcessImageQueue extends Command
         $this->logToFile("Processing limit: {$limit} images");
 
         try {
+            // Before the stats, so a recovered row counts as pending and this run picks it up.
+            $recovery = $this->imageProcessingService->recoverStaleProcessing();
+            if ($recovery['recovered'] > 0) {
+                $recoveryMessage = "Recovered {$recovery['recovered']} image(s) stuck in processing";
+                $this->info($recoveryMessage);
+                $this->logToFile($recoveryMessage);
+            }
+
             $stats = $this->imageProcessingService->getQueueStats();
             
             $statsMessage = sprintf(

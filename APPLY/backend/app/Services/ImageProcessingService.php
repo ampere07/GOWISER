@@ -161,6 +161,8 @@ class ImageProcessingService
             ]);
             Log::info("Updated application {$imageQueue->application_id} field {$imageQueue->field_name} with URL: {$gdriveUrl}");
 
+            $this->replaceCustomerPlaceholder((int) $imageQueue->application_id, $imageQueue->field_name, $gdriveUrl);
+
             $imageQueue->markAsCompleted($gdriveUrl);
 
             try {
@@ -243,6 +245,118 @@ class ImageProcessingService
         ];
         
         return $mapping[$dbFieldName] ?? $dbFieldName;
+    }
+
+    /**
+     * How long a queue row may sit in 'processing' before it is treated as abandoned.
+     * An upload finishes in seconds; a row older than this belongs to a run that
+     * crashed or was killed, and processPendingImages() only picks up 'pending' rows,
+     * so without this it would never be tried again.
+     */
+    private const STALE_PROCESSING_MINUTES = 15;
+
+    /** The application/customer columns that hold the 'processing' placeholder. */
+    private const PLACEHOLDER_FIELDS = [
+        'proof_of_billing_url',
+        'government_valid_id_url',
+        'house_front_picture_url',
+    ];
+
+    /**
+     * Put rows abandoned in 'processing' back in line, counting it as a failed attempt
+     * so a row that keeps crashing the worker still runs out of retries.
+     */
+    public function recoverStaleProcessing(): array
+    {
+        $recovered = 0;
+
+        $staleImages = ImageQueue::where('status', 'processing')
+            ->where('updated_at', '<', now()->subMinutes(self::STALE_PROCESSING_MINUTES))
+            ->get();
+
+        foreach ($staleImages as $imageQueue) {
+            $this->failImage($imageQueue, 'Abandoned in processing for over ' . self::STALE_PROCESSING_MINUTES . ' minutes');
+
+            if ($imageQueue->canRetry()) {
+                $imageQueue->resetForRetry();
+            }
+
+            $recovered++;
+        }
+
+        if ($recovered > 0) {
+            Log::warning("Recovered {$recovered} image queue row(s) stuck in processing");
+        }
+
+        return ['recovered' => $recovered];
+    }
+
+    /**
+     * Mark a queue row failed, and once it has used its last retry, clear the
+     * 'processing' placeholder so the record reads empty instead of pending forever.
+     */
+    private function failImage(ImageQueue $imageQueue, string $errorMessage): void
+    {
+        $imageQueue->markAsFailed($errorMessage);
+
+        if ($imageQueue->canRetry() || !in_array($imageQueue->field_name, self::PLACEHOLDER_FIELDS, true)) {
+            return;
+        }
+
+        try {
+            $field = $imageQueue->field_name;
+
+            Application::where('id', $imageQueue->application_id)
+                ->where($field, 'processing')
+                ->update([$field => null]);
+
+            $this->replaceCustomerPlaceholder((int) $imageQueue->application_id, $field, null);
+
+            Log::warning("Image upload gave up after retries; cleared placeholder", [
+                'queue_id' => $imageQueue->id,
+                'application_id' => $imageQueue->application_id,
+                'field_name' => $field,
+                'error' => $errorMessage,
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Failed to clear image placeholder: " . $e->getMessage(), [
+                'queue_id' => $imageQueue->id,
+            ]);
+        }
+    }
+
+    /**
+     * A job order approved while its images were still uploading copies the
+     * 'processing' placeholder into the new customer. Replace it there too, but only
+     * where it is still the placeholder, so a value set since is never overwritten.
+     */
+    private function replaceCustomerPlaceholder(int $applicationId, string $field, ?string $value): void
+    {
+        if (!in_array($field, self::PLACEHOLDER_FIELDS, true)) {
+            return;
+        }
+
+        try {
+            $updated = DB::table('customers')
+                ->join('billing_accounts', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->join('job_orders', 'job_orders.account_id', '=', 'billing_accounts.id')
+                ->where('job_orders.application_id', $applicationId)
+                ->where("customers.{$field}", 'processing')
+                ->update(["customers.{$field}" => $value]);
+
+            if ($updated > 0) {
+                Log::info("Replaced customer placeholder for application {$applicationId} field {$field}", [
+                    'rows' => $updated,
+                ]);
+            }
+        } catch (\Exception $e) {
+            // The application already has its value; a customer-side miss must not
+            // fail the upload.
+            Log::error("Failed to update customer image placeholder: " . $e->getMessage(), [
+                'application_id' => $applicationId,
+                'field_name' => $field,
+            ]);
+        }
     }
 
     public function retryFailedImages(): array
