@@ -121,6 +121,9 @@ class Transaction extends Model
         'remarks',
         'status',
         'image_url',
+        // Google Drive link to the proof of payment. Mirrors image_url; see
+        // TransactionController::withProofOfPayment().
+        'proof_payment_url',
         'created_by_user',
         'updated_by_user',
         'approved_by',

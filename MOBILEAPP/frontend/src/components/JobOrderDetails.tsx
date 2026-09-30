@@ -812,7 +812,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
       speedtestImage: 'Speedtest Image',
       signedContractImage: 'Signed Contract Image',
       boxReadingImage: 'Box Reading Image',
-      routerReadingImage: 'Router Reading Image',
+      routerReadingImage: 'Modem Reading Image',
       portLabelImage: 'Port Label Image',
       houseFrontPicture: 'House Front Picture',
       proof_of_billing_url: 'Proof of Billing',

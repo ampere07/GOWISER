@@ -293,7 +293,7 @@ const getFieldLabel = (fieldKey: string): string => {
     image2Url: 'Modem Setup Image',
     image3Url: 'Time Out Image',
     setupImageUrl: 'Setup Image',
-    routerReadingImageUrl: 'Router Reading Image',
+    routerReadingImageUrl: 'Modem Reading Image',
     boxReadingImageUrl: 'Box Reading Image',
     speedtestImageUrl: 'Port Label Image',
     clientSignatureUrl: 'Client Signature',

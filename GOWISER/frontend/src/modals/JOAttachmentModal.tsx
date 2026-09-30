@@ -385,7 +385,7 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 <ImageUploadField label="Speed Test Result" field="speedTestImage" preview={previews.speedTestImage} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                 <ImageUploadField label="Signed Contract" field="signedContract" preview={previews.signedContract} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                 <ImageUploadField label="Box Reading" field="boxReadingImage" preview={previews.boxReadingImage} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
-                <ImageUploadField label="Router Reading" field="routerReading" preview={previews.routerReading} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
+                <ImageUploadField label="Modem Reading" field="routerReading" preview={previews.routerReading} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                 <ImageUploadField label="Port Label" field="portLabel" preview={previews.portLabel} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
             </div>
 

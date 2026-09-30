@@ -27,6 +27,7 @@ interface CreateTransactionPayload {
   remarks?: string;
   status: string;
   image_url?: string;
+  proof_payment_url?: string;
 }
 
 interface CreateTransactionResponse {

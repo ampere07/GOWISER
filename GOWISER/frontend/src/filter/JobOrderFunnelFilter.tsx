@@ -118,7 +118,7 @@ export const allColumns: Column[] = [
   { key: 'speedtestImageUrl', label: 'Speedtest Image URL', dataType: 'varchar' },
   { key: 'signedContractImageUrl', label: 'Signed Contract Image URL', dataType: 'varchar' },
   { key: 'boxReadingImageUrl', label: 'Box Reading Image URL', dataType: 'varchar' },
-  { key: 'routerReadingImageUrl', label: 'Router Reading Image URL', dataType: 'varchar' },
+  { key: 'routerReadingImageUrl', label: 'Modem Reading Image URL', dataType: 'varchar' },
   { key: 'portLabelImageUrl', label: 'Port Label Image URL', dataType: 'varchar' },
 ];
 

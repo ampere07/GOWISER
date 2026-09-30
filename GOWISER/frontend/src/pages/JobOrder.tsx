@@ -85,7 +85,7 @@ const allColumns = [
   { key: 'speedtestImageUrl', label: 'Speedtest Image URL', width: 'min-w-48' },
   { key: 'signedContractImageUrl', label: 'Signed Contract Image URL', width: 'min-w-48' },
   { key: 'boxReadingImageUrl', label: 'Box Reading Image URL', width: 'min-w-48' },
-  { key: 'routerReadingImageUrl', label: 'Router Reading Image URL', width: 'min-w-48' },
+  { key: 'routerReadingImageUrl', label: 'Modem Reading Image URL', width: 'min-w-48' },
   { key: 'portLabelImageUrl', label: 'Port Label Image URL', width: 'min-w-48' },
   { key: 'houseFrontPictureUrl', label: 'House Front Picture URL', width: 'min-w-48' },
   { key: 'createdAt', label: 'Created At', width: 'min-w-40' },

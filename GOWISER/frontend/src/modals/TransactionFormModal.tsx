@@ -392,8 +392,9 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
         setImagePreview(prev => {
           if (prev && prev.startsWith('blob:')) return prev;
-          return initialTransactionData?.image_url 
-            ? getProxiedImageUrl(initialTransactionData.image_url) 
+          const savedProof = initialTransactionData?.proof_payment_url || initialTransactionData?.image_url;
+          return savedProof
+            ? getProxiedImageUrl(savedProof) 
             : null;
         });
 
@@ -517,30 +518,54 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     setLoading(true);
     try {
-      let imageUrl = undefined;
+      // An edit writes to this transaction, so it must be known before anything is uploaded.
+      const transactionId = initialTransactionData?.id;
+      if (isEdit && !transactionId) {
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Error',
+          message: 'Cannot update: this transaction has no ID. Please close the form and open it again.'
+        });
+        return;
+      }
+
+      // The proof goes to Google Drive first; the transaction is only saved once Drive has
+      // returned its link, so proof_payment_url never holds an empty or broken value.
+      let proofPaymentUrl: string | undefined;
 
       if (formData.image) {
         setUploadProgress(10);
+        let uploadError = '';
         try {
           const imageFormData = new FormData();
           const folderName = `transactionform - ${formData.fullName}`;
           imageFormData.append('folder_name', folderName);
           imageFormData.append('payment_proof_image', formData.image, formData.image.name);
 
+          // Resolves with success: false on failure rather than throwing.
           const uploadResponse = await transactionService.uploadTransactionImage(imageFormData);
+          const url = uploadResponse?.data?.payment_proof_image_url;
 
-          if (uploadResponse.success && uploadResponse.data?.payment_proof_image_url) {
-            imageUrl = uploadResponse.data.payment_proof_image_url;
+          if (uploadResponse?.success && typeof url === 'string' && url.trim()) {
+            proofPaymentUrl = url.trim();
             setUploadProgress(60);
+          } else {
+            uploadError = uploadResponse?.message || 'Google Drive did not return a link for the image.';
           }
-        } catch (uploadError: any) {
+        } catch (err: any) {
+          uploadError = err?.message || 'Unknown error';
+        }
+
+        if (!proofPaymentUrl) {
           setModal({
             isOpen: true,
             type: 'error',
             title: 'Upload Failed',
-            message: `Failed to upload image: ${uploadError.message}`
+            message: `Failed to upload the proof of payment: ${uploadError}\n\nThe transaction was not saved. Please try again.`
           });
           setLoading(false);
+          setUploadProgress(0);
           return;
         }
       }
@@ -560,7 +585,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         or_no: formData.orNo,
         remarks: formData.remarks || '',
         status: 'Pending',
-        image_url: imageUrl,
+        ...(proofPaymentUrl ? { proof_payment_url: proofPaymentUrl, image_url: proofPaymentUrl } : {}),
         created_by_user: formData.processedBy,
         // Prepaid only. Never sent for postpaid, so their plan can't be changed by a payment —
         // the backend rejects both fields outright on a postpaid account.
@@ -571,7 +596,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
       setUploadProgress(80);
       const result = isEdit 
-        ? await transactionService.updateTransaction(initialTransactionData.id, payload)
+        ? await transactionService.updateTransaction(transactionId, payload)
         : await transactionService.createTransaction(payload);
       setUploadProgress(100);
 
@@ -606,7 +631,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           isOpen: true,
           type: 'error',
           title: 'Error',
-          message: `Failed to create transaction: ${result.message}`
+          message: `Failed to ${isEdit ? 'update' : 'create'} transaction: ${result.message}`
         });
       }
     } catch (error) {

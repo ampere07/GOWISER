@@ -909,7 +909,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       speedtestImage: 'Speedtest Image',
       signedContractImage: 'Signed Contract Image',
       boxReadingImage: 'Box Reading Image',
-      routerReadingImage: 'Router Reading Image',
+      routerReadingImage: 'Modem Reading Image',
       portLabelImage: 'Port Label Image',
       houseFrontPicture: 'House Front Picture',
       clientTagging: 'Client Tagging',
@@ -1732,7 +1732,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!routerReadingImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Router Reading Image</div>
+            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Modem Reading Image</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">
                 {routerReadingImg}

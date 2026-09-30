@@ -774,8 +774,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     const isForVisit = formData.supportStatus === 'For Visit';
     const isVisitDone = isForVisit && formData.visitStatus === 'Done';
     const isVisitRescheduledOrFailed = isForVisit && (formData.visitStatus === 'Reschedule' || formData.visitStatus === 'Failed');
-    const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT'].includes(formData.repairCategory);
-    const isReplaceRouter = isVisitDone && formData.repairCategory === 'Replace Router';
+    const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Relocate Modem', 'Transfer LCP/NAP/PORT'].includes(formData.repairCategory);
+    const isReplaceRouter = isVisitDone && ['Replace Router', 'Replace Modem'].includes(formData.repairCategory);
 
     if (!formData.supportStatus.trim()) newErrors.supportStatus = 'Support Status is required';
 
@@ -824,7 +824,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       if (!formData.routerModel.trim()) newErrors.routerModel = 'Router Model is required';
     }
 
-    // Replace Router fields — only visible when repairCategory is Replace Router and visit is Done
+    // Replace Modem fields — only visible when repairCategory is Replace Modem (or the legacy Replace Router) and visit is Done
     if (isReplaceRouter) {
       if (!formData.newRouterModemSN.trim()) newErrors.newRouterModemSN = 'New Router Modem SN is required';
     }
@@ -967,7 +967,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     if (formData.connectionType === 'Fiber') {
       // Check if New Router Modem SN field is visible
       const isNewRouterModemSNVisible = updatedFormData.visitStatus === 'Done' &&
-        ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT', 'Replace Router'].includes(updatedFormData.repairCategory);
+        ['Migrate', 'Relocate', 'Relocate Router', 'Relocate Modem', 'Transfer LCP/NAP/PORT', 'Replace Router', 'Replace Modem'].includes(updatedFormData.repairCategory);
 
       // Validate New Router Modem SN if provided and visible
       if (isNewRouterModemSNVisible && formData.newRouterModemSN?.trim()) {
@@ -1109,8 +1109,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       const isForVisit = updatedFormData.supportStatus === 'For Visit';
       const isVisitDone = isForVisit && updatedFormData.visitStatus === 'Done';
       const isVisitRescheduledOrFailed = isForVisit && (updatedFormData.visitStatus === 'Reschedule' || updatedFormData.visitStatus === 'Failed');
-      const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT'].includes(updatedFormData.repairCategory);
-      const isReplaceRouter = isVisitDone && updatedFormData.repairCategory === 'Replace Router';
+      const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Relocate Modem', 'Transfer LCP/NAP/PORT'].includes(updatedFormData.repairCategory);
+      const isReplaceRouter = isVisitDone && ['Replace Router', 'Replace Modem'].includes(updatedFormData.repairCategory);
       const isUpdateVlan = isVisitDone && updatedFormData.repairCategory === 'Update Vlan';
 
       const showNewRouterSN = isVisitDone && (isMigrateGroup || isReplaceRouter);
@@ -1758,10 +1758,10 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                         { name: 'others' },
                         { name: 'Pullout' },
                         { name: 'Reboot/Reconfig Router' },
-                        { name: 'Relocate Router' },
+                        { name: 'Relocate Modem' },
                         { name: 'Relocate' },
                         { name: 'Replace Patch Cord' },
-                        { name: 'Replace Router' },
+                        { name: 'Replace Modem' },
                         { name: 'Resplice' },
                         { name: 'Transfer LCP/NAP/PORT' },
                         { name: 'Update Vlan' }
@@ -1774,7 +1774,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     />
 
 
-                    {(formData.repairCategory === 'Migrate' || formData.repairCategory === 'Relocate' || formData.repairCategory === 'Relocate Router' || formData.repairCategory === 'Transfer LCP/NAP/PORT') && (
+                    {(formData.repairCategory === 'Migrate' || formData.repairCategory === 'Relocate' || formData.repairCategory === 'Relocate Router' || formData.repairCategory === 'Relocate Modem' || formData.repairCategory === 'Transfer LCP/NAP/PORT') && (
                       <>
                         <div>
                           <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -1872,7 +1872,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       </>
                     )}
 
-                    {formData.repairCategory === 'Replace Router' && (
+                    {['Replace Router', 'Replace Modem'].includes(formData.repairCategory) && (
                       <div>
                         <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                           }`}>New Router Modem SN<span className="text-red-500">*</span></label>

@@ -728,7 +728,7 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     supportStatuses: ['Resolved', 'Failed', 'In Progress', 'For Visit'].filter(s => s.toLowerCase().includes((searchQueries.supportStatus || '').toLowerCase())),
     visitStatuses: ['Done', 'In Progress', 'Failed', 'Reschedule'].filter(s => s.toLowerCase().includes((searchQueries.visitStatus || '').toLowerCase())),
     assignedEmails: technicians.filter(t => t.name.toLowerCase().includes((searchQueries.assignedEmail || '').toLowerCase()) || t.email.toLowerCase().includes((searchQueries.assignedEmail || '').toLowerCase())),
-    repairCategories: ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord', 'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'].filter(s => s.toLowerCase().includes((searchQueries.repairCategory || '').toLowerCase())),
+    repairCategories: ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Modem', 'Relocate', 'Replace Patch Cord', 'Replace Modem', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'].filter(s => s.toLowerCase().includes((searchQueries.repairCategory || '').toLowerCase())),
     ports: (() => {
       const ports = Array.from({ length: totalPorts }, (_, i) => `P${(i + 1).toString().padStart(2, '0')}`);
       const available = ports.filter(p => !usedPorts.some(up => up.toUpperCase() === p.toUpperCase()));
@@ -777,7 +777,7 @@ const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
   const visitTeam = startTimeVisitTeam(d.technicians);
   const formatDate = (s: string) => { if (!s) return ''; try { const d = new Date(s); return d.toISOString().split('T')[0]; } catch(e) { return s.split(' ')[0]; } };
   
-  const repairCatList = ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord', 'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'];
+  const repairCatList = ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Modem', 'Relocate', 'Replace Patch Cord', 'Replace Modem', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'];
   const supportStatusList = ['Resolved', 'Failed', 'In Progress', 'For Visit'];
   const visitStatusList = ['Done', 'In Progress', 'Failed', 'Reschedule'];
 
@@ -938,7 +938,7 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
         else if (usedPorts.some(p => p.toUpperCase() === f.newPort.toUpperCase())) e.newPort = 'Port taken';
         if (!['Relocate', 'Transfer LCP/NAP/PORT'].includes(f.repairCategory) && !f.routerModel) e.routerModel = 'Required';
       }
-      if (f.repairCategory === 'Replace Router' && !f.newRouterModemSN) e.newRouterModemSN = 'Required';
+      if (['Replace Router', 'Replace Modem'].includes(f.repairCategory) && !f.newRouterModemSN) e.newRouterModemSN = 'Required';
       if (!f.timeIn && !images.timeInFile) e.timeInFile = 'Required';
       if (f.repairCategory !== 'Reactivation' && !f.modemSetupImage && !images.modemSetupFile) e.modemSetupFile = 'Required';
       if (!f.clientSignature && !images.clientSignatureFile) e.clientSignatureFile = 'Required';

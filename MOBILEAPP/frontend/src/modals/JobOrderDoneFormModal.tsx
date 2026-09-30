@@ -2235,7 +2235,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
                       <ImagePreview
                         imageUrl={imagePreviews.routerReadingImage}
-                        label="Router Reading Image"
+                        label="Modem Reading Image"
                         onUpload={(file) => handleImageUpload('routerReadingImage', file)}
                         error={errors.routerReadingImage}
                       />

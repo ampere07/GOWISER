@@ -127,6 +127,9 @@ const allColumns = [
  */
 const COLUMNS_ADDED_SINCE_LAST_RELEASE = ['barangay', 'city', 'region'];
 
+// Requested By is only swapped for a name when it holds an email.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 interface ServiceOrderPageProps {
   /**
    * Service order to open on arrival, sent when a "Service Done" notification is
@@ -214,6 +217,28 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       return directory;
     }, {});
   }, [users]);
+  // requested_by also holds customer emails (orders raised from the customer portal),
+  // which the users directory does not know. Every row already carries its customer's
+  // email and name, so those are mapped from the loaded orders instead.
+  const customerDirectory = useMemo(() => {
+    return serviceOrders.reduce<Record<string, string>>((directory, order) => {
+      const email = (order?.emailAddress || '').trim().toLowerCase();
+      const name = (order?.fullName || '').trim();
+      if (email && name && !directory[email]) directory[email] = name;
+      return directory;
+    }, {});
+  }, [serviceOrders]);
+  // Only an email is swapped for a name; anything else ('System', a name) shows as stored.
+  const resolveRequestedBy = useCallback((order: ServiceOrder, fallback = ''): string => {
+    const raw = (order?.requestedBy || '').trim();
+    if (!raw) return fallback;
+    if (!EMAIL_PATTERN.test(raw)) return raw;
+    const email = raw.toLowerCase();
+    if (userDirectory[email]) return userDirectory[email];
+    // Prefer the row's own customer: a placeholder email can be shared by several customers.
+    if ((order.emailAddress || '').trim().toLowerCase() === email && order.fullName) return order.fullName;
+    return customerDirectory[email] || raw;
+  }, [userDirectory, customerDirectory]);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
@@ -732,7 +757,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'modifiedDate': return item.modifiedDate ?? item.rawUpdatedAt ?? (item as any).updated_at ?? (item as any).Updated_At ?? '';
       // Sorted by what the cell shows, so these mirror renderCellValue.
       case 'assignedEmail': return resolveUserDisplayName(item.assignedEmail, userDirectory, '-');
-      case 'requestedBy': return resolveUserDisplayName(item.requestedBy, userDirectory);
+      case 'requestedBy': return resolveRequestedBy(item);
       case 'serviceCharge': return item.serviceCharge;
       case 'routerModel': return item.routerModel;
       case 'routerModemSN': return item.routerModemSN ?? (item as any).router_modem_sn ?? '';
@@ -768,7 +793,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         return val !== undefined && val !== null ? val : '';
       }
     }
-  }, [userDirectory]);
+  }, [userDirectory, resolveRequestedBy]);
 
   // 1. Initial search and funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredServiceOrders = useMemo(() => {
@@ -975,7 +1000,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       {
         key: 'requestedBy',
         label: 'Requested By',
-        value: (row) => resolveUserDisplayName(row.requestedBy, userDirectory, '(Blank)'),
+        value: (row) => resolveRequestedBy(row, '(Blank)'),
       },
       {
         key: 'modifiedBy',
@@ -983,7 +1008,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         value: (row) => resolveUserDisplayName(row.modifiedBy, userDirectory, '(Blank)'),
       },
     ],
-    [userDirectory]
+    [userDirectory, resolveRequestedBy]
   );
 
   const grouping = useViewOptions('service_orders', groupableColumns, globalFilteredServiceOrders);
@@ -1506,7 +1531,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
       case 'concernRemarks':
         return serviceOrder.concernRemarks || '-';
       case 'requestedBy':
-        return resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, '-');
+        return resolveRequestedBy(serviceOrder, '-');
       case 'assignedEmail':
         return resolveUserDisplayName(serviceOrder.assignedEmail, userDirectory, '-');
       case 'repairCategory':
@@ -1561,7 +1586,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         case 'fullAddress': return so.fullAddress || '-';
         case 'concern': return so.concern || '-';
         case 'concernRemarks': return so.concernRemarks || '-';
-        case 'requestedBy': return resolveUserDisplayName(so.requestedBy, userDirectory, '-');
+        case 'requestedBy': return resolveRequestedBy(so, '-');
         case 'assignedEmail': return resolveUserDisplayName(so.assignedEmail, userDirectory, '-');
         case 'repairCategory': return so.repairCategory || '-';
         // A separate switch from renderCellValue, with its own '-' default, so these

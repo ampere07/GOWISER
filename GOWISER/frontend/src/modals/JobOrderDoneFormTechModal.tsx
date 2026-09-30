@@ -287,7 +287,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     label: string;
     onUpload: (file: File) => void;
     error?: string;
-  }> = ({ imageUrl, label, onUpload, error }) => {
+    required?: boolean;
+  }> = ({ imageUrl, label, onUpload, error, required }) => {
     const [imageLoadError, setImageLoadError] = useState(false);
     const isGDrive = isGoogleDriveUrl(imageUrl);
     const isBlobUrl = imageUrl?.startsWith('blob:');
@@ -296,7 +297,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     return (
       <div>
         <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-          }`}>{label}</label>
+          }`}>{label}{required && <span className="text-red-500">*</span>}</label>
         <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
           }`}>
           <input
@@ -1097,7 +1098,25 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         }
       }
 
+      // Every image is required to close a job order as Done. An image counts when a new
+      // file was picked or the job order already has one saved (its preview holds the URL).
+      const hasImage = (field: keyof typeof imagePreviews) =>
+        !!formData[field] || isValidImageUrl(imagePreviews[field]);
 
+      if (!hasImage('boxReadingImage')) newErrors.boxReadingImage = 'Box Reading Image is required';
+      if (!hasImage('routerReadingImage')) newErrors.routerReadingImage = 'Modem Reading Image is required';
+      // Port Label is only shown for Antenna and Local connections.
+      if ((formData.connectionType === 'Antenna' || formData.connectionType === 'Local') && !hasImage('portLabelImage')) {
+        newErrors.portLabelImage = 'Port Label Image is required';
+      }
+      if (!hasImage('setupImage')) newErrors.setupImage = 'Setup Image is required';
+      if (!hasImage('signedContractImage')) newErrors.signedContractImage = 'Signed Contract Image is required';
+      // A signature drawn on the canvas is only turned into a file at save time.
+      const hasDrawnSignature = !!sigCanvas.current && !sigCanvas.current.isEmpty();
+      if (!hasImage('clientSignatureImage') && !hasDrawnSignature) {
+        newErrors.clientSignatureImage = 'Client Signature is required';
+      }
+      if (!hasImage('speedTestImage')) newErrors.speedTestImage = 'Speed Test Image is required';
     }
 
     if (formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') {
@@ -1392,13 +1411,20 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             if (imageUrls.speedtest_image_url) {
               jobOrderUpdateData.speedtest_image_url = imageUrls.speedtest_image_url;
             }
+          } else {
+            throw new Error(uploadResponse.data.message || 'The server did not return the uploaded image links');
           }
         } catch (uploadError: any) {
+          // Images are required for Done, so a failed upload stops the save here rather
+          // than closing the job order without them. Nothing has been written yet.
           const errorMsg = uploadError.response?.data?.message || uploadError.message || 'Unknown error';
-          saveMessages.push({
-            type: 'warning',
-            text: `Failed to upload images to Google Drive: ${errorMsg}`
-          });
+          clearInterval(progressInterval);
+          setLoading(false);
+          setShowLoadingModal(false);
+          showMessageModal('Upload Failed', [
+            { type: 'error', text: `Failed to upload images: ${errorMsg}. The job order was not saved. Please try again.` }
+          ]);
+          return;
         }
       }
 
@@ -2548,13 +2574,15 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   label="Box Reading Image"
                   onUpload={(file) => handleImageUpload('boxReadingImage', file)}
                   error={errors.boxReadingImage}
+                  required
                 />
 
                 <ImagePreview
                   imageUrl={imagePreviews.routerReadingImage}
-                  label="Router Reading Image"
+                  label="Modem Reading Image"
                   onUpload={(file) => handleImageUpload('routerReadingImage', file)}
                   error={errors.routerReadingImage}
+                  required
                 />
 
                 {(formData.connectionType === 'Antenna' || formData.connectionType === 'Local') && (
@@ -2563,6 +2591,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                     label="Port Label Image"
                     onUpload={(file) => handleImageUpload('portLabelImage', file)}
                     error={errors.portLabelImage}
+                    required
                   />
                 )}
 
@@ -2571,6 +2600,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   label="Setup Image"
                   onUpload={(file) => handleImageUpload('setupImage', file)}
                   error={errors.setupImage}
+                  required
                 />
 
                 <ImagePreview
@@ -2578,11 +2608,12 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   label="Signed Contract Image"
                   onUpload={(file) => handleImageUpload('signedContractImage', file)}
                   error={errors.signedContractImage}
+                  required
                 />
 
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                    }`}>Client Signature</label>
+                    }`}>Client Signature<span className="text-red-500">*</span></label>
 
                   <div className={`border rounded overflow-hidden ${isDarkMode ? 'bg-white border-gray-700' : 'bg-white border-gray-300'}`}>
                     {(imagePreviews.clientSignatureImage || formData.clientSignatureImage) ? (
@@ -2668,6 +2699,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   label="Speed Test Image"
                   onUpload={(file) => handleImageUpload('speedTestImage', file)}
                   error={errors.speedTestImage}
+                  required
                 />
 
                 <div>

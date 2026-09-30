@@ -185,7 +185,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               </View>
               <View style={styles.headerRightAction}>
                 {(() => {
-                  const isFiberSNRequired = (['migrate', 'replace router', 'reactivation'].includes(formData.repairCategory?.toLowerCase() || '')) && formData.visitStatus === 'Done';
+                  const isFiberSNRequired = (['migrate', 'replace router', 'replace modem', 'reactivation'].includes(formData.repairCategory?.toLowerCase() || '')) && formData.visitStatus === 'Done';
                   const needsValidation = isFiberSNRequired && (formData.connectionType?.toLowerCase() === 'fiber' || !formData.connectionType) && !isSNValidated;
                   const isSaveDisabled = loading || needsValidation;
                   const saveButtonBgColor = isSaveDisabled ? '#9ca3af' : activeColor;
@@ -381,7 +381,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                             </>
                           )}
 
-                          {formData.repairCategory?.toLowerCase() === 'replace router' && (
+                          {['replace router', 'replace modem'].includes(formData.repairCategory?.toLowerCase() || '') && (
                             <>
                               <View style={styles.inputGroup}>
                                 <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
@@ -576,7 +576,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                               </View>
                               <View ref={registerAnchor('routerReadingImageFile')} collapsable={false}>
                                 <ImagePreview
-                                  label="Router Reading Image *"
+                                  label="Modem Reading Image *"
                                   imageUrl={imageFiles.routerReadingImageFile?.uri || formData.routerReadingImage}
                                   onUpload={(file) => handleImageUpload('routerReadingImageFile', file)}
                                   error={errors.routerReadingImageFile}

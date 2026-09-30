@@ -1159,7 +1159,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         newErrors.boxReadingImage = 'Box Reading Image is required';
 
       if (!formData.routerReadingImage && !jobOrderData?.router_reading_image_url && !jobOrderData?.Router_Reading_Image_URL)
-        newErrors.routerReadingImage = 'Router Reading Image is required';
+        newErrors.routerReadingImage = 'Modem Reading Image is required';
 
       if ((formData.connectionType === 'Antenna' || formData.connectionType === 'Local') &&
         !formData.portLabelImage && !jobOrderData?.port_label_image_url && !jobOrderData?.Port_Label_Image_URL)
@@ -1171,12 +1171,12 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       if (!formData.signedContractImage && !jobOrderData?.signed_contract_image_url && !jobOrderData?.Signed_Contract_Image_URL)
         newErrors.signedContractImage = 'Signed Contract Image is required';
 
-      if (!formData.clientTaggingImage && !jobOrderData?.client_tagging_image_url && !jobOrderData?.Client_Tagging_Image_URL)
+      if (!formData.clientTaggingImage && !jobOrderData?.client_tagging_url && !jobOrderData?.Client_Tagging_URL
+        && !jobOrderData?.client_tagging_image_url && !jobOrderData?.Client_Tagging_Image_URL)
         newErrors.clientTaggingImage = 'Client Tagging Image is required';
 
-
-
-
+      if (!formData.clientSignatureImage && !jobOrderData?.client_signature_url && !jobOrderData?.Client_Signature_URL)
+        newErrors.clientSignatureImage = 'Client Signature is required';
     }
 
     if (formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') {
@@ -1465,13 +1465,21 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
               if (imageUrls.proof_image_url) {
                 jobOrderUpdateData.proof_image_url = imageUrls.proof_image_url;
               }
+            } else {
+              throw new Error(uploadResponse.data.message || 'The server did not return the uploaded image links');
             }
           } catch (uploadError: any) {
+            // Images are required, so a failed upload stops the save here rather than
+            // closing the job order without them. Nothing has been written yet.
             const errorMsg = uploadError.response?.data?.message || uploadError.message || 'Unknown error';
-            saveMessages.push({
-              type: 'warning',
-              text: `Failed to upload images to Google Drive: ${errorMsg}`
-            });
+            if (progressInterval) clearInterval(progressInterval);
+            setLoading(false);
+            setShowLoadingModal(false);
+            setLoadingPercentage(0);
+            showMessageModal('Upload Failed', [
+              { type: 'error', text: `Failed to upload images: ${errorMsg}. The job order was not saved. Please try again.` }
+            ]);
+            return;
           }
         }
       }
@@ -3417,7 +3425,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                           <View ref={registerAnchor('routerReadingImage')} collapsable={false}>
                             <ImagePreview
                               imageUrl={imagePreviews.routerReadingImage}
-                              label="Router Reading Image"
+                              label="Modem Reading Image"
                               required={true}
                               onUpload={(file) => handleImageUpload('routerReadingImage', file)}
                               error={errors.routerReadingImage}

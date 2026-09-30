@@ -139,6 +139,7 @@ class TransactionController extends Controller
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
                 'image_url' => 'nullable|string|max:255',
+                'proof_payment_url' => 'nullable|url|max:255',
                 'auto_apply_payment' => 'nullable|boolean',
                 // Prepaid only: the plan this payment buys. Acted on at approval.
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
@@ -147,6 +148,8 @@ class TransactionController extends Controller
             ]);
 
             $this->assertPrepaidOnlyFields($request);
+
+            $validated = $this->withProofOfPayment($validated);
 
             \Log::info('Transaction validation passed', [
                 'validated_data' => $validated
@@ -1130,6 +1133,7 @@ class TransactionController extends Controller
                 'or_no' => 'nullable|string|max:255',
                 'remarks' => 'nullable|string',
                 'image_url' => 'nullable|string|max:255',
+                'proof_payment_url' => 'nullable|url|max:255',
                 // Kept editable while the transaction is still Pending, so a mis-keyed plan can
                 // be corrected before approval acts on it.
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
@@ -1151,11 +1155,21 @@ class TransactionController extends Controller
             }
 
             if ($transaction->status !== 'Pending') {
+                DB::rollBack();
                 return response()->json([
                     'success' => false,
                     'message' => 'Only pending transactions can be edited'
                 ], 400);
             }
+
+            // An edit without a new proof must keep the one already saved, so an empty value
+            // never clears it; a new upload replaces both columns.
+            foreach (['proof_payment_url', 'image_url'] as $proofColumn) {
+                if (array_key_exists($proofColumn, $validated) && empty($validated[$proofColumn])) {
+                    unset($validated[$proofColumn]);
+                }
+            }
+            $validated = $this->withProofOfPayment($validated);
 
             if (isset($validated['payment_date'])) {
                 $validated['payment_date'] = \Carbon\Carbon::parse($validated['payment_date'])->format('Y-m-d H:i:s');
@@ -1440,31 +1454,65 @@ class TransactionController extends Controller
         }
     }
 
+    /**
+     * Keep proof_payment_url and the older image_url holding the same Google Drive link.
+     * Current forms send proof_payment_url; app builds released before it send only image_url,
+     * and the list and receipt views still read image_url.
+     */
+    private function withProofOfPayment(array $validated): array
+    {
+        if (!empty($validated['proof_payment_url'])) {
+            $validated['image_url'] = $validated['proof_payment_url'];
+        } elseif (!empty($validated['image_url'])) {
+            $validated['proof_payment_url'] = $validated['image_url'];
+        }
+
+        return $validated;
+    }
+
     public function uploadImages(Request $request): JsonResponse
     {
         try {
+            // The form only calls this when a proof was picked, so a missing file is a bad
+            // request, not an empty success the form would read as "no image to save".
+            $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
+                'folder_name' => 'nullable|string|max:255',
+                'payment_proof_image' => 'required|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp|max:10240',
+            ]);
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $validator->errors()->first(),
+                    'errors' => $validator->errors(),
+                ], 422);
+            }
+
             $folderName = $request->input('folder_name', 'transactions');
 
             $googleDriveService = new \App\Services\GoogleDriveService();
             $folderId = $googleDriveService->createFolder($folderName);
 
-            $imageUrls = [];
+            $file = $request->file('payment_proof_image');
+            $fileName = 'payment_proof_' . time() . '.' . $file->getClientOriginalExtension();
 
-            if ($request->hasFile('payment_proof_image')) {
-                $file = $request->file('payment_proof_image');
-                $fileName = 'payment_proof_' . time() . '.' . $file->getClientOriginalExtension();
+            $fileUrl = $googleDriveService->uploadFile(
+                $file,
+                $folderId,
+                $fileName,
+                $file->getMimeType()
+            );
 
-                $fileUrl = $googleDriveService->uploadFile(
-                    $file,
-                    $folderId,
-                    $fileName,
-                    $file->getMimeType()
-                );
-
-                if ($fileUrl) {
-                    $imageUrls['payment_proof_image_url'] = $fileUrl;
-                }
+            // Never report success without a link: the form saves whatever comes back into
+            // transactions.proof_payment_url, and an empty value there reads as "no proof".
+            if (!$fileUrl) {
+                \Log::error('Transaction proof upload returned no Google Drive URL', ['folder_name' => $folderName]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Google Drive did not return a link for the uploaded proof of payment',
+                ], 502);
             }
+
+            $imageUrls = ['payment_proof_image_url' => $fileUrl];
 
             return response()->json([
                 'success' => true,

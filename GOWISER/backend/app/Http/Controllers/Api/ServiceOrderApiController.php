@@ -1151,7 +1151,7 @@ class ServiceOrderApiController extends Controller
                 $originalVisitStatus,
                 $originalConcern
             );
-            $isAlreadyMigrationDone = (in_array($originalRepairCategory, ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port']) && $originalVisitStatus === 'done');
+            $isAlreadyMigrationDone = (in_array($originalRepairCategory, ['migrate', 'relocate', 'relocate router', 'relocate modem', 'transfer lcp/nap/port']) && $originalVisitStatus === 'done');
 
             $reconnectStatus = null;
             $normalizedConcern = $currentConcern ? strtolower(trim($currentConcern)) : '';
@@ -1319,7 +1319,7 @@ class ServiceOrderApiController extends Controller
 
             // Trigger Migration if repair category is 'Migrate', 'Relocate', or 'Transfer LCP/NAP/PORT' and visit status is 'Done'
             $migrationStatus = null;
-            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port', 'transfer lcp nap port', 'transfer lcp nap vlan', 'transfer lcp / nap / port', 'update vlan'];
+            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'relocate modem', 'transfer lcp/nap/port', 'transfer lcp nap port', 'transfer lcp nap vlan', 'transfer lcp / nap / port', 'update vlan'];
             if (in_array($repairCategory, $relocateCategories) && $visitStatus === 'done' && !$isAlreadyMigrationDone) {
                 $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
                 if ($billingAccount) {
@@ -2473,7 +2473,7 @@ class ServiceOrderApiController extends Controller
             ]);
 
             $normalizedCategory = $repairCategory ? strtolower(trim(str_replace(['/', '_'], ' ', $repairCategory))) : '';
-            $targetCategories = ['relocate', 'relocate router', 'transfer lcp nap vlan', 'transfer lcp nap port', 'migrate', 'update vlan'];
+            $targetCategories = ['relocate', 'relocate router', 'relocate modem', 'transfer lcp nap vlan', 'transfer lcp nap port', 'migrate', 'update vlan'];
             $isTargetRadiusCategory = false;
             foreach ($targetCategories as $tc) {
                 if (str_contains($normalizedCategory, $tc) || $normalizedCategory === $tc) {

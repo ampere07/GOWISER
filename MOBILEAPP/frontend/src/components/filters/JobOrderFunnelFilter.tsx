@@ -61,7 +61,7 @@ const allColumns: Column[] = [
   { key: 'speedtest_image_url', label: 'Speedtest Image URL', table: 'job_orders', dataType: 'text' },
   { key: 'signed_contract_image_url', label: 'Signed Contract Image URL', table: 'job_orders', dataType: 'text' },
   { key: 'box_reading_image_url', label: 'Box Reading Image URL', table: 'job_orders', dataType: 'text' },
-  { key: 'router_reading_image_url', label: 'Router Reading Image URL', table: 'job_orders', dataType: 'text' },
+  { key: 'router_reading_image_url', label: 'Modem Reading Image URL', table: 'job_orders', dataType: 'text' },
   { key: 'port_label_image_url', label: 'Port Label Image URL', table: 'job_orders', dataType: 'text' },
   { key: 'house_front_picture_url', label: 'House Front Picture URL', table: 'job_orders', dataType: 'text' },
   { key: 'created_at', label: 'Created At', table: 'job_orders', dataType: 'datetime' },
