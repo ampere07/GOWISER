@@ -904,6 +904,7 @@ class RelatedDataController extends Controller
                 'remarks' => $transaction->remarks,
                 'status' => $transaction->status,
                 'image_url' => $transaction->image_url,
+                'proof_payment_url' => $transaction->proof_payment_url,
                 'created_at' => $transaction->created_at,
                 'updated_at' => $transaction->updated_at,
                 'payment_method_info' => [

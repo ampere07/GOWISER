@@ -51,6 +51,7 @@ interface Transaction {
   remarks: string;
   status: string;
   image_url: string | null;
+  proof_payment_url?: string | null;
   created_at: string;
   updated_at: string;
   approved_by?: string;
@@ -1017,30 +1018,32 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               {renderField('Balance Before', formatCurrency(transaction.account_balance_before || 0))}
               {renderField('Current Balance', formatCurrency(transaction.account?.account_balance || 0))}
 
-              {transaction.image_url && (
-                <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'
-                  }`}>
-                  <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                    }`}>Payment Proof</div>
-                  <div className={isDarkMode ? 'text-white flex-1' : 'text-gray-900 flex-1'}>
-                    <div className="mt-2 relative group cursor-pointer" onClick={() => { if (transaction.image_url) window.open(transaction.image_url, '_blank'); }}>
-                      <img
-                        src={transaction.image_url && transaction.image_url.includes('drive.google.com')
-                          ? `${API_BASE_URL}/proxy/image?url=${encodeURIComponent(transaction.image_url)}`
-                          : (transaction.image_url || '')}
-                        alt="Payment Proof"
-                        className="w-full h-auto max-h-48 object-contain rounded border border-gray-700"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                      <div className="mt-1 text-xs text-orange-500 hover:text-orange-400 flex items-center">
-                        View Full Image <ExternalLink size={12} className="ml-1" />
-                      </div>
+              {/* The Google Drive link itself, opened in a new tab. proof_payment_url is the
+                  current column; image_url covers transactions saved before it existed. */}
+              {(() => {
+                const proofUrl = (transaction.proof_payment_url || transaction.image_url || '').trim();
+                return (
+                  <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'
+                    }`}>
+                    <div className={`w-40 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                      }`}>Proof of Payment</div>
+                    <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {proofUrl ? (
+                        <a
+                          href={proofUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-start gap-1 break-all text-blue-500 hover:text-blue-400 hover:underline"
+                          title="Open in a new tab"
+                        >
+                          {proofUrl}
+                          <ExternalLink size={12} className="mt-1 flex-shrink-0" />
+                        </a>
+                      ) : '-'}
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {renderField('Created At', formatDate(transaction.created_at, true))}
               {renderField('Updated At', formatDate(transaction.updated_at, true))}

@@ -7,6 +7,7 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import {
   X,
@@ -34,6 +35,7 @@ interface Transaction {
   remarks: string;
   status: string;
   image_url: string | null;
+  proof_payment_url?: string | null;
   created_at: string;
   updated_at: string;
   approved_by?: string;
@@ -184,6 +186,15 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     statusLower === 'failed' || statusLower === 'cancelled' ? '#ef4444' :
     '#6b7280';
 
+  const proofUrl = (transaction.proof_payment_url || transaction.image_url || '').trim();
+  const openProofUrl = async () => {
+    try {
+      await Linking.openURL(proofUrl);
+    } catch {
+      Alert.alert('Cannot open link', 'The proof of payment link could not be opened.');
+    }
+  };
+
   const renderField = (label: string, value: string | React.ReactNode, bold = false) => (
     <View
       style={{
@@ -319,6 +330,18 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             {renderField('Reference No.', transaction.reference_no || '-')}
             {renderField('OR No.', transaction.or_no || '-')}
             {renderField('Remarks', transaction.remarks || 'No remarks')}
+            {/* The Google Drive link itself; tapping opens it in the browser. proof_payment_url is
+                the current column; image_url covers transactions saved before it existed. */}
+            {renderField(
+              'Proof of Payment',
+              proofUrl ? (
+                <TouchableOpacity onPress={openProofUrl} accessibilityRole="link">
+                  <Text style={{ fontSize: 13, color: '#2563eb', textDecorationLine: 'underline' }}>
+                    {proofUrl}
+                  </Text>
+                </TouchableOpacity>
+              ) : '-'
+            )}
             {renderField(
               'Status',
               <Text
