@@ -1,0 +1,24 @@
+{
+  "build": {
+    "preview": {
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://backend.gowiser.ph/api"
+      }
+    },
+    "production": {
+      "ios": {
+        "image": "latest",
+        "autoIncrement": true
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://backend.gowiser.ph/api"
+      }
+    }
+  },
+  "cli": {
+    "appVersionSource": "remote"
+  }
+}
