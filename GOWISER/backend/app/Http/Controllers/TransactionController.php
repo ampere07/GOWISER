@@ -158,8 +158,12 @@ class TransactionController extends Controller
             DB::beginTransaction();
 
             $validated['payment_date'] = \Carbon\Carbon::parse($validated['payment_date'])->format('Y-m-d H:i:s');
+            // The forms send `new Date().toISOString()`, which is UTC ("...Z"). date_processed is a
+            // DATETIME holding Manila time like every other write to it (approve() uses now()), so
+            // the value is moved into the app timezone first — formatting it as parsed stored it
+            // 8 hours behind and made a newer transaction look older than an approved one.
             $validated['date_processed'] = isset($validated['date_processed'])
-                ?\Carbon\Carbon::parse($validated['date_processed'])->format('Y-m-d H:i:s')
+                ?\Carbon\Carbon::parse($validated['date_processed'])->setTimezone(config('app.timezone'))->format('Y-m-d H:i:s')
                 : now()->format('Y-m-d H:i:s');
             $validated['status'] = $validated['status'] ?? 'Pending';
             $validated['created_by_user'] = $validated['created_by_user'] ?? (Auth::check() ?Auth::user()->email_address : 'unknown');
@@ -1084,6 +1088,12 @@ class TransactionController extends Controller
                 ], 403);
             }
             $transaction->status = $request->status;
+            // Finishing a transaction is when it was processed — approve() stamps Done the same
+            // way. Without this a Failed/Cancelled row kept the time it was created, so one
+            // rejected after another was approved still sorted as the earlier of the two.
+            if (in_array($request->status, ['Done', 'Failed', 'Cancelled'], true)) {
+                $transaction->date_processed = now();
+            }
             $transaction->updated_by_user = Auth::check() ?Auth::user()->email_address : 'unknown';
             $transaction->save();
 

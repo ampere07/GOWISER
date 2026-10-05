@@ -15,6 +15,21 @@ class RadiusStatusSyncService
     private const MAX_RETRIES = 3;
     private const RETRY_DELAY = 2;
 
+    /** User Manager menu names to try over the RouterOS API, stock v7 name first. */
+    private const ROUTEROS_MENUS = ['user-manager', 'user-manage'];
+
+    /** radius_config.id served by the RouterOS API endpoint for this run (null = none). */
+    private ?int $routerOsApiConfigId = null;
+
+    /** The User Manager menu that answered over the API, reused for the next query. */
+    private ?string $routerOsMenu = null;
+
+    /**
+     * Set once the API has failed in this run: the session fetch then goes straight to REST
+     * instead of waiting out another round of timeouts on a port that just failed.
+     */
+    private bool $routerOsApiFailedThisRun = false;
+
     public function syncRadiusStatus(): array
     {
         $stats = [
@@ -43,6 +58,12 @@ class RadiusStatusSyncService
             if ($radiusConfigs->isEmpty()) {
                 throw new \Exception('RADIUS configuration not found');
             }
+
+            $apiSettings = config('services.radius_status_api', []);
+            $this->routerOsApiConfigId = filter_var($apiSettings['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN) && !empty($apiSettings['host'])
+                ? (int) ($apiSettings['config_id'] ?: $radiusConfigs->first()->id)
+                : null;
+            $this->routerOsApiFailedThisRun = false;
 
             // Step 2: Fetch from EVERY radius config, merged and de-duplicated by username.
             // Each server is queried independently — one being down does not stop the others.
@@ -151,7 +172,7 @@ class RadiusStatusSyncService
 
         foreach ($radiusConfigs as $index => $config) {
             $label = 'Radius Config ' . ($index + 1);
-            $response = $this->callRadiusApiForConfig($config, '/rest/user-manage/user', 'GET');
+            $response = $this->fetchFromRadius($config, 'user');
 
             if ($response === null || !is_array($response)) {
                 $perConfig[$label] = 0;
@@ -213,7 +234,7 @@ class RadiusStatusSyncService
 
         foreach ($radiusConfigs as $index => $config) {
             $label = 'Radius Config ' . ($index + 1);
-            $response = $this->callRadiusApiForConfig($config, '/rest/user-manage/session', 'GET');
+            $response = $this->fetchFromRadius($config, 'session');
 
             if ($response === null || !is_array($response)) {
                 $perConfig[$label] = 0;
@@ -270,11 +291,56 @@ class RadiusStatusSyncService
 
         Log::info('Processing accounts for RADIUS sync', ['count' => count($accounts)]);
 
+        // online_status allows ONE row per username (and per account_id, and per MAC), but rows
+        // used to be matched on account_id alone. An account whose username was already on a row
+        // under another account_id — a re-created/re-imported account, or two accounts sharing a
+        // PPPoE username — then failed every run with "Duplicate entry ... username_unique" and its
+        // status never updated. Ownership is settled up front and conflicts resolved per write.
+        //
+        // Usernames compare case-insensitively, as the unique index does under the table collation.
+        $owners = [];
+        foreach ($accounts as $account) {
+            $key = strtolower(trim($account->username ?? ''));
+            if ($key === '') {
+                continue;
+            }
+            // One username, several accounts: the newest account keeps the status row.
+            if (!isset($owners[$key]) || (int) $account->account_id > $owners[$key]) {
+                $owners[$key] = (int) $account->account_id;
+            }
+        }
+
+        $rowsByAccount = [];
+        $rowsByUsername = [];
+        $accountByMac = [];
+        foreach (DB::table('online_status')->select('id', 'account_id', 'username', 'session_mac_address')->get() as $row) {
+            if ($row->account_id !== null) {
+                $rowsByAccount[(int) $row->account_id] = $row;
+            }
+            if ($row->username !== null && $row->username !== '') {
+                $rowsByUsername[strtolower($row->username)] = $row;
+            }
+            if ($row->session_mac_address) {
+                $accountByMac[strtoupper($row->session_mac_address)] = $row->account_id !== null ? (int) $row->account_id : null;
+            }
+        }
+
+        $sharedUsernames = [];
+
         foreach ($accounts as $account) {
             try {
                 $username = trim($account->username ?? '');
                 if ($username === '') {
                     // Skip records with empty usernames
+                    $stats['skipped']++;
+                    continue;
+                }
+                $usernameKey = strtolower($username);
+                $accountId = (int) $account->account_id;
+
+                if ($owners[$usernameKey] !== $accountId) {
+                    // Another account carries the same PPPoE username and owns the status row.
+                    $sharedUsernames[$username][] = $account->account_no;
                     $stats['skipped']++;
                     continue;
                 }
@@ -332,9 +398,55 @@ class RadiusStatusSyncService
                     $stats['not_found']++;
                 }
 
+                // A row holding this username under a different account_id is stale: this account
+                // owns the username now. Take the row over, or drop it if this account already
+                // has its own row (the insert/update below would otherwise hit username_unique).
+                $usernameRow = $rowsByUsername[$usernameKey] ?? null;
+                if ($usernameRow && (int) $usernameRow->account_id !== $accountId) {
+                    if (isset($rowsByAccount[$accountId])) {
+                        DB::table('online_status')->where('id', $usernameRow->id)->delete();
+                        $action = 'removed stale row';
+                    } else {
+                        DB::table('online_status')->where('id', $usernameRow->id)
+                            ->update(['account_id' => $accountId]);
+                        $rowsByAccount[$accountId] = $usernameRow;
+                        $action = 'moved row';
+                    }
+                    if ($usernameRow->account_id !== null) {
+                        unset($rowsByAccount[(int) $usernameRow->account_id]);
+                    }
+                    \Log::channel('radiusrelated')->info("[STATUS SYNC REASSIGN] {$username}: {$action} from account_id {$usernameRow->account_id} to {$accountId} ({$accountNo})");
+                    $usernameRow->account_id = $accountId;
+                }
+
+                // A router's MAC follows its live session; clear it from any other account's row
+                // so the write below cannot hit session_mac_address_unique.
+                $macKey = $mac ? strtoupper($mac) : null;
+                if ($macKey && array_key_exists($macKey, $accountByMac) && $accountByMac[$macKey] !== $accountId) {
+                    DB::table('online_status')
+                        ->where('session_mac_address', $mac)
+                        ->where(function ($q) use ($accountId) {
+                            $q->where('account_id', '<>', $accountId)->orWhereNull('account_id');
+                        })
+                        ->update(['session_mac_address' => null]);
+                }
+
+                // This account's own row is about to take the new username; release the old one
+                // so the account that now owns it does not mistake this row for its stale copy.
+                $ownRow = $rowsByAccount[$accountId] ?? null;
+                if ($ownRow && $ownRow->username !== null && strtolower($ownRow->username) !== $usernameKey) {
+                    $oldKey = strtolower($ownRow->username);
+                    if (($rowsByUsername[$oldKey] ?? null) === $ownRow) {
+                        unset($rowsByUsername[$oldKey]);
+                    }
+                }
+                if ($ownRow) {
+                    $ownRow->username = $username;
+                }
+
                 DB::table('online_status')
                     ->updateOrInsert(
-                        ['account_id' => $account->account_id],
+                        ['account_id' => $accountId],
                         [
                             'account_no' => $accountNo,
                             'username' => $username,
@@ -351,6 +463,14 @@ class RadiusStatusSyncService
                         ]
                     );
 
+                if (!isset($rowsByAccount[$accountId])) {
+                    $rowsByAccount[$accountId] = (object) ['id' => null, 'account_id' => $accountId, 'username' => $username];
+                }
+                $rowsByUsername[$usernameKey] = $rowsByAccount[$accountId];
+                if ($macKey) {
+                    $accountByMac[$macKey] = $accountId;
+                }
+
                 $stats['updated']++;
 
             } catch (\Exception $e) {
@@ -364,7 +484,109 @@ class RadiusStatusSyncService
             }
         }
 
+        // Logged once per run rather than once per account: these need fixing in the data
+        // (two accounts cannot share a PPPoE username), not retrying.
+        if ($sharedUsernames) {
+            $stats['shared_usernames'] = count($sharedUsernames);
+            $sample = array_slice($sharedUsernames, 0, 50, true);
+            \Log::channel('radiusrelated')->warning(
+                '[STATUS SYNC SHARED USERNAME] ' . count($sharedUsernames) . ' username(s) are on more than one billing account; '
+                . 'only the newest account is tracked. Skipped account_no per username: ' . json_encode($sample)
+            );
+        }
+
         $stats['synced'] = $stats['updated'];
+    }
+
+    /**
+     * Fetch User Manager `user` or `session` records for ONE radius config.
+     *
+     * The config served by the RouterOS API endpoint (services.radius_status_api) is read over
+     * the API; every other config is read over REST. If the API cannot be reached the same
+     * config falls back to REST, so a closed API port never costs a sync run.
+     */
+    private function fetchFromRadius($config, string $resource): ?array
+    {
+        if ($this->routerOsApiConfigId !== null && (int) $config->id === $this->routerOsApiConfigId
+            && !$this->routerOsApiFailedThisRun) {
+            $records = $this->callRouterOsApiForConfig($config, $resource);
+            if ($records !== null) {
+                return $records;
+            }
+            $this->routerOsApiFailedThisRun = true;
+            \Log::channel('radiusrelated')->warning("[STATUS SYNC API] Config #{$config->id}: RouterOS API unavailable for {$resource}; using REST for the rest of this run.");
+        }
+
+        return $this->callRadiusApiForConfig($config, '/rest/user-manage/' . $resource, 'GET');
+    }
+
+    /**
+     * Same job as callRadiusApiForConfig(), over the RouterOS API instead of REST: runs
+     * `/<user-manager>/<resource>/print` against services.radius_status_api's host and port,
+     * logging in with this radius_config's username and password. Returns the records in
+     * the same shape the REST call returns, or null when the router cannot be reached.
+     */
+    private function callRouterOsApiForConfig($config, string $resource): ?array
+    {
+        $settings = config('services.radius_status_api', []);
+        $host = (string) ($settings['host'] ?? '');
+        $port = (int) ($settings['port'] ?? 8728);
+        $timeout = (int) ($settings['timeout'] ?? 15);
+        $ssl = filter_var($settings['ssl'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            $client = new RouterOsApiClient($host, $port, $timeout, $ssl);
+
+            try {
+                $client->connect((string) $config->username, (string) $config->password);
+
+                // Try the menu that answered last, then the others.
+                $menus = $this->routerOsMenu
+                    ? array_values(array_unique(array_merge([$this->routerOsMenu], self::ROUTEROS_MENUS)))
+                    : self::ROUTEROS_MENUS;
+
+                $lastTrap = null;
+                foreach ($menus as $menu) {
+                    try {
+                        $records = $client->query("/{$menu}/{$resource}/print");
+                        $this->routerOsMenu = $menu;
+                        Log::info("[STATUS SYNC API] {$host}:{$port} /{$menu}/{$resource}/print returned " . count($records) . ' record(s)');
+                        return $records;
+                    } catch (RouterOsApiTrapException $trap) {
+                        // Usually "no such command" for the menu name this build does not use.
+                        $lastTrap = $trap;
+                    }
+                }
+
+                throw $lastTrap ?? new \RuntimeException('No User Manager menu answered');
+
+            } catch (\Throwable $e) {
+                Log::warning('RouterOS API request failed', [
+                    'host' => $host,
+                    'port' => $port,
+                    'resource' => $resource,
+                    'attempt' => $attempt,
+                    'error' => $e->getMessage(),
+                ]);
+            } finally {
+                $client->close();
+            }
+
+            if ($attempt < self::MAX_RETRIES) {
+                sleep(self::RETRY_DELAY);
+            }
+        }
+
+        \Log::channel('radiusrelated')->error(sprintf(
+            '[STATUS SYNC API FAILED] Config #%s via RouterOS API %s:%s unreachable for %s after %d attempts.',
+            $config->id ?? '?',
+            $host,
+            $port,
+            $resource,
+            self::MAX_RETRIES
+        ));
+
+        return null;
     }
 
     /**

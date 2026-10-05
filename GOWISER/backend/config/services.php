@@ -53,6 +53,21 @@ return [
         ],
     ],
 
+    // RouterOS API (binary protocol) endpoint the RADIUS status sync reads users and sessions
+    // from. It reaches the router of ONE radius_config row through a different address; the
+    // login is that row's username/password. Every other radius_config row — and this one,
+    // if the API cannot be reached — keeps using the REST interface.
+    'radius_status_api' => [
+        'enabled' => env('RADIUS_STATUS_API_ENABLED', true),
+        'host' => env('RADIUS_STATUS_API_HOST', '126.209.53.74'),
+        'port' => (int) env('RADIUS_STATUS_API_PORT', 58728),
+        'ssl' => env('RADIUS_STATUS_API_SSL', false),
+        'timeout' => (int) env('RADIUS_STATUS_API_TIMEOUT', 15),
+        // radius_config.id whose credentials (and router) this endpoint belongs to;
+        // empty = the first radius_config by id ("Radius Config 1").
+        'config_id' => env('RADIUS_STATUS_API_CONFIG_ID'),
+    ],
+
 ];
 
 
