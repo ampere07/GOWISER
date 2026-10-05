@@ -204,6 +204,13 @@ export const relatedDataColumns = {
       label: 'Date Processed',
       render: (val: any) => formatDateTime(val)
     },
+    // Beside Date Processed so a later change (approval, a Failed/Cancelled status) reads
+    // next to when the transaction was processed.
+    {
+      key: 'updated_at',
+      label: 'Modified Date',
+      render: (val: any) => formatDateTime(val)
+    },
     { key: 'status', label: 'Status', render: (val: any) => val || '-' },
     { key: 'received_payment', label: 'Received Payment', render: (val: any) => `₱${parseFloat(val || '0').toFixed(2)}` },
     { key: 'or_no', label: 'OR No', render: (val: any) => val || '-' },
@@ -216,11 +223,6 @@ export const relatedDataColumns = {
     { key: 'contact_no', label: 'Contact No', render: (val: any) => val || '-' },
     { key: 'payment_method', label: 'Payment Method', render: (val: any) => val || '-' },
     { key: 'updated_by_user', label: 'Modified By', render: (val: any) => val || '-' },
-    {
-      key: 'updated_at',
-      label: 'Modified Date',
-      render: (val: any) => formatDateTime(val)
-    },
     { key: 'transaction_type', label: 'Transaction Type', render: (val: any) => val || '-' },
     {
       key: 'payment_date',
