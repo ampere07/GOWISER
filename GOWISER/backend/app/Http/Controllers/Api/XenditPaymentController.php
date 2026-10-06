@@ -14,6 +14,7 @@ use Exception;
 use App\Events\PaymentUpdated;
 use App\Models\AppPlan;
 use App\Models\BillingAccount;
+use App\Models\Discount;
 use App\Services\EnhancedBillingGenerationServiceWithNotifications;
 
 class XenditPaymentController extends Controller
@@ -790,6 +791,42 @@ class XenditPaymentController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Failed to get account balance'
+            ], 500);
+        }
+    }
+
+    public function getAvailableDiscount(Request $request)
+    {
+        $accountNo = $request->input('account_no');
+
+        if (!$accountNo) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Account number is required'
+            ], 400);
+        }
+
+        try {
+            $discountsOnFile = Discount::where('account_no', $accountNo)
+                ->whereIn('status', ['Unused', 'Permanent', 'Monthly'])
+                ->get()
+                ->filter(fn (Discount $discount) => $discount->status !== 'Monthly' || (int) $discount->remaining > 0)
+                ->sum(fn (Discount $discount) => (float) $discount->discount_amount);
+
+            return response()->json([
+                'status' => 'success',
+                'discounts_only' => round($discountsOnFile, 2),
+            ]);
+        } catch (Exception $e) {
+            Log::error('Get available discount failed', [
+                'account_no' => $accountNo,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'discounts_only' => 0,
+                'message' => 'Failed to get available discount'
             ], 500);
         }
     }

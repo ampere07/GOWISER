@@ -316,6 +316,18 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         return () => { cancelled = true; };
     }, [isPrepaid]);
 
+    const [postpaidDiscountsOnFile, setPostpaidDiscountsOnFile] = useState<number>(0);
+    const billingAccountNo = customerDetail?.billingAccount?.accountNo;
+    useEffect(() => {
+        setPostpaidDiscountsOnFile(0);
+        if (!billingAccountNo || isPrepaid) return;
+        let cancelled = false;
+        paymentService.getDiscountsOnFile(billingAccountNo).then(amount => {
+            if (!cancelled) setPostpaidDiscountsOnFile(amount);
+        });
+        return () => { cancelled = true; };
+    }, [billingAccountNo, isPrepaid, invoiceRecords]);
+
     const latestBillDiscount = Math.round(
         (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
     ) / 100;
@@ -911,6 +923,11 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 {!isPrepaid && latestBillDiscount > 0 && (
                                     <Text allowFontScaling={false} style={styles.cardDiscountText}>
                                         Latest bill: {formatCentavoPeso(latestBillDiscount)} discount / rebate applied
+                                    </Text>
+                                )}
+                                {!isPrepaid && postpaidDiscountsOnFile > 0 && (
+                                    <Text allowFontScaling={false} style={styles.cardDiscountText}>
+                                        {formatCentavoPeso(postpaidDiscountsOnFile)} discount on file — comes off your next bill
                                     </Text>
                                 )}
                                 </View>
