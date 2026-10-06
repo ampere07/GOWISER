@@ -299,6 +299,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const convenienceFeeLabel = String(Number(convenienceFeePercentage));
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
+    const latestBillDiscount = Math.round(
+        (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
+    ) / 100;
+    const formatCentavoPeso = (value: number) =>
+        `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
     let dueDateString = 'Upon Receipt';
     if (invoiceRecords && invoiceRecords.length > 0) {
         const latestInvoice = invoiceRecords[0]; // already sorted by date descending from the store
@@ -727,6 +733,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                 </>
                             )}
                         </div>
+
+                        {!isPrepaid && latestBillDiscount > 0 && (
+                            <p className="text-white text-sm -mt-4 mb-8 opacity-90">
+                                Latest bill: {formatCentavoPeso(latestBillDiscount)} discount / rebate applied
+                            </p>
+                        )}
 
                         <div className="flex justify-center space-x-4">
                             <button
