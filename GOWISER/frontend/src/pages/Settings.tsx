@@ -713,7 +713,7 @@ const Settings: React.FC = () => {
             <div className={`p-4 rounded border ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-gray-100 border-gray-300'}`}>
               <div className="space-y-2 mb-4">
                 {imageSizes.map((size) => (
-                  <div
+                  <div role="button" aria-label={`Select ${size.id}`}
                     key={size.id}
                     onClick={() => isEditingImageSize && setSelectedImageSizeId(size.id)}
                     className={`flex items-center justify-between p-3 rounded border transition-all ${isEditingImageSize ? 'cursor-pointer' : ''}`}

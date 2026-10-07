@@ -336,8 +336,8 @@ const BonusHistory: React.FC = () => {
                         </div>
                         <div className="space-y-2">
                             <div className="relative">
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                                <input
+                                <label htmlFor="bonushistory-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                                <input id="bonushistory-from"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -346,8 +346,8 @@ const BonusHistory: React.FC = () => {
                                 />
                             </div>
                             <div className="relative">
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                                <input
+                                <label htmlFor="bonushistory-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                                <input id="bonushistory-to"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}
@@ -444,8 +444,8 @@ const BonusHistory: React.FC = () => {
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                 <div>
-                                    <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                                    <input
+                                    <label htmlFor="bonushistory-from-1" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                                    <input id="bonushistory-from-1"
                                         type="date"
                                         value={dateFrom}
                                         onChange={(e) => setDateFrom(e.target.value)}
@@ -454,8 +454,8 @@ const BonusHistory: React.FC = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                                    <input
+                                    <label htmlFor="bonushistory-to-1" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                                    <input id="bonushistory-to-1"
                                         type="date"
                                         value={dateTo}
                                         onChange={(e) => setDateTo(e.target.value)}

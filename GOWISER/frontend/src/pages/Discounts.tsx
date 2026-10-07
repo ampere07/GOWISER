@@ -865,8 +865,8 @@ const Discounts: React.FC = () => {
             </div>
             <div className="space-y-2">
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                <input
+                <label htmlFor="discounts-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                <input id="discounts-from"
                   type="date"
                   value={createdDateFrom}
                   onChange={(e) => setCreatedDateFrom(e.target.value)}
@@ -878,8 +878,8 @@ const Discounts: React.FC = () => {
                 />
               </div>
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                <input
+                <label htmlFor="discounts-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                <input id="discounts-to"
                   type="date"
                   value={createdDateTo}
                   onChange={(e) => setCreatedDateTo(e.target.value)}
@@ -925,7 +925,7 @@ const Discounts: React.FC = () => {
           {/* Region Level */}
           {locationItems.regions.map((region: any) => (
             <div key={region.id}>
-              <button
+              <button aria-label={`Open ${region.name}`}
                 onClick={() => setSelectedLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
@@ -938,7 +938,7 @@ const Discounts: React.FC = () => {
                 } : {}}
               >
                 <div className="flex items-center flex-1">
-                  <button
+                  <button aria-label={`Toggle ${region.name}`}
                     onClick={(e) => toggleLocationExpansion(e, region.id)}
                     className="p-1 mr-1"
                   >
@@ -969,7 +969,7 @@ const Discounts: React.FC = () => {
               {/* City Level */}
               {expandedLocations.has(region.id) && region.cities.map((city: any) => (
                 <div key={city.id}>
-                  <button
+                  <button aria-label={`Open ${city.name}`}
                     onClick={() => setSelectedLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
@@ -982,7 +982,7 @@ const Discounts: React.FC = () => {
                     } : {}}
                   >
                     <div className="flex items-center flex-1">
-                      <button
+                      <button aria-label={`Toggle ${city.name}`}
                         onClick={(e) => toggleLocationExpansion(e, city.id)}
                         className="p-1 mr-1"
                       >
@@ -1006,7 +1006,7 @@ const Discounts: React.FC = () => {
 
                   {/* Barangay Level */}
                   {expandedLocations.has(city.id) && city.barangays.map((barangay: any) => (
-                    <button
+                    <button aria-label={`Select ${barangay.name}`}
                       key={barangay.id}
                       onClick={() => setSelectedLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1290,7 +1290,7 @@ const Discounts: React.FC = () => {
                   {sortedDiscountRecords.length > 0 ? (
                     <div>
                       {sortedDiscountRecords.map((record) => (
-                        <div
+                        <div role="button" aria-label={`Open ${record.id}`}
                           key={record.id}
                           onClick={() => handleRecordClick(record)}
                           className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -1358,7 +1358,7 @@ const Discounts: React.FC = () => {
                               <div className="flex items-center justify-between">
                                 <span>{column.label}</span>
                                 {(hoveredColumn === column.key || sortColumn === column.key) && (
-                                  <button
+                                  <button aria-label={`Sort by ${column.label}`}
                                     onClick={() => handleSort(column.key)}
                                     className="ml-2 transition-colors"
                                   >
@@ -1392,7 +1392,7 @@ const Discounts: React.FC = () => {
                       <tbody>
                         {sortedDiscountRecords.length > 0 ? (
                           sortedDiscountRecords.map((record) => (
-                            <tr
+                            <tr role="button" aria-label={`Open discount ${record.id}`}
                               key={record.id}
                               className={`border-b cursor-pointer transition-colors ${isDarkMode
                                 ? 'border-gray-800 hover:bg-gray-900'
@@ -1457,6 +1457,10 @@ const Discounts: React.FC = () => {
             discountRecord={selectedDiscount}
             onClose={handleCloseDetails}
             onApproveSuccess={handleRefresh}
+            onDeleteSuccess={() => {
+              handleCloseDetails();
+              handleRefresh();
+            }}
             onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
             onNext={currentDiscountIndex < filteredDiscountRecords.length - 1 ? handleNextRecord : undefined}
           />

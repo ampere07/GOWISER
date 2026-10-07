@@ -318,7 +318,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
       case 'select':
         return (
           <td key={columnKey} className="px-3 py-2.5">
-            <input
+            <input aria-label={`Select account ${row.billing_account_id}`}
               type="checkbox"
               checked={grid.selected.has(String(row.billing_account_id))}
               disabled={!row.can_generate && !row.can_dismiss}
@@ -495,7 +495,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
           }`}
         >
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+          <button aria-label="Close" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -504,7 +504,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
       {/* Stat cards — each one filters the table to what it counts */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-5">
         {statCards.map((stat) => (
-          <button
+          <button aria-label={`Open ${stat.label}`}
             key={stat.label}
             onClick={() => setReasonFilter(stat.reason)}
             title={stat.hint}

@@ -627,8 +627,8 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ onClose, onSubmitted 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <TextField label="Landmark" {...fieldProps('landmark')} placeholder="Enter a landmark" />
                         <div>
-                            <label className={labelClass}>Referred By</label>
-                            <input
+                            <label htmlFor="applicationform-referred-by" className={labelClass}>Referred By</label>
+                            <input id="applicationform-referred-by"
                                 type="text"
                                 value={formData.referred_by}
                                 readOnly

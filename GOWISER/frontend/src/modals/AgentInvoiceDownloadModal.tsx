@@ -66,8 +66,8 @@ const Body: React.FC<{
             )}
 
             <div>
-                <label className={labelClass}>What to download</label>
-                <select value={mode} onChange={(e) => setMode(e.target.value as Mode)} className={selectClass}>
+                <label htmlFor="agentinvoicedownloadmodal-what-to-download" className={labelClass}>What to download</label>
+                <select id="agentinvoicedownloadmodal-what-to-download" value={mode} onChange={(e) => setMode(e.target.value as Mode)} className={selectClass}>
                     <option value="all">Download all</option>
                     <option value="period">Specific date</option>
                 </select>
@@ -86,7 +86,7 @@ const Body: React.FC<{
                             There are no invoices to download yet.
                         </p>
                     ) : (
-                        <select
+                        <select aria-label="Billing period"
                             value={selectedPeriod}
                             onChange={(e) => setSelectedPeriod(e.target.value)}
                             className={selectClass}

@@ -200,7 +200,7 @@ const MonthlyPayableFormModal: React.FC<MonthlyPayableFormModalProps> = ({
             }`}
           >
             <div className="flex items-center space-x-4">
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 disabled={saving}
                 className={`transition-colors disabled:cursor-not-allowed ${
@@ -264,10 +264,10 @@ const MonthlyPayableFormModal: React.FC<MonthlyPayableFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>
+                <label htmlFor="monthlypayableformmodal-category" className={labelClass}>
                   Category<span className="text-red-500">*</span>
                 </label>
-                <select
+                <select id="monthlypayableformmodal-category"
                   value={form.category_id ?? ''}
                   onChange={(e) =>
                     setField('category_id', e.target.value ? Number(e.target.value) : null)
@@ -336,10 +336,10 @@ const MonthlyPayableFormModal: React.FC<MonthlyPayableFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>
+                <label htmlFor="monthlypayableformmodal-billing-month" className={labelClass}>
                   Billing Month<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="monthlypayableformmodal-billing-month"
                   type="month"
                   value={form.billing_month}
                   onChange={(e) => setField('billing_month', e.target.value)}
@@ -352,10 +352,10 @@ const MonthlyPayableFormModal: React.FC<MonthlyPayableFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>
+                <label htmlFor="monthlypayableformmodal-due-date" className={labelClass}>
                   Due Date<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="monthlypayableformmodal-due-date"
                   type="date"
                   value={form.due_date}
                   onChange={(e) => setField('due_date', e.target.value)}
@@ -455,7 +455,7 @@ const MonthlyPayableFormModal: React.FC<MonthlyPayableFormModalProps> = ({
                 <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   {form.receipt ? form.receipt.name : 'Choose an image or PDF (max 10MB)'}
                 </span>
-                <input
+                <input aria-label="Choose receipt file"
                   type="file"
                   accept="image/*,.pdf"
                   disabled={saving}

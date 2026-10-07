@@ -601,8 +601,8 @@ const ReconnectionLogs: React.FC = () => {
             </div>
             <div className="space-y-2">
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                <input
+                <label htmlFor="reconnectionlogs-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                <input id="reconnectionlogs-from"
                   type="date"
                   value={statementDateFrom}
                   onChange={(e) => setStatementDateFrom(e.target.value)}
@@ -614,8 +614,8 @@ const ReconnectionLogs: React.FC = () => {
                 />
               </div>
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                <input
+                <label htmlFor="reconnectionlogs-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                <input id="reconnectionlogs-to"
                   type="date"
                   value={statementDateTo}
                   onChange={(e) => setStatementDateTo(e.target.value)}
@@ -688,7 +688,7 @@ const ReconnectionLogs: React.FC = () => {
             {isDateDropdownOpen && (
               <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                 {dateItems.dates.map((item, index) => (
-                  <button
+                  <button aria-label={`Select ${item.date}`}
                     key={index}
                     onClick={() => {
                       setSelectedDate(item.date);
@@ -727,7 +727,7 @@ const ReconnectionLogs: React.FC = () => {
 
           <div className="py-2">
             {locationItems.map((location) => (
-              <button
+              <button aria-label={`Select ${location.name}`}
                 key={location.id}
                 onClick={() => {
                   setSelectedLocation(location.id);
@@ -805,7 +805,7 @@ const ReconnectionLogs: React.FC = () => {
             }`}>
             <div className="flex items-center space-x-3 w-full overflow-x-auto scrollbar-none pb-1 -mb-1">
               {isMobile && mobileViewMode === 'list' && (
-                <button
+                <button aria-label="Back"
                   onClick={() => setMobileViewMode('sidebar')}
                   className={`p-2 rounded-lg transition-colors flex-shrink-0 ${
                     isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'
@@ -939,7 +939,7 @@ const ReconnectionLogs: React.FC = () => {
                       <tr className={`border-b sticky top-0 z-10 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'
                         }`}>
                         {displayedColumns.map((column, index) => (
-                          <th
+                          <th role="button" aria-label={`Sort by ${column.label}`}
                             key={column.key}
                             draggable
                             onDragStart={(e) => handleDragStart(e, column.key)}
@@ -976,7 +976,7 @@ const ReconnectionLogs: React.FC = () => {
                     <tbody>
                       {paginatedRecords.length > 0 ? (
                         paginatedRecords.map((record: ReconnectionLogRecord) => (
-                          <tr
+                          <tr role="button" aria-label={`Open reconnection log ${record.id}`}
                             key={record.id}
                             className={`border-b cursor-pointer transition-colors ${isDarkMode
                               ? 'border-gray-800 hover:bg-gray-900'

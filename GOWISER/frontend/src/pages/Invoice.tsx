@@ -88,7 +88,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
       <div className={`flex flex-wrap items-center justify-center sm:justify-start gap-3 sm:gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
         <div className="flex items-center gap-2">
           <span>Show</span>
-          <select
+          <select aria-label="Rows per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -117,7 +117,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           <ChevronsLeft className="h-5 w-5" />
         </button>
 
-        <button
+        <button aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -134,7 +134,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           </span>
         </div>
 
-        <button
+        <button aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -162,7 +162,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
 };
 
 const Invoice: React.FC = () => {
-  const { invoiceRecords, totalCount, isLoading, error, fetchInvoiceRecords, refreshInvoiceRecords, silentRefresh, pollLatestUpdates } = useInvoiceStore();
+  const { invoiceRecords, totalCount, isLoading, error, fetchInvoiceRecords, refreshInvoiceRecords, silentRefresh, pollLatestUpdates, removeInvoiceRecord } = useInvoiceStore();
   const isFullyLoaded = totalCount === 0 || invoiceRecords.length >= totalCount;
   const [isRefreshingManual, setIsRefreshingManual] = useState<boolean>(false);
   const [hasNewData, setHasNewData] = useState<boolean>(false);
@@ -1174,7 +1174,7 @@ const Invoice: React.FC = () => {
             <div className={`px-4 py-3 border-b space-y-3 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
               <div className="flex items-center justify-between">
                 <div className="relative group">
-                  <select
+                  <select aria-label="Date range type"
                     value={dateRangeType}
                     onChange={(e) => setDateRangeType(e.target.value as 'invoice' | 'due')}
                     className={`appearance-none bg-transparent border-none p-0 pr-4 text-[10px] font-bold uppercase tracking-wider cursor-pointer focus:outline-none transition-colors ${
@@ -1206,8 +1206,8 @@ const Invoice: React.FC = () => {
               </div>
               <div className="space-y-2">
                 <div className="relative">
-                  <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                  <input
+                  <label htmlFor="invoice-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                  <input id="invoice-from"
                     type="date"
                     value={invoiceDateFrom}
                     onChange={(e) => setInvoiceDateFrom(e.target.value)}
@@ -1219,8 +1219,8 @@ const Invoice: React.FC = () => {
                   />
                 </div>
                 <div className="relative">
-                  <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                  <input
+                  <label htmlFor="invoice-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                  <input id="invoice-to"
                     type="date"
                     value={invoiceDateTo}
                     onChange={(e) => setInvoiceDateTo(e.target.value)}
@@ -1292,7 +1292,7 @@ const Invoice: React.FC = () => {
               {isDateDropdownOpen && (
                 <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                   {dateItems.dates.map((item, index) => (
-                    <button
+                    <button aria-label={`Select ${item.date}`}
                       key={index}
                       onClick={() => setSelectedDate(item.date)}
                       className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1472,7 +1472,7 @@ const Invoice: React.FC = () => {
                               : 'hover:bg-gray-100 text-gray-900'
                               }`}
                           >
-                            <input
+                            <input aria-label={`Show ${column.label}`}
                               type="checkbox"
                               checked={visibleColumns.includes(column.key)}
                               onChange={() => handleToggleColumn(column.key)}
@@ -1606,7 +1606,7 @@ const Invoice: React.FC = () => {
                     >
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
-                      <button
+                      <button aria-label="Close"
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -1682,7 +1682,7 @@ const Invoice: React.FC = () => {
                             : 'border-gray-200 bg-gray-100'
                             }`}>
                             {filteredColumns.map((column, index) => (
-                              <th
+                              <th role="button" aria-label={`Sort by ${column.label}`}
                                 key={column.key}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, column.key)}
@@ -1718,7 +1718,7 @@ const Invoice: React.FC = () => {
                         <tbody>
                           {paginatedRecords.length > 0 ? (
                             paginatedRecords.map((record) => (
-                              <tr
+                              <tr role="button" aria-label={`Open invoice ${record.id}`}
                                 key={record.id}
                                 className={`border-b transition-colors ${isDarkMode
                                   ? 'border-gray-800 hover:bg-gray-900'
@@ -1812,8 +1812,8 @@ const Invoice: React.FC = () => {
                 )}
 
                 <div className="mb-4">
-                  <label className="block font-bold mb-2">Payment Amount</label>
-                  <input
+                  <label htmlFor="invoice-payment-amount" className="block font-bold mb-2">Payment Amount</label>
+                  <input id="invoice-payment-amount"
                     type="number"
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
@@ -2009,6 +2009,10 @@ const Invoice: React.FC = () => {
             invoiceRecord={selectedRecord as any}
             onViewCustomer={handleViewCustomer}
             onClose={handleCloseDetails}
+            onDeleteSuccess={() => {
+              removeInvoiceRecord(selectedRecord.id);
+              handleCloseDetails();
+            }}
             onPrevious={currentInvoiceIndex > 0 ? handlePreviousRecord : undefined}
             onNext={currentInvoiceIndex < filteredRecords.length - 1 ? handleNextRecord : undefined}
           />

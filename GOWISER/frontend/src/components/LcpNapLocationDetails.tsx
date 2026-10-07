@@ -426,13 +426,13 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
               <div className={`flex flex-col border-b pb-4 gap-2 ${isDarkMode ? "border-gray-800" : "border-gray-200"}`}>
                 <div className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>Reading Image:</div>
                 <div className="relative group">
-                  <img
+                  <img role="button" aria-label="Open reading image"
                     src={getDriveDirectUrl(location.reading_image_url)}
                     alt="Reading Image"
                     className="w-full h-auto max-h-64 object-cover rounded-lg border border-gray-300 dark:border-gray-700 shadow-sm transition-transform hover:scale-[1.01] cursor-pointer"
                     onClick={() => window.open(location.reading_image_url)}
                   />
-                  <button
+                  <button aria-label="Open reading image"
                     className="absolute top-2 right-2 p-1.5 bg-black bg-opacity-50 text-white rounded-full hover:bg-opacity-70 transition-all opacity-0 group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -450,13 +450,13 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
               <div className={`flex flex-col border-b pb-4 gap-2 ${isDarkMode ? "border-gray-800" : "border-gray-200"}`}>
                 <div className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>Image 1:</div>
                 <div className="relative group">
-                  <img
+                  <img role="button" aria-label="Open location image 1"
                     src={getDriveDirectUrl(location.image1_url)}
                     alt="Location Image 1"
                     className="w-full h-auto max-h-64 object-cover rounded-lg border border-gray-300 dark:border-gray-700 shadow-sm transition-transform hover:scale-[1.01] cursor-pointer"
                     onClick={() => window.open(location.image1_url)}
                   />
-                  <button
+                  <button aria-label="Open image1"
                     className="absolute top-2 right-2 p-1.5 bg-black bg-opacity-50 text-white rounded-full hover:bg-opacity-70 transition-all opacity-0 group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -474,13 +474,13 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
               <div className={`flex flex-col border-b pb-4 gap-2 ${isDarkMode ? "border-gray-800" : "border-gray-200"}`}>
                 <div className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>Image 2:</div>
                 <div className="relative group">
-                  <img
+                  <img role="button" aria-label="Open location image 2"
                     src={getDriveDirectUrl(location.image2_url)}
                     alt="Location Image 2"
                     className="w-full h-auto max-h-64 object-cover rounded-lg border border-gray-300 dark:border-gray-700 shadow-sm transition-transform hover:scale-[1.01] cursor-pointer"
                     onClick={() => window.open(location.image2_url)}
                   />
-                  <button
+                  <button aria-label="Open image2"
                     className="absolute top-2 right-2 p-1.5 bg-black bg-opacity-50 text-white rounded-full hover:bg-opacity-70 transition-all opacity-0 group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -596,7 +596,7 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
                       </thead>
                       <tbody className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-200'}`}>
                         {relatedCustomers.slice((customerPage - 1) * 5, customerPage * 5).map((customer, idx) => (
-                          <tr
+                          <tr aria-label={`Open customer ${customer.account_no}`} role="button"
                             key={idx}
                             className={`cursor-pointer transition-all ${isDarkMode ? "hover:bg-gray-800" : "hover:bg-gray-100"} shadow-sm`}
                             onClick={() => handleCustomerClick(customer.account_no)}
@@ -684,7 +684,7 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
       {/* Overlays */}
       {selectedCustomerRecord && (
         <div className="absolute inset-0 z-[100] animate-in slide-in-from-right duration-300 flex">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => setSelectedCustomerRecord(null)} />
+          <div role="button" aria-label="Close" className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => setSelectedCustomerRecord(null)} />
           <div className="relative h-full flex ml-auto shadow-2xl border-l border-white/20">
             <Suspense fallback={
               <div className={`w-[600px] h-full flex items-center justify-center ${isDarkMode ? 'bg-gray-950' : 'bg-white'}`}>

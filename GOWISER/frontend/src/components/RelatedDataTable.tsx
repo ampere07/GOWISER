@@ -122,7 +122,7 @@ const RelatedDataTable: React.FC<RelatedDataTableProps> = ({
         </thead>
         <tbody className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-200'}`}>
           {data.map((row: any, index: number) => (
-            <tr
+            <tr role="button" aria-label={`Open ${row[columns[0]?.key]}`}
               key={index}
               className={`transition-colors ${
                 isDarkMode 

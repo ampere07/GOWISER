@@ -369,7 +369,7 @@ const LcpList: React.FC = () => {
                       return !item.organization_id;
                     }
                   }).map((item) => (
-                    <div
+                    <div role="button" aria-label={`Open ${item.lcp_name}`}
                       key={item.id}
                       onClick={(e) => handleEdit(item, e)}
                       className={`px-4 py-3 cursor-pointer transition-all duration-200 border-b flex items-center justify-between group ${isDarkMode
@@ -441,7 +441,7 @@ const LcpList: React.FC = () => {
                 <div className={`flex items-center gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                   <div className="flex items-center gap-2">
                     <span>Show</span>
-                    <select
+                    <select aria-label="Rows per page"
                       value={itemsPerPage}
                       onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                       className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -472,7 +472,7 @@ const LcpList: React.FC = () => {
                     <ChevronsLeft size={16} />
                   </button>
 
-                  <button
+                  <button aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -489,7 +489,7 @@ const LcpList: React.FC = () => {
                     </span>
                   </div>
 
-                  <button
+                  <button aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages

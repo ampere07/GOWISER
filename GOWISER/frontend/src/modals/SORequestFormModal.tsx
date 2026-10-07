@@ -444,11 +444,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
 
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-ticket-id" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Ticket ID<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-ticket-id"
                 type="text"
                 value={formData.ticketId}
                 readOnly
@@ -458,11 +458,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-account-no" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Account No.<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-account-no"
                 type="text"
                 value={formData.accountNo}
                 readOnly
@@ -474,11 +474,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-date-installed" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Date Installed<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-date-installed"
                 type="date"
                 value={formData.dateInstalled}
                 readOnly
@@ -490,11 +490,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-full-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Full Name<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-full-name"
                 type="text"
                 value={formData.fullName}
                 onChange={(e) => handleInputChange('fullName', e.target.value)}
@@ -507,11 +507,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Contact Number<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-contact-number"
                 type="text"
                 value={formData.contactNumber}
                 readOnly
@@ -537,11 +537,11 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
 
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-username" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Username<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sorequestformmodal-username"
                 type="text"
                 value={formData.username}
                 readOnly
@@ -553,12 +553,12 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="sorequestformmodal-concern" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Concern<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="sorequestformmodal-concern"
                   value={formData.concern}
                   onChange={(e) => handleInputChange('concern', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-red-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'

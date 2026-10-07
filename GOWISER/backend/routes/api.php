@@ -429,6 +429,7 @@ Route::prefix('statement-of-accounts')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/by-account/{accountNo}', [RelatedDataController::class , 'getInvoicesByAccount']);
     Route::get('/{id}', [RelatedDataController::class , 'getInvoiceById']);
+    Route::delete('/{id}', [\App\Http\Controllers\InvoiceController::class , 'destroy'])->whereNumber('id')->middleware('auth:sanctum');
 });
 
 // Payment Portal Logs Routes
@@ -3591,6 +3592,7 @@ Route::prefix('payments')->group(function () {
     // Read-only: amount a prepaid onboarding bill would come to under a different plan.
     Route::post('/quote-plan-change', [\App\Http\Controllers\Api\XenditPaymentController::class , 'quotePlanChange']);
     Route::post('/account-balance', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAccountBalance']);
+    Route::post('/available-discount', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAvailableDiscount']);
     Route::post('/cancel', [\App\Http\Controllers\Api\XenditPaymentController::class , 'cancelPayment']);
     // Read-only: the convenience fee rate, so a payment screen can disclose it before checkout.
     Route::get('/convenience-fee', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getConvenienceFee']);

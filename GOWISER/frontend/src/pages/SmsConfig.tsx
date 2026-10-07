@@ -330,7 +330,7 @@ const SmsConfig: React.FC = () => {
                         <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                           Provider
                         </label>
-                        <select
+                        <select aria-label="Provider"
                           value={formData.provider}
                           onChange={(e) => handleInputChange('provider', e.target.value)}
                           className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
@@ -644,10 +644,10 @@ const SmsConfig: React.FC = () => {
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      <label htmlFor="smsconfig-provider" className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                         Provider
                       </label>
-                      <select
+                      <select id="smsconfig-provider"
                         value={formData.provider}
                         onChange={(e) => handleInputChange('provider', e.target.value)}
                         className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode

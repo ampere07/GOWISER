@@ -449,7 +449,7 @@ const GroupManagement: React.FC = () => {
                   </div>
                   <div className="flex items-center justify-center gap-2">
                     <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Show</span>
-                    <select
+                    <select aria-label="Rows per page"
                       value={itemsPerPage}
                       onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                       className={`px-3 py-1 border rounded text-sm focus:outline-none ${isDarkMode
@@ -503,7 +503,7 @@ const GroupManagement: React.FC = () => {
                             {showEllipsis && (
                               <span className={`px-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>...</span>
                             )}
-                            <button
+                            <button aria-label={`Page ${page}`}
                               onClick={() => handlePageChange(page)}
                               className={`px-3 py-1 text-sm border rounded ${currentPage === page
                                 ? 'text-white'

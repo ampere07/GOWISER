@@ -24,7 +24,7 @@ const PaymentResultModal: React.FC<PaymentResultModalProps> = ({
         isDarkMode ? 'bg-gray-800 text-gray-100' : 'bg-white text-gray-900'
       } rounded-lg shadow-xl max-w-md w-full p-6 relative`}>
         {/* Close button */}
-        <button
+        <button aria-label="Close"
           onClick={onClose}
           className={`absolute top-4 right-4 ${
             isDarkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'

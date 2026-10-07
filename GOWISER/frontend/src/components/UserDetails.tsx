@@ -744,7 +744,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({
                           onDragEnd={handleDragEnd}
                           className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-move transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draggedIndex === index ? (isDarkMode ? 'bg-gray-600' : 'bg-gray-200') : ''}`}
                         >
-                          <input
+                          <input aria-label={`Show ${getFieldLabel(fieldKey)}`}
                             type="checkbox"
                             checked={fieldVisibility[fieldKey]}
                             onChange={() => toggleFieldVisibility(fieldKey)}

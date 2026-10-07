@@ -391,8 +391,8 @@ const BonusPayoutForm: React.FC<{
 
                 {/* Transaction Type Selector */}
                 <div>
-                    <label className={labelClass}>Transaction Type <span className="text-red-500">*</span></label>
-                    <select
+                    <label htmlFor="bonuspayoutmodal-transaction-type" className={labelClass}>Transaction Type <span className="text-red-500">*</span></label>
+                    <select id="bonuspayoutmodal-transaction-type"
                         value={BonusType}
                         onChange={(e) => {
                             const newType = e.target.value as 'Bonus' | 'Bonus_payout';
@@ -456,15 +456,15 @@ const BonusPayoutForm: React.FC<{
 
                 {/* Proof — Image Upload */}
                 <div>
-                    <label className={labelClass}>Proof <span className="text-red-500">*</span></label>
-                    <div
+                    <label htmlFor="bonuspayoutmodal-proof" className={labelClass}>Proof <span className="text-red-500">*</span></label>
+                    <div role="button"
                         className={`relative w-full border-2 border-dashed rounded-lg overflow-hidden cursor-pointer transition-colors ${isDarkMode
                             ? 'border-gray-700 bg-gray-800 hover:border-gray-500'
                             : 'border-gray-300 bg-gray-50 hover:border-gray-400'
                             } ${imagePreview ? 'h-auto' : 'h-40'}`}
                         onClick={() => fileInputRef.current?.click()}
                     >
-                        <input
+                        <input id="bonuspayoutmodal-proof"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

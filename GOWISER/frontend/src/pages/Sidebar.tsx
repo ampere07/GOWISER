@@ -501,7 +501,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
             const badgeCount = badgeFor(item);
             return (
               <div key={item.id} className="relative group">
-                <button
+                <button aria-label={`Open ${item.label}`}
                   onClick={() => onSectionChange(item.id)}
                   onMouseEnter={e => {
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -557,7 +557,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
           className={`px-0 pt-3 pb-3 border-t flex-shrink-0 flex justify-center ${isDarkMode ? 'border-gray-600' : 'border-gray-300'}`}
           style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
         >
-          <button
+          <button aria-label="Log out"
             onClick={onLogout}
             onMouseEnter={e => {
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -604,6 +604,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
               onSectionChange(item.id);
             }
           }}
+          aria-label={hasChildren ? `${item.label} menu` : `Open ${item.label}`}
           className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${level > 0 ? 'pl-8' : 'pl-4'
             } ${isCurrentItemActive
               ? ''

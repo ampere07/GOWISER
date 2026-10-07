@@ -314,7 +314,7 @@ const WorkCategoryList: React.FC = () => {
 
   const renderListItem = (wc: WorkCategory) => {
     return (
-      <div 
+      <div role="button" aria-label={`Open ${wc.id}`} 
         key={wc.id} 
         onClick={() => handleEdit(wc)}
         className={`group px-4 py-3 flex items-center justify-between cursor-pointer transition-all duration-200 border-b border-gray-800/10 dark:divide-white/5 ${isDarkMode 
@@ -335,7 +335,7 @@ const WorkCategoryList: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           {actions.canEdit && (
-          <button
+          <button aria-label="Edit work category"
             onClick={(e) => { e.stopPropagation(); handleEdit(wc); }}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-800'
@@ -346,7 +346,7 @@ const WorkCategoryList: React.FC = () => {
           </button>
           )}
           {actions.canDelete && (
-          <button
+          <button aria-label="Delete work category"
             onClick={(e) => { e.stopPropagation(); handleDelete(wc); }}
             disabled={deletingItems.has(wc.id)}
             className={`p-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
@@ -457,7 +457,7 @@ const WorkCategoryList: React.FC = () => {
           <div className={`flex items-center gap-4 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             <div className="flex items-center gap-2">
               <span>Show</span>
-              <select
+              <select aria-label="Rows per page"
                 value={itemsPerPage}
                 onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                 className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -488,7 +488,7 @@ const WorkCategoryList: React.FC = () => {
               <ChevronsLeft size={14} />
             </button>
 
-            <button
+            <button aria-label="Previous page"
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -505,7 +505,7 @@ const WorkCategoryList: React.FC = () => {
               </span>
             </div>
 
-            <button
+            <button aria-label="Next page"
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
               className={`p-1.5 rounded transition-colors ${currentPage === totalPages

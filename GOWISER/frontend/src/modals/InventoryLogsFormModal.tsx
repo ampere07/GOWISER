@@ -266,11 +266,11 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                     <div className="flex-1 overflow-y-auto p-8 space-y-6 scrollbar-none">
                         {/* Date */}
                         <div className="space-y-2">
-                            <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            <label htmlFor="inventorylogsformmodal-date" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                 Date
                             </label>
                             <div className="relative">
-                                <input
+                                <input id="inventorylogsformmodal-date"
                                     type="text"
                                     readOnly
                                     value={formData.date}
@@ -287,10 +287,10 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                         <div className="space-y-6">
                             {/* Item Name */}
                             <div className="space-y-2">
-                                <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <label htmlFor="inventorylogsformmodal-item-name" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                     Item Name
                                 </label>
-                                <input
+                                <input id="inventorylogsformmodal-item-name"
                                     type="text"
                                     readOnly
                                     value={formData.item_name}
@@ -337,25 +337,25 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
 
                             {/* Item Quantity */}
                             <div className="space-y-2">
-                                <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <label htmlFor="inventorylogsformmodal-item-quantity" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                     Item Quantity<span className="text-red-500 ml-0.5">*</span>
                                 </label>
                                 <div className={`flex items-center border rounded overflow-hidden ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                                     }`}>
-                                    <button
+                                    <button aria-label="Decrease quantity"
                                         onClick={() => handleQuantityChange('dec')}
                                         type="button"
                                         className={`px-3 py-2.5 transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
                                     >
                                         <Minus size={16} />
                                     </button>
-                                    <input
+                                    <input id="inventorylogsformmodal-item-quantity"
                                         type="number"
                                         value={formData.item_quantity}
                                         onChange={(e) => setFormData(prev => ({ ...prev, item_quantity: Math.max(1, parseInt(e.target.value) || 1) }))}
                                         className="flex-1 bg-transparent text-center border-none outline-none text-sm font-bold"
                                     />
-                                    <button
+                                    <button aria-label="Increase quantity"
                                         onClick={() => handleQuantityChange('inc')}
                                         type="button"
                                         className={`px-3 py-2.5 transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
@@ -368,10 +368,10 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
 
                         {/* Item Description */}
                         <div className="space-y-2">
-                            <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            <label htmlFor="inventorylogsformmodal-item-description" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                 Item Description
                             </label>
-                            <textarea
+                            <textarea id="inventorylogsformmodal-item-description"
                                 readOnly
                                 rows={2}
                                 value={formData.item_description}
@@ -387,11 +387,11 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                         <div className="space-y-6">
                             {/* Requested By */}
                             <div className="space-y-2">
-                                <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <label htmlFor="inventorylogsformmodal-requested-by" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                     Requested By<span className="text-red-500 ml-0.5">*</span>
                                 </label>
                                 <div className="relative">
-                                    <select
+                                    <select id="inventorylogsformmodal-requested-by"
                                         value={formData.requested_by}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_by: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode
@@ -412,11 +412,11 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
 
                             {/* Requested With (1) */}
                             <div className="space-y-2">
-                                <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <label htmlFor="inventorylogsformmodal-requested-with" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                     Requested With<span className="text-red-500 ml-0.5">*</span>
                                 </label>
                                 <div className="relative">
-                                    <select
+                                    <select id="inventorylogsformmodal-requested-with"
                                         value={formData.requested_with}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_with: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode
@@ -437,11 +437,11 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
 
                             {/* Requested With (2/10) */}
                             <div className="space-y-2">
-                                <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <label htmlFor="inventorylogsformmodal-requested-with-addl" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                     Requested With (Addl)<span className="text-red-500 ml-0.5">*</span>
                                 </label>
                                 <div className="relative">
-                                    <select
+                                    <select id="inventorylogsformmodal-requested-with-addl"
                                         value={formData.requested_with_10}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_with_10: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode

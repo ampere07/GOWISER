@@ -317,11 +317,11 @@ const EditGroupForm: React.FC<EditGroupFormProps> = ({ group, onCancel, onGroupU
               </div>
 
               <div className="md:col-span-2">
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="editgroupform-organization-optional" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Organization (Optional)
                 </label>
-                <select
+                <select id="editgroupform-organization-optional"
                   name="org_id"
                   value={formData.org_id || ''}
                   onChange={handleInputChange}

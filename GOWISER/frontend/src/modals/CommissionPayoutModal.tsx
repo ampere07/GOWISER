@@ -447,8 +447,8 @@ const CommissionPayoutForm: React.FC<{
                 {/* Date Range Filter */}
                 <div className="flex gap-4">
                     <div className="flex-1">
-                        <label className={labelClass}>Start Date</label>
-                        <input
+                        <label htmlFor="commissionpayoutmodal-start-date" className={labelClass}>Start Date</label>
+                        <input id="commissionpayoutmodal-start-date"
                             type="date"
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
@@ -456,8 +456,8 @@ const CommissionPayoutForm: React.FC<{
                         />
                     </div>
                     <div className="flex-1">
-                        <label className={labelClass}>End Date</label>
-                        <input
+                        <label htmlFor="commissionpayoutmodal-end-date" className={labelClass}>End Date</label>
+                        <input id="commissionpayoutmodal-end-date"
                             type="date"
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
@@ -569,15 +569,15 @@ const CommissionPayoutForm: React.FC<{
 
                 {/* Proof of Payment — Image Upload */}
                 <div>
-                    <label className={labelClass}>Proof of Payment <span className="text-red-500">*</span></label>
-                    <div
+                    <label htmlFor="commissionpayoutmodal-proof-of-payment" className={labelClass}>Proof of Payment <span className="text-red-500">*</span></label>
+                    <div role="button"
                         className={`relative w-full border-2 border-dashed rounded-lg overflow-hidden cursor-pointer transition-colors ${isDarkMode
                             ? 'border-gray-700 bg-gray-800 hover:border-gray-500'
                             : 'border-gray-300 bg-gray-50 hover:border-gray-400'
                             } ${imagePreview ? 'h-auto' : 'h-40'}`}
                         onClick={() => fileInputRef.current?.click()}
                     >
-                        <input
+                        <input id="commissionpayoutmodal-proof-of-payment"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

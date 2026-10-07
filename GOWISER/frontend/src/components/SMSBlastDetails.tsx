@@ -207,7 +207,7 @@ const SMSBlastDetails: React.FC<SMSBlastDetailsProps> = ({
 
 
 
-            <button
+            <button aria-label="Close"
               onClick={onClose}
               className={`p-1 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'

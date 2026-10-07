@@ -348,7 +348,7 @@ const InventoryDetails: React.FC<InventoryDetailsProps> = ({
                 {expandedModalSection === 'defectiveLogs' && defectiveLogsCount} items
               </span>
             </div>
-            <button
+            <button aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -408,7 +408,7 @@ const InventoryDetails: React.FC<InventoryDetailsProps> = ({
           {item.category || 'EVENT'} | {item.item_name} | ID: {item.item_id}
         </h1>
         <div className="flex items-center space-x-2 flex-shrink-0">
-          <button
+          <button aria-label="Edit inventory item"
             onClick={handleEdit}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -448,7 +448,7 @@ const InventoryDetails: React.FC<InventoryDetailsProps> = ({
               <Settings size={18} />
             </button>
           </div>
-          <button
+          <button aria-label="Close"
             onClick={handleClose}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -468,7 +468,7 @@ const InventoryDetails: React.FC<InventoryDetailsProps> = ({
           : 'bg-gray-100 border-gray-200'
           }`}>
           {item.image ? (
-            <img
+            <img role="button" aria-label={`Open ${item.item_name}`}
               src={getDriveDirectUrl(item.image)}
               alt={item.item_name}
               className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"

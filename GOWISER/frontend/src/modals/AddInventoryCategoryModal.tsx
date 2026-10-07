@@ -155,7 +155,7 @@ const AddInventoryCategoryModal: React.FC<AddInventoryCategoryModalProps> = ({
           <div className={`px-6 py-4 flex items-center justify-between ${isDarkMode ? 'bg-gray-900' : 'bg-gray-100'
             }`}>
             <div className="flex items-center space-x-4">
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 disabled={loading}
                 className={`transition-colors disabled:cursor-not-allowed ${isDarkMode
@@ -242,12 +242,12 @@ const AddInventoryCategoryModal: React.FC<AddInventoryCategoryModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="addinventorycategorymodal-modified-date" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Modified Date
               </label>
               <div className="relative">
-                <input
+                <input id="addinventorycategorymodal-modified-date"
                   type="text"
                   value={modifiedDate}
                   readOnly

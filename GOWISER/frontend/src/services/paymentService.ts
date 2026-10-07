@@ -138,6 +138,34 @@ export const paymentService = {
    * Returns 0 on any failure so a payment screen never blocks on it — the server computes the
    * real charge at checkout regardless of what was disclosed here.
    */
+  getDiscountsOnFile: async (accountNo: string): Promise<number> => {
+    try {
+      const authData = localStorage.getItem('authData');
+      let token = '';
+
+      if (authData) {
+        token = JSON.parse(authData).token || '';
+      }
+
+      const response = await axios.post<{ status: string; discounts_only?: number }>(
+        `${API_BASE_URL}/payments/available-discount`,
+        { account_no: accountNo },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
+          withCredentials: true,
+        }
+      );
+
+      return Number(response.data.discounts_only) || 0;
+    } catch (error: any) {
+      console.error('Get discounts on file error:', error.response?.data || error.message);
+      return 0;
+    }
+  },
+
   getConvenienceFeePercentage: async (): Promise<number> => {
     try {
       const authData = localStorage.getItem('authData');

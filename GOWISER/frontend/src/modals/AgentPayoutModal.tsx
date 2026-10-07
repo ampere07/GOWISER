@@ -562,8 +562,8 @@ const AgentPayoutForm: React.FC<{
                 {/* Payout Type — not asked for on an invoice payout. */}
                 {!fromInvoice && (
                 <div>
-                    <label className={labelClass}>Payout Type <span className="text-red-500">*</span></label>
-                    <select
+                    <label htmlFor="agentpayoutmodal-payout-type" className={labelClass}>Payout Type <span className="text-red-500">*</span></label>
+                    <select id="agentpayoutmodal-payout-type"
                         name="payout_type"
                         value={formData.payout_type}
                         onChange={handleInputChange}
@@ -629,15 +629,15 @@ const AgentPayoutForm: React.FC<{
                 {/* Proof — not asked for on an invoice payout. */}
                 {!fromInvoice && (
                 <div>
-                    <label className={labelClass}>Proof <span className="text-red-500">*</span></label>
-                    <div
+                    <label htmlFor="agentpayoutmodal-proof" className={labelClass}>Proof <span className="text-red-500">*</span></label>
+                    <div role="button"
                         className={`relative w-full border-2 border-dashed rounded-lg overflow-hidden cursor-pointer transition-colors ${isDarkMode
                             ? 'border-gray-700 bg-gray-800 hover:border-gray-500'
                             : 'border-gray-300 bg-gray-50 hover:border-gray-400'
                             } ${imagePreview ? 'h-auto' : 'h-40'}`}
                         onClick={() => fileInputRef.current?.click()}
                     >
-                        <input
+                        <input id="agentpayoutmodal-proof"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

@@ -409,11 +409,11 @@ const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({
       return (
         <div className="space-y-4">
           <div>
-            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+            <label htmlFor="applicationfunnelfilter-from" className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
               From
             </label>
-            <input
+            <input id="applicationfunnelfilter-from"
               type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
               value={currentValue?.from || ''}
               onChange={(e) => handleDateChange(selectedColumn.key, 'from', e.target.value)}
@@ -424,11 +424,11 @@ const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({
             />
           </div>
           <div>
-            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+            <label htmlFor="applicationfunnelfilter-to" className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
               To
             </label>
-            <input
+            <input id="applicationfunnelfilter-to"
               type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
               value={currentValue?.to || ''}
               onChange={(e) => handleDateChange(selectedColumn.key, 'to', e.target.value)}
@@ -467,7 +467,7 @@ const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({
   return (
     <div className="fixed inset-0 z-50 overflow-hidden text-left">
       <div className="absolute inset-0 overflow-hidden">
-        <div
+        <div role="button" aria-label="Close"
           className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
           onClick={onClose}
         />
@@ -480,7 +480,7 @@ const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({
               }`}>
               <div className="flex items-center space-x-4">
                 {selectedColumn && (
-                  <button
+                  <button aria-label="Back"
                     onClick={handleBack}
                     className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       }`}
@@ -499,7 +499,7 @@ const ApplicationFunnelFilter: React.FC<ApplicationFunnelFilterProps> = ({
                   )}
                 </div>
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={onClose}
                 className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   }`}

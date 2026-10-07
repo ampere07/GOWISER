@@ -370,7 +370,7 @@ const NapList: React.FC = () => {
                       return !item.organization_id;
                     }
                   }).map((item) => (
-                    <div
+                    <div role="button" aria-label={`Open ${item.id}`}
                       key={item.id}
                       onClick={(e) => handleEdit(item, e)}
                       className={`px-4 py-3 cursor-pointer transition-all duration-200 border-b flex items-center justify-between group ${isDarkMode
@@ -391,7 +391,7 @@ const NapList: React.FC = () => {
                       </div>
                       <div className="flex items-center space-x-2 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                         {actions.canEdit && (
-                        <button
+                        <button aria-label="Edit"
                           onClick={(e) => handleEdit(item, e)}
                           className={`p-2 rounded transition-colors ${isDarkMode
                             ? 'text-gray-400 hover:text-white hover:bg-gray-800'
@@ -402,7 +402,7 @@ const NapList: React.FC = () => {
                         </button>
                         )}
                         {actions.canDelete && (
-                        <button
+                        <button aria-label="Delete NAP"
                           onClick={(e) => handleDelete(item, e)}
                           disabled={deletingItems.has(item.id)}
                           className={`p-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
@@ -439,7 +439,7 @@ const NapList: React.FC = () => {
                 <div className={`flex items-center gap-4 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                   <div className="flex items-center gap-2">
                     <span>Show</span>
-                    <select
+                    <select aria-label="Rows per page"
                       value={itemsPerPage}
                       onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                       className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -470,7 +470,7 @@ const NapList: React.FC = () => {
                     <ChevronsLeft size={14} />
                   </button>
 
-                  <button
+                  <button aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -487,7 +487,7 @@ const NapList: React.FC = () => {
                     </span>
                   </div>
 
-                  <button
+                  <button aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className={`p-1.5 rounded transition-colors ${currentPage === totalPages

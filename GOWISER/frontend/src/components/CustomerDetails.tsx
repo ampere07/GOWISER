@@ -2037,13 +2037,13 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                       }).map(([sectionKey, sectionLabel]) => (
                         <div key={sectionKey} className={`mb-2 border rounded ${isDarkMode ? 'border-gray-700' : 'border-gray-200'
                           }`}>
-                          <div
+                          <div role="button"
                             className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'
                               }`}
                             onClick={() => toggleSectionExpansion(sectionKey)}
                           >
                             <div className="flex items-center space-x-2">
-                              <input
+                              <input aria-label={`Show ${sectionLabel}`}
                                 type="checkbox"
                                 checked={columnVisibility[sectionKey]}
                                 onChange={(e) => {
@@ -2099,7 +2099,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                   </div>
                 )}
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 className={`p-2 rounded transition-colors ${isDarkMode
                   ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -2569,7 +2569,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               </div>
             </div>
 
-            <button
+            <button aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded-full transition-colors ${
                 isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'
@@ -2670,7 +2670,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               // user-initiated anchors alone, and it keeps the browser's own affordances —
               // middle-click, ctrl/cmd-click, "Open in new window", copy link address — which a
               // click handler would swallow. rel guards the opener against the target page.
-              <a
+              <a aria-label={`Open ${scheme}`}
                 key={scheme}
                 role="menuitem"
                 href={url}

@@ -316,6 +316,24 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         return () => { cancelled = true; };
     }, [isPrepaid]);
 
+    const [postpaidDiscountsOnFile, setPostpaidDiscountsOnFile] = useState<number>(0);
+    const billingAccountNo = customerDetail?.billingAccount?.accountNo;
+    useEffect(() => {
+        setPostpaidDiscountsOnFile(0);
+        if (!billingAccountNo || isPrepaid) return;
+        let cancelled = false;
+        paymentService.getDiscountsOnFile(billingAccountNo).then(amount => {
+            if (!cancelled) setPostpaidDiscountsOnFile(amount);
+        });
+        return () => { cancelled = true; };
+    }, [billingAccountNo, isPrepaid, invoiceRecords]);
+
+    const latestBillDiscount = Math.round(
+        (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
+    ) / 100;
+    const formatCentavoPeso = (value: number) =>
+        `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
     // Format a stored date string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or ISO) to
     // MM/DD/YYYY by reading the parts directly — avoids the timezone shift that
     // `new Date(...)` can introduce (which turned 07/17 into 08/17, etc.).
@@ -902,6 +920,16 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                         </Pressable>
                                     </View>
                                 </View>
+                                {!isPrepaid && latestBillDiscount > 0 && (
+                                    <Text allowFontScaling={false} style={styles.cardDiscountText}>
+                                        Latest bill: {formatCentavoPeso(latestBillDiscount)} discount / rebate applied
+                                    </Text>
+                                )}
+                                {!isPrepaid && postpaidDiscountsOnFile > 0 && (
+                                    <Text allowFontScaling={false} style={styles.cardDiscountText}>
+                                        {formatCentavoPeso(postpaidDiscountsOnFile)} discount on file — comes off your next bill
+                                    </Text>
+                                )}
                                 </View>
                             ) : (
                                 <View style={{ gap: 16, minHeight: isShort ? 80 : 90, justifyContent: 'center' }}>
@@ -1501,7 +1529,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 onRequestClose={() => setShowSuccessModal(false)}
             >
                 <View style={styles.modalOverlayDark}>
-                    <Pressable accessibilityRole="button" style={styles.modalBackdrop} onPress={() => setShowSuccessModal(false)} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Close" style={styles.modalBackdrop} onPress={() => setShowSuccessModal(false)} />
                     <Animated.View style={[styles.modalSheet30, { transform: [{ translateY: pan.y }] }]}>
                         <View {...panResponder.panHandlers} style={styles.modalHeader}>
                             <View style={styles.modalHandleSm} />
@@ -1535,7 +1563,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 onRequestClose={() => setShowEmailErrorModal(false)}
             >
                 <View style={styles.modalOverlayDark}>
-                    <Pressable accessibilityRole="button" style={styles.modalBackdrop} onPress={() => setShowEmailErrorModal(false)} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Close" style={styles.modalBackdrop} onPress={() => setShowEmailErrorModal(false)} />
                     <Animated.View style={[styles.modalSheet30, { transform: [{ translateY: pan.y }] }]}>
                         <View {...panResponder.panHandlers} style={styles.modalHeader}>
                             <View style={styles.modalHandleSm} />
@@ -1585,6 +1613,7 @@ const styles = StyleSheet.create({
     // Prepaid remaining-days line under the expiry, on the dark billing card.
     daysLeftText: { color: '#d1d5db', fontSize: 11, marginTop: 2 },
     daysLeftUrgent: { color: '#fca5a5', fontWeight: 'bold' },
+    cardDiscountText: { color: '#d1d5db', fontSize: 12, marginTop: 8 },
     payBtn: { borderWidth: 1, borderColor: '#ffffff', paddingHorizontal: 32, paddingVertical: 10, borderRadius: 12 },
     payBtnInner: { alignItems: 'center' },
     payBtnText: { color: '#ffffff', fontWeight: 'bold', textAlign: 'center' },

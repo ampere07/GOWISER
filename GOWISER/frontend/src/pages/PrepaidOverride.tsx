@@ -293,7 +293,7 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
                 <div className={`flex items-center gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                     <div className="flex items-center gap-2">
                         <span>Show</span>
-                        <select
+                        <select aria-label="Rows per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -373,7 +373,7 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
                                             placeholder="Search override requests..."
                                         />
                                     </div>
-                                    <select
+                                    <select aria-label="Status"
                                         value={statusFilter}
                                         onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
                                         className={`px-3 py-2 rounded-lg border text-sm focus:outline-none flex-shrink-0 capitalize ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -431,7 +431,7 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
                                 {paginated.map((row) => {
                                     const days = Number(row.days_adjustment || 0);
                                     return (
-                                        <div
+                                        <div role="button" aria-label={`Open ${row.id}`}
                                             key={row.id}
                                             onClick={() => handleRowClick(row)}
                                             className={`flex items-start px-4 py-3 cursor-pointer transition-colors border-b ${

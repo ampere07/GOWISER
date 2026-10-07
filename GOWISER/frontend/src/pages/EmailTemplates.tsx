@@ -546,7 +546,7 @@ const EmailTemplates: React.FC = () => {
             </div>
           ) : (
             templates.map((template) => (
-              <div
+              <div role="button" aria-label={`Select ${template.Template_Code}`}
                 key={template.Template_Code}
                 onClick={() => handleTemplateSelect(template)}
                 className={`p-3 mb-2 rounded cursor-pointer transition-colors ${selectedTemplate?.Template_Code === template.Template_Code
@@ -818,7 +818,7 @@ const EmailTemplates: React.FC = () => {
               <div className="flex-1">
                 {isCreating || isEditing ? (
                   <div className="space-y-2">
-                    <select
+                    <select aria-label="Template"
                       value={formData.Template_Code}
                       onChange={(e) => handleInputChange('Template_Code', e.target.value)}
                       className={`w-full px-3 py-2 text-sm border rounded ${isDarkMode
@@ -1605,7 +1605,7 @@ const EmailTemplates: React.FC = () => {
               <h3 className="text-sm font-semibold uppercase tracking-wider">
                 {borderModal.side} Border
               </h3>
-              <button
+              <button aria-label="Close"
                 onClick={() => setBorderModal(null)}
                 className={`p-1 rounded-full hover:bg-opacity-10 ${isDarkMode ? 'hover:bg-white' : 'hover:bg-black'}`}
               >
@@ -1618,8 +1618,8 @@ const EmailTemplates: React.FC = () => {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium mb-1 opacity-70">Style (Pattern)</label>
-                <select
+                <label htmlFor="emailtemplates-style-pattern" className="block text-xs font-medium mb-1 opacity-70">Style (Pattern)</label>
+                <select id="emailtemplates-style-pattern"
                   value={borderModal.style}
                   onChange={(e) => setBorderModal({ ...borderModal, style: e.target.value })}
                   className={`w-full px-2 py-1.5 text-sm border rounded ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'}`}
@@ -1633,9 +1633,9 @@ const EmailTemplates: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-medium mb-1 opacity-70">Color</label>
+                <label htmlFor="emailtemplates-color" className="block text-xs font-medium mb-1 opacity-70">Color</label>
                 <div className="flex gap-2">
-                  <input
+                  <input id="emailtemplates-color"
                     type="color"
                     value={borderModal.color.startsWith('#') ? borderModal.color : '#000000'}
                     onChange={(e) => setBorderModal({ ...borderModal, color: e.target.value })}
@@ -1652,9 +1652,9 @@ const EmailTemplates: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-medium mb-1 opacity-70">Width</label>
+                <label htmlFor="emailtemplates-width" className="block text-xs font-medium mb-1 opacity-70">Width</label>
                 <div className="flex items-center gap-2">
-                  <input
+                  <input id="emailtemplates-width"
                     type="range"
                     min="0"
                     max="10"

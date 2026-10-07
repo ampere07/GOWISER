@@ -103,12 +103,12 @@ apiClient.interceptors.request.use(
     }
 
     // Manually attach cookies in React Native since there's no browser to do it automatically
-    if (cookieStore) {
+    if (cookieStore && Platform.OS !== 'web') {
       config.headers.Cookie = cookieStore;
     }
 
     // Set Origin to ensure Sanctum triggers stateful middleware if needed
-    if (!config.headers.Origin && !config.headers.origin && API_BASE_URL) {
+    if (Platform.OS !== 'web' && !config.headers.Origin && !config.headers.origin && API_BASE_URL) {
       try {
         const url = new URL(API_BASE_URL);
         config.headers.Origin = url.origin;

@@ -463,7 +463,7 @@ const MonthlyPayables: React.FC = () => {
                   </button>
                 </div>
 
-                <select
+                <select aria-label="Status"
                   value={statusFilter}
                   onChange={(e) => changeStatus(e.target.value as PayableStatus | '')}
                   className={controlClass}
@@ -476,7 +476,7 @@ const MonthlyPayables: React.FC = () => {
                   ))}
                 </select>
 
-                <select
+                <select aria-label="Category"
                   value={categoryFilter}
                   onChange={(e) => changeCategory(e.target.value ? Number(e.target.value) : '')}
                   className={controlClass}

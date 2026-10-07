@@ -166,7 +166,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
         <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 text-xs">
           <div className="flex items-center gap-2">
             <span>Show</span>
-            <select
+            <select aria-label="Rows per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -188,7 +188,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
   };
 
   return (
-    <div className={`h-full flex flex-col md:flex-row overflow-hidden pb-16 md:pb-0 ${isDarkMode ? 'bg-gray-950 text-white' : 'bg-gray-50 text-gray-900'}`}>
+    <div data-testid="user-management-screen" className={`h-full flex flex-col md:flex-row overflow-hidden pb-16 md:pb-0 ${isDarkMode ? 'bg-gray-950 text-white' : 'bg-gray-50 text-gray-900'}`}>
       {/* Users List Sidebar */}
       <div className={`flex-1 min-h-0 flex flex-col min-w-0 ${mobileView === 'details' ? 'hidden md:flex' : ''}`}>
         {/* Header */}
@@ -199,7 +199,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
               <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>{agentOnly ? 'Manage agent users' : 'Manage system users and permissions'}</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
+              <button aria-label="Refresh users"
                 onClick={() => refreshUsers()}
                 className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
               >
@@ -227,7 +227,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
               placeholder="Search name, username, email..."
             />
             {!agentOnly && (
-              <select
+              <select aria-label="User type"
                 value={userTypeFilter}
                 onChange={(e) => setUserTypeFilter(e.target.value as any)}
                 onFocus={() => setIsFilterFocused(true)}
@@ -264,7 +264,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
           ) : (
             <div className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-100'}`}>
               {paginatedUsers.map((user) => (
-                <div
+                <div role="button" aria-label={`Select ${user.id}`}
                   key={user.id}
                   onClick={() => { setSelectedUser(user); if (window.innerWidth < 768) setMobileView('details'); }}
                   className={`flex items-center p-4 cursor-pointer transition-all hover:pl-6 border-l-4 ${selectedUser?.id === user.id

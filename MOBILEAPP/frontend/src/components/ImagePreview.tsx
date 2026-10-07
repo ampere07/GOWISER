@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, Image, Alert, Modal, Platform } from 'react-native';
-import { Camera, X, Upload, Image as ImageIcon } from 'lucide-react-native';
+import { View, Text, Pressable, Image, Alert, Modal, Platform, Linking } from 'react-native';
+import { Camera, X, Upload, Image as ImageIcon, ExternalLink } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system';
 interface ImagePreviewProps {
     label: string;
     imageUrl?: string | null;
-    onUpload: (file: any) => void;
+    onUpload?: (file: any) => void;
     error?: string;
     isDarkMode?: boolean;
     colorPrimary?: string;
@@ -51,7 +51,7 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                 name: asset.fileName || 'upload.jpg',
                 type: (asset as any).mimeType || (asset.type === 'image' ? 'image/jpeg' : asset.type)
             };
-            onUpload(file);
+            onUpload?.(file);
             setModalVisible(false);
         }
     };
@@ -102,7 +102,7 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                 name: asset.fileName || 'photo.jpg',
                 type: (asset as any).mimeType || (asset.type === 'image' ? 'image/jpeg' : asset.type)
             };
-            onUpload(file);
+            onUpload?.(file);
             setModalVisible(false);
         }
     };
@@ -123,13 +123,13 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                             className="w-full h-full"
                             resizeMode="cover"
                         />
-                        <Pressable
+                        {onUpload && <Pressable
                             onPress={() => onUpload(null)}
                             className="absolute top-1 right-1 bg-black/60 rounded-full p-1"
                             hitSlop={8}
                         >
                             <X size={14} color="#ffffff" />
-                        </Pressable>
+                        </Pressable>}
                     </View>
                 ) : (
                     <View className={`w-24 h-24 rounded-lg border-2 border-dashed flex items-center justify-center ${error
@@ -141,7 +141,19 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                 )}
 
                 {/* Upload Button */}
-                <Pressable
+                {!onUpload ? (
+                    imageUrl ? (
+                        <Pressable
+                            onPress={() => Linking.openURL(imageUrl)}
+                            className={`flex-1 flex-row items-center justify-center py-3 px-4 rounded-lg border ${isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'}`}
+                        >
+                            <ExternalLink size={18} color={colorPrimary} />
+                            <Text className="ml-2 text-sm font-medium" style={{ color: colorPrimary }}>Open full image</Text>
+                        </Pressable>
+                    ) : (
+                        <Text className={`flex-1 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No photo submitted</Text>
+                    )
+                ) : <Pressable
                     onPress={() => setModalVisible(true)}
                     className={`flex-1 flex-row items-center justify-center space-x-2 py-3 px-4 rounded-lg border border-dashed ${error
                         ? 'border-red-500'
@@ -154,7 +166,7 @@ const ImagePreview: React.FC<ImagePreviewProps> = ({
                     <Text className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
                         Click to upload
                     </Text>
-                </Pressable>
+                </Pressable>}
             </View>
 
             {error && (

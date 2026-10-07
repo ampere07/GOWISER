@@ -351,7 +351,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
               filteredOptions.map((option, idx) => {
                 const isSelected = (currentValue?.value as (string | number)[])?.map(String).includes(String(option.value));
                 return (
-                  <button
+                  <button aria-label={`Toggle ${option.label}`}
                     key={idx}
                     onClick={() => toggleOption(selectedColumn.key, option.value)}
                     className={`w-full flex items-center justify-between p-3 rounded-xl transition-all ${isSelected
@@ -409,7 +409,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
               <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 {bound === 'from' ? 'From' : 'To'}
               </label>
-              <input
+              <input aria-label={bound === 'from' ? 'From' : 'To'}
                 type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
                 value={currentValue?.[bound] ?? ''}
                 onChange={(e) => handleDateChange(selectedColumn.key, bound, e.target.value)}
@@ -446,7 +446,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
   return (
     <div className="fixed inset-0 z-50 overflow-hidden text-left">
       <div className="absolute inset-0 overflow-hidden">
-        <div
+        <div role="button" aria-label="Close"
           className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
           onClick={onClose}
         />
@@ -459,7 +459,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
               }`}>
               <div className="flex items-center space-x-4">
                 {selectedColumn && (
-                  <button
+                  <button aria-label="Back"
                     onClick={() => { setSelectedColumn(null); setSearchTerm(''); }}
                     className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
                   >
@@ -477,7 +477,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
                   )}
                 </div>
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={onClose}
                 className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
               >
@@ -494,7 +494,7 @@ const TableFunnelFilter: React.FC<TableFunnelFilterProps> = ({
                   {sortedColumns.map((column) => {
                     const isActive = !!filterValues[column.key];
                     return (
-                      <button
+                      <button aria-label={`Select ${column.label}`}
                         key={column.key}
                         onClick={() => { setSelectedColumn(column); setSearchTerm(''); }}
                         className={`w-full group flex items-center justify-between p-4 rounded-2xl transition-all duration-200 ${isDarkMode

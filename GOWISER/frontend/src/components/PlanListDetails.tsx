@@ -598,7 +598,7 @@ const PlanListDetails: React.FC<PlanListDetailsProps> = ({ plan, onClose, isMobi
                                 : ''
                               }`}
                           >
-                            <input
+                            <input aria-label={`Show ${getFieldLabel(fieldKey)}`}
                               type="checkbox"
                               checked={fieldVisibility[fieldKey]}
                               onChange={() => toggleFieldVisibility(fieldKey)}

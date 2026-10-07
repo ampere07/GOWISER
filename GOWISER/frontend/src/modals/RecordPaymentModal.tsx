@@ -204,7 +204,7 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             }`}
           >
             <div className="flex items-center space-x-4">
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 disabled={busy}
                 className={`transition-colors disabled:cursor-not-allowed ${
@@ -333,10 +333,10 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>
+                <label htmlFor="recordpaymentmodal-payment-date" className={labelClass}>
                   Payment Date<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="recordpaymentmodal-payment-date"
                   type="date"
                   value={form.payment_date}
                   onChange={(e) => setField('payment_date', e.target.value)}
@@ -349,8 +349,8 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Payment Method</label>
-                <select
+                <label htmlFor="recordpaymentmodal-payment-method" className={labelClass}>Payment Method</label>
+                <select id="recordpaymentmodal-payment-method"
                   value={form.payment_method}
                   onChange={(e) => setField('payment_method', e.target.value)}
                   disabled={busy || payable.balance <= 0}
@@ -378,8 +378,8 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               </div>
 
               <div className="md:col-span-2">
-                <label className={labelClass}>Notes</label>
-                <textarea
+                <label htmlFor="recordpaymentmodal-notes" className={labelClass}>Notes</label>
+                <textarea id="recordpaymentmodal-notes"
                   rows={2}
                   value={form.notes}
                   onChange={(e) => setField('notes', e.target.value)}
@@ -403,7 +403,7 @@ const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                 <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   {form.receipt ? form.receipt.name : 'Choose an image or PDF (max 10MB)'}
                 </span>
-                <input
+                <input aria-label="Choose receipt file"
                   type="file"
                   accept="image/*,.pdf"
                   disabled={busy || payable.balance <= 0}

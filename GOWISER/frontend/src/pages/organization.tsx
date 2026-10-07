@@ -112,7 +112,7 @@ const Organizations: React.FC = () => {
                 <div className="flex items-center gap-4 text-xs">
                     <div className="flex items-center gap-2">
                         <span>Show</span>
-                        <select
+                        <select aria-label="Rows per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -143,14 +143,14 @@ const Organizations: React.FC = () => {
                         <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Manage system organizations</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button
+                        <button aria-label="Refresh organizations"
                             onClick={() => refreshOrganizations()}
                             className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
                         >
                             <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
                         </button>
                         {actions.canCreate && (
-                        <button
+                        <button aria-label="Add organization"
                             onClick={() => { setSelectedOrg(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
                             style={{ backgroundColor: colorPalette?.primary || '#3b82f6' }}
@@ -227,7 +227,7 @@ const Organizations: React.FC = () => {
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-2">
                                                 {actions.canEdit && (
-                                                <button
+                                                <button aria-label="Edit organization"
                                                     onClick={() => { setSelectedOrg(org); setShowModal(true); }}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                 >
@@ -235,7 +235,7 @@ const Organizations: React.FC = () => {
                                                 </button>
                                                 )}
                                                 {actions.canDelete && (
-                                                <button
+                                                <button aria-label="Delete organization"
                                                     onClick={() => handleDeleteOrg(org.id)}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                 >

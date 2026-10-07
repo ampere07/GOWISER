@@ -767,7 +767,7 @@ const Reports: React.FC = () => {
                                 <tr className="sticky top-0 z-30">
                                     <th className={`sticky left-0 top-0 z-30 px-3 py-2.5 text-left font-semibold border-b border-r text-xs ${thCls} w-10`}>#</th>
                                     {orderedVisibleColumns.map(col => (
-                                        <th
+                                        <th role="button" aria-label={`Sort by ${col.label}`}
                                             key={col.key}
                                             className={`sticky top-0 z-20 px-3 py-2.5 text-left font-semibold border-b border-r whitespace-nowrap select-none cursor-pointer ${thCls}`}
                                             onClick={() => handleSort(col.key)}
@@ -868,7 +868,7 @@ const Reports: React.FC = () => {
                         <div className={`flex flex-wrap items-center justify-center md:justify-start gap-3 text-xs ${subText}`}>
                             <div className="flex items-center gap-1.5">
                                 <span>Show</span>
-                                <select
+                                <select aria-label="Rows per page"
                                     value={itemsPerPage}
                                     onChange={(e) => setItemsPerPage(Number(e.target.value))}
                                     className={`px-1.5 py-1 rounded border text-xs focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'}`}

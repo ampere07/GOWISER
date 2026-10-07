@@ -1793,7 +1793,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
 
               return (
                 <div key={billingType.id}>
-                  <button
+                  <button aria-label={`Open ${billingType.name}`}
                     onClick={() => {
                       setSelectedLocation(billingType.id);
                       if (isMobile) {
@@ -1821,7 +1821,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                       >
                         {billingType.count}
                       </span>
-                      <button
+                      <button aria-label={`Toggle ${billingType.name}`}
                         onClick={(e) => toggleLocationExpansion(e, billingType.id)}
                         className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                       >
@@ -1840,7 +1840,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
 
                     return (
                       <div key={category.id}>
-                        <button
+                        <button aria-label={`Open ${category.name}`}
                           onClick={() => {
                             setSelectedLocation(category.id);
                             if (isMobile) {
@@ -1872,7 +1872,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                                 {category.count}
                               </span>
                             )}
-                            <button
+                            <button aria-label={`Toggle ${category.name}`}
                               onClick={(e) => toggleLocationExpansion(e, category.id)}
                               className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                             >
@@ -1891,7 +1891,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
 
                           return (
                             <div key={visit.id}>
-                              <button
+                              <button aria-label={`Open ${visit.name}`}
                                 onClick={() => {
                                   setSelectedLocation(visit.id);
                                   if (isMobile) {
@@ -1917,7 +1917,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                                     } : {}}>
                                     {visit.count}
                                   </span>
-                                  <button
+                                  <button aria-label={`Toggle ${visit.name}`}
                                     onClick={(e) => toggleLocationExpansion(e, visit.id)}
                                     className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                                   >
@@ -1933,7 +1933,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                               {/* Barangay Level */}
                               {isVisitExpanded && visit.barangays.map((brgy) => {
                                 return (
-                                  <button
+                                  <button aria-label={`Select ${brgy.name}`}
                                     key={brgy.id}
                                     onClick={() => {
                                       setSelectedLocation(brgy.id);
@@ -2335,7 +2335,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                     >
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
-                      <button
+                      <button aria-label="Close"
                         onClick={(e) => {
                           e.stopPropagation();
                           removeFilter(key);
@@ -2400,7 +2400,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                 paginatedServiceOrders.length > 0 ? (
                   <div className="space-y-0">
                     {paginatedServiceOrders.map((serviceOrder) => (
-                      <div
+                      <div role="button" aria-label={`Open ${serviceOrder.id}`}
                         key={serviceOrder.id}
                         onClick={() => handleRowClick(serviceOrder)}
                         className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -2477,7 +2477,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                               <div className="flex items-center justify-between">
                                 <span>{column.label}</span>
                                 {(hoveredColumn === column.key || sortColumn === column.key) && (
-                                  <button
+                                  <button aria-label={`Sort by ${column.label}`}
                                     onClick={() => handleSort(column.key)}
                                     className="ml-2 transition-colors"
                                   >
@@ -2502,7 +2502,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                       <tbody>
                         {paginatedServiceOrders.length > 0 ? (
                           paginatedServiceOrders.map((serviceOrder) => (
-                            <tr
+                            <tr role="button" aria-label={`Open service order ${serviceOrder.id}`}
                               key={serviceOrder.id}
                               className={`border-b cursor-pointer transition-colors ${isDarkMode
                                 ? `border-gray-800 hover:bg-gray-900 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-800' : ''}`
@@ -2550,7 +2550,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                 <div className={`flex flex-col sm:flex-row items-center gap-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                   <div className="flex items-center gap-2">
                     <span className="hidden sm:inline">Show</span>
-                    <select
+                    <select aria-label="Rows per page"
                       value={itemsPerPage}
                       onChange={(e) => setItemsPerPage(Number(e.target.value))}
                       className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -2581,7 +2581,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                     <ChevronsLeft className="h-5 w-5" />
                   </button>
 
-                  <button
+                  <button aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -2598,7 +2598,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
                     </span>
                   </div>
 
-                  <button
+                  <button aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages || totalPages <= 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages || totalPages <= 1
@@ -2664,7 +2664,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
               <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                 Download
               </h2>
-              <button
+              <button aria-label="Close"
                 onClick={() => setIsDownloadModalOpen(false)}
                 className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
               >

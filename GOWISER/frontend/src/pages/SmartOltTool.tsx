@@ -1090,7 +1090,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
             }`}
         >
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+          <button aria-label="Close" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1249,8 +1249,8 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
 
           {tab === 'cleanup' && (
             <div className="flex items-center gap-2">
-              <label className={`text-xs ${muted}`}>Offline for at least</label>
-              <input
+              <label htmlFor="smartolttool-offline-for-at-least" className={`text-xs ${muted}`}>Offline for at least</label>
+              <input id="smartolttool-offline-for-at-least"
                 type="number"
                 min={1}
                 value={offlineDays}
@@ -1281,7 +1281,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
               {/* Batch actions. `Align All Matched` deliberately ignores the checkbox
                   selection and takes every eligible row — including ones on pages the
                   operator has not scrolled to — which is the whole point of "All". */}
-              <select
+              <select aria-label="Batch actions"
                 value=""
                 disabled={jobRunning}
                 onChange={(e) => {
@@ -1351,7 +1351,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
               {/* `Write All Missing` is offered separately from `All Eligible` on purpose:
                   filling blank columns is safe and is what most operators want, while
                   replacing serials somebody already recorded deserves its own decision. */}
-              <select
+              <select aria-label="Batch actions"
                 value=""
                 disabled={jobRunning}
                 onChange={(e) => {
@@ -1619,7 +1619,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                             stopped gating on eligibility, Select All took every
                             inactive ONU while the individual boxes stayed greyed out,
                             so a row could be selected in bulk but not on its own. */}
-                        <input
+                        <input aria-label={`Select ${id}`}
                           type="checkbox"
                           disabled={!selectable(row)}
                           checked={selected.has(id)}

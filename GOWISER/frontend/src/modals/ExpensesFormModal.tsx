@@ -259,7 +259,7 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
             }`}
           >
             <div className="flex items-center space-x-4">
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 disabled={saving}
                 className={`transition-colors disabled:cursor-not-allowed ${
@@ -359,10 +359,10 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className={labelClass}>
+                <label htmlFor="expensesformmodal-date" className={labelClass}>
                   Date<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="expensesformmodal-date"
                   type="date"
                   value={form.date}
                   onChange={(e) => setField('date', e.target.value)}
@@ -390,10 +390,10 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>
+                <label htmlFor="expensesformmodal-category" className={labelClass}>
                   Category<span className="text-red-500">*</span>
                 </label>
-                <select
+                <select id="expensesformmodal-category"
                   value={form.category_id ?? ''}
                   onChange={(e) =>
                     setField('category_id', e.target.value ? Number(e.target.value) : null)
@@ -419,8 +419,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Payee</label>
-                <input
+                <label htmlFor="expensesformmodal-payee" className={labelClass}>Payee</label>
+                <input id="expensesformmodal-payee"
                   type="text"
                   value={form.payee}
                   onChange={(e) => setField('payee', e.target.value)}
@@ -442,8 +442,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Invoice No.</label>
-                <input
+                <label htmlFor="expensesformmodal-invoice-no" className={labelClass}>Invoice No.</label>
+                <input id="expensesformmodal-invoice-no"
                   type="text"
                   value={form.invoice_no}
                   onChange={(e) => setField('invoice_no', e.target.value)}
@@ -453,8 +453,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Reference No.</label>
-                <input
+                <label htmlFor="expensesformmodal-reference-no" className={labelClass}>Reference No.</label>
+                <input id="expensesformmodal-reference-no"
                   type="text"
                   value={form.reference_no}
                   onChange={(e) => setField('reference_no', e.target.value)}
@@ -464,8 +464,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Provider</label>
-                <input
+                <label htmlFor="expensesformmodal-provider" className={labelClass}>Provider</label>
+                <input id="expensesformmodal-provider"
                   type="text"
                   value={form.provider}
                   onChange={(e) => setField('provider', e.target.value)}
@@ -475,8 +475,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Supplier</label>
-                <input
+                <label htmlFor="expensesformmodal-supplier" className={labelClass}>Supplier</label>
+                <input id="expensesformmodal-supplier"
                   type="text"
                   value={form.supplier}
                   onChange={(e) => setField('supplier', e.target.value)}
@@ -486,8 +486,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Received Date</label>
-                <input
+                <label htmlFor="expensesformmodal-received-date" className={labelClass}>Received Date</label>
+                <input id="expensesformmodal-received-date"
                   type="date"
                   value={form.received_date}
                   onChange={(e) => setField('received_date', e.target.value)}
@@ -497,8 +497,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>City</label>
-                <input
+                <label htmlFor="expensesformmodal-city" className={labelClass}>City</label>
+                <input id="expensesformmodal-city"
                   type="text"
                   value={form.city}
                   onChange={(e) => setField('city', e.target.value)}
@@ -508,8 +508,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Barangay</label>
-                <input
+                <label htmlFor="expensesformmodal-barangay" className={labelClass}>Barangay</label>
+                <input id="expensesformmodal-barangay"
                   type="text"
                   value={form.barangay}
                   onChange={(e) => setField('barangay', e.target.value)}
@@ -519,8 +519,8 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
               </div>
 
               <div>
-                <label className={labelClass}>Location</label>
-                <input
+                <label htmlFor="expensesformmodal-location" className={labelClass}>Location</label>
+                <input id="expensesformmodal-location"
                   type="text"
                   value={form.location}
                   onChange={(e) => setField('location', e.target.value)}
@@ -544,7 +544,7 @@ const ExpensesFormModal: React.FC<ExpensesFormModalProps> = ({
                 <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   {form.receipt ? form.receipt.name : 'Choose an image or PDF (max 10MB)'}
                 </span>
-                <input
+                <input aria-label="Choose receipt file"
                   type="file"
                   accept="image/*,.pdf"
                   disabled={saving}

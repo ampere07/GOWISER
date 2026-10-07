@@ -654,7 +654,7 @@ const MikrotikRadiusTool: React.FC<MikrotikRadiusToolProps> = ({ isDarkMode: isD
         <div className="flex flex-wrap items-center gap-2">
           {/* Server mode selector */}
           <div className="relative">
-            <select
+            <select aria-label="Server"
               value={serverId}
               onChange={(e) => setServerId(e.target.value)}
               disabled={loading}
@@ -715,7 +715,7 @@ const MikrotikRadiusTool: React.FC<MikrotikRadiusToolProps> = ({ isDarkMode: isD
           }`}
         >
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+          <button aria-label="Close" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -800,7 +800,7 @@ const MikrotikRadiusTool: React.FC<MikrotikRadiusToolProps> = ({ isDarkMode: isD
           {/* Metric cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3 mb-5">
             {metricCards.map((metric) => (
-              <button
+              <button aria-label={`Open ${metric.label}`}
                 key={metric.label}
                 onClick={() => { setFilter(metric.filter); grid.setPage(1); }}
                 className={`rounded-xl border p-3 text-left transition-colors hover:border-indigo-500/50 ${card}`}
@@ -946,7 +946,7 @@ const MikrotikRadiusTool: React.FC<MikrotikRadiusToolProps> = ({ isDarkMode: isD
                     return (
                       <tr key={key} className={rowHover}>
                         <td className="px-3 py-2.5">
-                          <input
+                          <input aria-label={`Select ${key}`}
                             type="checkbox"
                             checked={grid.selected.has(key)}
                             onChange={(e) => grid.toggleRow(key, e.target.checked)}

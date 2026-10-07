@@ -228,7 +228,7 @@ const SMSBlastLogs: React.FC = () => {
                 <tbody className={`divide-y ${isDarkMode ? 'bg-gray-900 divide-gray-800' : 'bg-white divide-gray-200'
                   }`}>
                   {filteredLogs.map((log) => (
-                    <tr key={log.id} className={`cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                    <tr role="button" aria-label={`Open SMS log ${log.id}`} key={log.id} className={`cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       }`} onClick={() => handleLogClick(log)}>
                       <td className={`px-6 py-4 whitespace-nowrap text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                         }`}>
@@ -273,7 +273,7 @@ const SMSBlastLogs: React.FC = () => {
         <div className={`w-full max-w-md border-l flex-shrink-0 relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
           }`}>
           <div className="absolute top-4 right-4 z-10">
-            <button
+            <button aria-label="Close"
               onClick={handleCloseDetails}
               className={`transition-colors rounded p-1 ${isDarkMode
                 ? 'text-gray-400 hover:text-white bg-gray-800'

@@ -112,6 +112,21 @@ export const paymentService = {
    * Returns 0 on any failure so a payment screen never blocks on it — the server computes the
    * real charge at checkout regardless of what was disclosed here.
    */
+  getDiscountsOnFile: async (accountNo: string): Promise<number> => {
+    try {
+      const response = await apiClient.post<{ status: string; discounts_only?: number }>(
+        `/payments/available-discount`,
+        { account_no: accountNo },
+        NO_TIMEOUT
+      );
+
+      return Number(response.data.discounts_only) || 0;
+    } catch (error: any) {
+      console.error('Get discounts on file error:', error.response?.data || error.message);
+      return 0;
+    }
+  },
+
   getConvenienceFeePercentage: async (): Promise<number> => {
     try {
       const response = await apiClient.get<{ status: string; convenience_fee_percentage?: number }>(

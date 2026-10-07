@@ -117,7 +117,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
       <div className={`flex flex-wrap items-center justify-center sm:justify-start gap-3 sm:gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
         <div className="flex items-center gap-2">
           <span>Show</span>
-          <select
+          <select aria-label="Rows per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode
@@ -149,7 +149,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           <ChevronsLeft size={16} />
         </button>
 
-        <button
+        <button aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -166,7 +166,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           </span>
         </div>
 
-        <button
+        <button aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1914,7 +1914,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
             return (
               <div key={status.id}>
-                <button
+                <button aria-label={`Open ${status.name}`}
                   onClick={() => setSelectedLocation(status.id)}
                   className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                     }`}
@@ -1935,7 +1935,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
                       {status.count}
                     </span>
-                    <button
+                    <button aria-label={`Toggle ${status.name}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setExpandedLocations(prev => {
@@ -1963,7 +1963,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     const isSessionExpanded = expandedLocations.has(session.id);
                     return (
                       <div key={session.id}>
-                        <button
+                        <button aria-label={`Open ${session.name}`}
                           onClick={() => setSelectedLocation(session.id)}
                           className={`w-full flex items-center justify-between pl-8 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
                           style={isSessionSelected ? {
@@ -1978,7 +1978,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'}`}>
                               {session.count}
                             </span>
-                            <button
+                            <button aria-label={`Toggle ${session.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedLocations(prev => {
@@ -2005,7 +2005,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                           const isBillingExpanded = expandedLocations.has(billing.id);
                           return (
                             <div key={billing.id}>
-                              <button
+                              <button aria-label={`Open ${billing.name}`}
                                 onClick={() => setSelectedLocation(billing.id)}
                                 className={`w-full flex items-center justify-between pl-12 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'}`}
                                 style={isBillingSelected ? {
@@ -2020,7 +2020,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-300'}`}>
                                     {billing.count}
                                   </span>
-                                  <button
+                                  <button aria-label={`Toggle ${billing.name}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setExpandedLocations(prev => {
@@ -2045,7 +2045,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               {isBillingExpanded && billing.barangays.map((brgy) => {
                                 const isBrgySelected = selectedLocation === brgy.id;
                                 return (
-                                  <button
+                                  <button aria-label={`Select ${brgy.name}`}
                                     key={brgy.id}
                                     onClick={() => setSelectedLocation(brgy.id)}
                                     className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-600 hover:bg-gray-800' : 'text-gray-500 hover:bg-gray-100'}`}
@@ -2074,7 +2074,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
                     return (
                       <div key={billing.id}>
-                        <button
+                        <button aria-label={`Open ${billing.name}`}
                           onClick={() => setSelectedLocation(billing.id)}
                           className={`w-full flex items-center justify-between pl-10 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
                             }`}
@@ -2090,7 +2090,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'}`}>
                               {billing.count}
                             </span>
-                            <button
+                            <button aria-label={`Toggle ${billing.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedLocations(prev => {
@@ -2115,7 +2115,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                         {isBillingExpanded && billing.barangays.map((brgy) => {
                           const isBrgySelected = selectedLocation === brgy.id;
                           return (
-                            <button
+                            <button aria-label={`Select ${brgy.name}`}
                               key={brgy.id}
                               onClick={() => setSelectedLocation(brgy.id)}
                               className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
@@ -2440,7 +2440,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     >
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
-                      <button
+                      <button aria-label="Close"
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -2505,7 +2505,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                       {paginatedRecords.length > 0 ? (
                         <div>
                           {paginatedRecords.map((record) => (
-                            <div
+                            <div role="button" aria-label={`Open ${record.customerName}`}
                               key={record.id}
                               onClick={() => handleRecordClick(record)}
                               className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -2626,7 +2626,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   <div className="flex items-center justify-between">
                                     <span>{column.label}</span>
                                     {(hoveredColumn === column.key || sortColumn === column.key) && (
-                                      <button
+                                      <button aria-label={`Sort by ${column.label}`}
                                         onClick={() => handleSort(column.key)}
                                         className="ml-2 transition-colors"
                                       >
@@ -2663,7 +2663,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                           <tbody>
                             {paginatedRecords.length > 0 ? (
                               paginatedRecords.map((record) => (
-                                <tr
+                                <tr role="button" aria-label={`Open customer ${record.id}`}
                                   key={record.id}
                                   className={`border-b cursor-pointer transition-colors ${isDarkMode
                                     ? 'border-gray-800 hover:bg-gray-900'

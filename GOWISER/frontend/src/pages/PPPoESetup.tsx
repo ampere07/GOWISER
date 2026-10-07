@@ -418,7 +418,7 @@ const PPPoESetup: React.FC = () => {
                 {usernamePattern && (
                   <div className="flex gap-2">
                     {actions.canEdit && (
-                    <button
+                    <button aria-label="Edit username pattern"
                       onClick={() => handleEdit(usernamePattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
@@ -426,7 +426,7 @@ const PPPoESetup: React.FC = () => {
                     </button>
                     )}
                     {actions.canDelete && (
-                    <button
+                    <button aria-label="Delete username pattern"
                       onClick={() => handleDelete(usernamePattern.id, 'username')}
                       className="text-red-600 hover:text-red-900"
                     >
@@ -503,7 +503,7 @@ const PPPoESetup: React.FC = () => {
                 {passwordPattern && (
                   <div className="flex gap-2">
                     {actions.canEdit && (
-                    <button
+                    <button aria-label="Edit password pattern"
                       onClick={() => handleEdit(passwordPattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
@@ -511,7 +511,7 @@ const PPPoESetup: React.FC = () => {
                     </button>
                     )}
                     {actions.canDelete && (
-                    <button
+                    <button aria-label="Delete password pattern"
                       onClick={() => handleDelete(passwordPattern.id, 'password')}
                       className="text-red-600 hover:text-red-900"
                     >
@@ -586,11 +586,11 @@ const PPPoESetup: React.FC = () => {
           <div className={`${isDarkMode ? 'bg-gray-800' : 'bg-white'} rounded-lg shadow-sm p-6`}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label htmlFor="pppoesetup-pattern-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   Pattern Type <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <select
+                  <select id="pppoesetup-pattern-type"
                     value={patternType}
                     onChange={(e) => {
                       setPatternType(e.target.value as 'username' | 'password');
@@ -697,7 +697,7 @@ const PPPoESetup: React.FC = () => {
                           >
                             {(item.type !== 'custom_password' && item.type !== 'tech_input') && <GripVertical className="h-4 w-4" />}
                             <span className="text-sm font-medium">{item.label}</span>
-                            <button
+                            <button aria-label="Close"
                               onClick={() => removeFromSequence(item.id)}
                               className="ml-1 hover:text-red-500"
                             >

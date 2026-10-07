@@ -294,31 +294,31 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
                                         the right customer before asking for free service days. */}
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div className="space-y-2">
-                                            <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                            <label htmlFor="prepaidoverridemodal-account-no" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                                 Account No.
                                             </label>
-                                            <input type="text" value={accountNo} readOnly className={readOnlyBase} />
+                                            <input id="prepaidoverridemodal-account-no" type="text" value={accountNo} readOnly className={readOnlyBase} />
                                         </div>
                                         <div className="space-y-2">
-                                            <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                            <label htmlFor="prepaidoverridemodal-customer" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                                 Customer
                                             </label>
-                                            <input type="text" value={customerName || '-'} readOnly className={readOnlyBase} />
+                                            <input id="prepaidoverridemodal-customer" type="text" value={customerName || '-'} readOnly className={readOnlyBase} />
                                         </div>
                                     </div>
 
                                     <div className="space-y-2">
-                                        <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                        <label htmlFor="prepaidoverridemodal-requested-by" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                             Requested By
                                         </label>
-                                        <input type="text" value={requestedBy} readOnly className={readOnlyBase} />
+                                        <input id="prepaidoverridemodal-requested-by" type="text" value={requestedBy} readOnly className={readOnlyBase} />
                                     </div>
 
                                     <div className="space-y-2">
-                                        <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                        <label htmlFor="prepaidoverridemodal-current-prepaid-expiration" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                             Current Prepaid Expiration
                                         </label>
-                                        <input type="text" value={formatDateTime(currentExpiration)} readOnly className={readOnlyBase} />
+                                        <input id="prepaidoverridemodal-current-prepaid-expiration" type="text" value={formatDateTime(currentExpiration)} readOnly className={readOnlyBase} />
                                         {!currentExpiration && (
                                             <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                                                 The prepaid clock has not started for this account. Adding days starts it from today.

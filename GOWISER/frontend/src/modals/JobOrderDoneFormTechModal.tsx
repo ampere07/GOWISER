@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, ChevronDown, Camera, MapPin, CheckCircle, AlertCircle, XCircle, Loader2, Search, Eraser } from 'lucide-react';
+import { X, Calendar, ChevronDown, Camera, MapPin, CheckCircle, AlertCircle, XCircle, Loader2, Search, Eraser, ExternalLink } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { UserData } from '../types/api';
 import { updateJobOrder } from '../services/jobOrderService';
@@ -234,6 +234,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     speedTestImage: null
   });
 
+  const [clientPhotoDocumentationUrl, setClientPhotoDocumentationUrl] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [modalContent, setModalContent] = useState<{
     title: string;
@@ -285,7 +286,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   const ImagePreview: React.FC<{
     imageUrl: string | null;
     label: string;
-    onUpload: (file: File) => void;
+    onUpload?: (file: File) => void;
     error?: string;
     required?: boolean;
   }> = ({ imageUrl, label, onUpload, error, required }) => {
@@ -293,33 +294,50 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     const isGDrive = isGoogleDriveUrl(imageUrl);
     const isBlobUrl = imageUrl?.startsWith('blob:');
     const isCloud = isCloudUrl(imageUrl);
+    const isReadOnly = !onUpload;
 
     return (
       <div>
         <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
           }`}>{label}{required && <span className="text-red-500">*</span>}</label>
-        <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
+        <div className={`relative w-full h-48 border rounded overflow-hidden ${isReadOnly
+          ? (isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-100 border-gray-300')
+          : (isDarkMode ? 'cursor-pointer bg-gray-800 border-gray-700 hover:bg-gray-750' : 'cursor-pointer bg-gray-100 border-gray-300 hover:bg-gray-200')
           }`}>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                onUpload(e.target.files[0]);
-                setImageLoadError(false);
-              }
-            }}
-            className="absolute inset-0 opacity-0 cursor-pointer z-10"
-          />
-          {imageUrl && !imageLoadError ? (
+          {onUpload && (
+            <input aria-label="Choose file"
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  onUpload(e.target.files[0]);
+                  setImageLoadError(false);
+                }
+              }}
+              className="absolute inset-0 opacity-0 cursor-pointer z-10"
+            />
+          )}
+          {imageUrl && (isReadOnly || !imageLoadError) ? (
             <div className="relative w-full h-full">
-              {isBlobUrl ? (
-                <img
-                  src={imageUrl}
-                  alt={label}
-                  className="w-full h-full object-contain"
-                  onError={() => setImageLoadError(true)}
-                />
+              {isBlobUrl || (isReadOnly && !imageLoadError) ? (
+                <>
+                  <img
+                    src={imageUrl}
+                    alt={label}
+                    className="w-full h-full object-contain"
+                    onError={() => setImageLoadError(true)}
+                  />
+                  {isReadOnly && (
+                    <a
+                      href={imageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5 rounded-md bg-black/70 px-3 py-1.5 text-sm font-medium text-white shadow-lg hover:bg-black/85"
+                    >
+                      <ExternalLink size={14} />Open in new tab
+                    </a>
+                  )}
+                </>
               ) : isCloud ? (
                 <div className={`w-full h-full flex flex-col items-center justify-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                   }`}>
@@ -344,15 +362,17 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   <span className="text-sm mt-2">Invalid image source</span>
                 </div>
               )}
-              <div className="absolute bottom-3 right-3 bg-[#22c55e] text-white px-3 py-1.5 rounded-md text-sm font-medium flex items-center shadow-lg pointer-events-none z-30">
-                <Camera className="mr-2" size={16} />Uploaded
-              </div>
+              {!isReadOnly && (
+                <div className="absolute bottom-3 right-3 bg-[#22c55e] text-white px-3 py-1.5 rounded-md text-sm font-medium flex items-center shadow-lg pointer-events-none z-30">
+                  <Camera className="mr-2" size={16} />Uploaded
+                </div>
+              )}
             </div>
           ) : (
             <div className={`w-full h-full flex flex-col items-center justify-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>
               <Camera size={32} />
-              <span className="text-sm mt-2 font-medium">Click to upload</span>
+              <span className="text-sm mt-2 font-medium">{isReadOnly ? 'No photo submitted' : 'Click to upload'}</span>
             </div>
           )}
         </div>
@@ -797,12 +817,14 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       };
 
       const fetchApplicationData = async () => {
+        setClientPhotoDocumentationUrl(null);
         try {
           const applicationId = jobOrderData.application_id || jobOrderData.Application_ID;
           if (applicationId) {
             const appResponse = await apiClient.get<{ success: boolean; application: any }>(`/applications/${applicationId}`);
             if (appResponse.data.success && appResponse.data.application) {
               const appData = appResponse.data.application;
+              setClientPhotoDocumentationUrl(convertGoogleDriveUrl(appData.proof_of_billing_url));
 
               const newFormData = {
                 dateInstalled: formatDateForInput(jobOrderData.Date_Installed || jobOrderData.date_installed) || getTodayDate(),
@@ -1809,7 +1831,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
               }`}>
               <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>{modalContent.title}</h3>
-              <button
+              <button aria-label="Close"
                 onClick={() => setShowModal(false)}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -1935,9 +1957,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-plan" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Plan</label>
-              <input
+              <input id="joborderdoneformtechmodal-plan"
                 type="text"
                 value={formData.choosePlan}
                 readOnly
@@ -1949,9 +1971,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-referred-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Referred By</label>
-              <input
+              <input id="joborderdoneformtechmodal-referred-by"
                 type="text"
                 value={formData.referredBy || 'None'}
                 readOnly
@@ -1963,10 +1985,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-onsite-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Onsite Status<span className="text-red-500">*</span></label>
               <div className="relative">
-                <select value={formData.onsiteStatus} onChange={(e) => handleInputChange('onsiteStatus', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                <select id="joborderdoneformtechmodal-onsite-status" value={formData.onsiteStatus} onChange={(e) => handleInputChange('onsiteStatus', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                   } ${errors.onsiteStatus ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                   <option value="In Progress">In Progress</option>
                   <option value="Done">Done</option>
@@ -1990,9 +2012,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-region" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Region</label>
-              <input
+              <input id="joborderdoneformtechmodal-region"
                 type="text"
                 value={formData.region}
                 readOnly
@@ -2004,9 +2026,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-city" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>City</label>
-              <input
+              <input id="joborderdoneformtechmodal-city"
                 type="text"
                 value={formData.city}
                 readOnly
@@ -2018,9 +2040,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="joborderdoneformtechmodal-barangay" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Barangay</label>
-              <input
+              <input id="joborderdoneformtechmodal-barangay"
                 type="text"
                 value={formData.barangay}
                 readOnly
@@ -2031,14 +2053,18 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
               />
             </div>
 
+            <ImagePreview
+              imageUrl={clientPhotoDocumentationUrl}
+              label="Client Photo Documentation"
+            />
 
             {formData.onsiteStatus === 'Done' && (
               <>
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-date-installed" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Date Installed<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <input type="date" value={formData.dateInstalled} onChange={(e) => handleInputChange('dateInstalled', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <input id="joborderdoneformtechmodal-date-installed" type="date" value={formData.dateInstalled} onChange={(e) => handleInputChange('dateInstalled', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.dateInstalled ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`} />
                     <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                       }`} size={20} />
@@ -2104,10 +2130,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-usage-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Usage Type<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.usageType} onChange={(e) => handleInputChange('usageType', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-usage-type" value={formData.usageType} onChange={(e) => handleInputChange('usageType', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.usageType ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value=""></option>
                       <option value="None">None</option>
@@ -2187,10 +2213,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-router-model" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Router Model<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.routerModel} onChange={(e) => handleInputChange('routerModel', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-router-model" value={formData.routerModel} onChange={(e) => handleInputChange('routerModel', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.routerModel ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value=""></option>
                       <option value="None">None</option>
@@ -2216,9 +2242,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-modem-sn" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Modem SN<span className="text-red-500">*</span></label>
-                  <input type="text" value={formData.modemSN} onChange={(e) => handleInputChange('modemSN', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  <input id="joborderdoneformtechmodal-modem-sn" type="text" value={formData.modemSN} onChange={(e) => handleInputChange('modemSN', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     } ${errors.modemSN ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`} />
                   {errors.modemSN && (
                     <div className="flex items-center mt-1">
@@ -2266,9 +2292,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                 {formData.connectionType === 'Antenna' && (
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="joborderdoneformtechmodal-ip" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>IP<span className="text-red-500">*</span></label>
-                    <input type="text" value={formData.ip} onChange={(e) => handleInputChange('ip', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <input id="joborderdoneformtechmodal-ip" type="text" value={formData.ip} onChange={(e) => handleInputChange('ip', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.ip ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`} />
                     {errors.ip && (
                       <div className="flex items-center mt-1">
@@ -2303,7 +2329,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             onFocus={() => setIsLcpnapOpen(true)}
                             className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                           />
-                          <button
+                          <button aria-label="Toggle LCPNAP options"
                             type="button"
                             onClick={() => {
                               if (isLcpnapOpen) {
@@ -2335,7 +2361,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               {lcpnaps
                                 .filter(ln => ln.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase()))
                                 .map((lcpnap) => (
-                                  <div
+                                  <div role="button" aria-label={`Select ${lcpnap.lcpnap_name}`}
                                     key={lcpnap.id}
                                     className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode
                                       ? 'hover:bg-gray-700 text-gray-200'
@@ -2366,7 +2392,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                         {/* Click outside to close - repurposed */}
                         {isLcpnapOpen && (
-                          <div
+                          <div role="button" aria-label="Close"
                             className="fixed inset-0 z-40 bg-transparent"
                             onClick={() => {
                               setIsLcpnapOpen(false);
@@ -2387,10 +2413,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                     </div>
 
                     <div>
-                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      <label htmlFor="joborderdoneformtechmodal-port" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                         }`}>PORT<span className="text-red-500">*</span></label>
                       <div className="relative">
-                        <select value={formData.port} onChange={(e) => handleInputChange('port', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                        <select id="joborderdoneformtechmodal-port" value={formData.port} onChange={(e) => handleInputChange('port', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                           } ${errors.port ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                           <option value="">Select PORT</option>
                           {(() => {
@@ -2434,10 +2460,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                     </div>
 
                     <div>
-                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      <label htmlFor="joborderdoneformtechmodal-vlan" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                         }`}>VLAN<span className="text-red-500">*</span></label>
                       <div className="relative">
-                        <select value={formData.vlan} onChange={(e) => handleInputChange('vlan', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                        <select id="joborderdoneformtechmodal-vlan" value={formData.vlan} onChange={(e) => handleInputChange('vlan', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                           } ${errors.vlan ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                           <option value="">Select VLAN</option>
                           <option value="None">None</option>
@@ -2467,10 +2493,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 )}
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit By<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-by" value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_by ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value=""></option>
                       <option value="None">None</option>
@@ -2496,10 +2522,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-with" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-with" value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_with ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value="">Select Visit With</option>
                       <option value="None">None</option>
@@ -2525,10 +2551,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-with-other" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With(Other)<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-with-other" value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_with_other ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value="">Visit With(Other)</option>
                       <option value="None">None</option>
@@ -2554,9 +2580,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-onsite-remarks" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Onsite Remarks<span className="text-red-500">*</span></label>
-                  <textarea value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 resize-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  <textarea id="joborderdoneformtechmodal-onsite-remarks" value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 resize-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     } ${errors.onsiteRemarks ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`} />
                   {errors.onsiteRemarks && (
                     <div className="flex items-center mt-1">
@@ -2727,7 +2753,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                 }}
                                 className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                               />
-                              <button
+                              <button aria-label="Toggle item options"
                                 type="button"
                                 onClick={() => {
                                   if (activeItemIndex === index) {
@@ -2758,7 +2784,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                 <div className="max-h-60 overflow-y-auto custom-scrollbar">
                                   {/* Show None option if it matches search term */}
                                   {('none'.includes(itemSearchTerm.toLowerCase()) || itemSearchTerm === '') && (
-                                    <div
+                                    <div role="button"
                                       className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode
                                         ? 'hover:bg-gray-700 text-gray-200'
                                         : 'hover:bg-gray-100 text-gray-700'
@@ -2780,7 +2806,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   {inventoryItems
                                     .filter(invItem => invItem.item_name.toLowerCase().includes(itemSearchTerm.toLowerCase()))
                                     .map((invItem) => (
-                                      <div
+                                      <div role="button" aria-label={`Open ${invItem.id}`}
                                         key={invItem.id}
                                         className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode
                                           ? 'hover:bg-gray-700 text-gray-200'
@@ -2811,7 +2837,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                             {/* Click outside to close */}
                             {activeItemIndex === index && (
-                              <div
+                              <div role="button" aria-label="Close"
                                 className="fixed inset-0 z-40 bg-transparent"
                                 onClick={() => {
                                   setActiveItemIndex(null);
@@ -2843,7 +2869,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                         )}
 
                         {orderItems.length > 1 && item.itemId && (
-                          <button
+                          <button aria-label="Close"
                             type="button"
                             onClick={() => handleRemoveItem(index)}
                             className="p-2 text-red-500 hover:text-red-400"
@@ -2879,10 +2905,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             {(formData.onsiteStatus === 'Failed' || formData.onsiteStatus === 'Reschedule') && (
               <>
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-by-1" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit By<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-by-1" value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_by ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value=""></option>
                       <option value="None">None</option>
@@ -2908,10 +2934,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-with-1" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-with-1" value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_with ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value="">Visit With</option>
                       <option value="None">None</option>
@@ -2937,10 +2963,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-visit-with-other-1" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With(Other)<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-visit-with-other-1" value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.visit_with_other ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value="">Visit With(Other)</option>
                       <option value="None">None</option>
@@ -2967,9 +2993,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-onsite-remarks-1" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Onsite Remarks<span className="text-red-500">*</span></label>
-                  <textarea value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 resize-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  <textarea id="joborderdoneformtechmodal-onsite-remarks-1" value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 resize-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     } ${errors.onsiteRemarks ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`} />
                   {errors.onsiteRemarks && (
                     <div className="flex items-center mt-1">
@@ -2983,10 +3009,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joborderdoneformtechmodal-status-remarks" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Status Remarks<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.statusRemarks} onChange={(e) => handleInputChange('statusRemarks', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    <select id="joborderdoneformtechmodal-status-remarks" value={formData.statusRemarks} onChange={(e) => handleInputChange('statusRemarks', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       } ${errors.statusRemarks ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
                       <option value=""></option>
                       <option value="None">None</option>

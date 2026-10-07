@@ -209,7 +209,7 @@ const ExpensesLog: React.FC = () => {
                   <tbody>
                     {filteredExpenseRecords.length > 0 ? (
                       filteredExpenseRecords.map((record) => (
-                        <tr
+                        <tr role="button" aria-label={`Open expense ${record.id}`}
                           key={record.id}
                           className={`border-b cursor-pointer transition-colors ${isDarkMode
                               ? 'border-slate-800 hover:bg-slate-800'
@@ -237,7 +237,7 @@ const ExpensesLog: React.FC = () => {
                           <td className={`py-3 px-4 whitespace-nowrap ${isDarkMode ? 'text-white' : 'text-gray-900'
                             }`}>
                             {record.photo ? (
-                              <button className={isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}>
+                              <button aria-label="View" className={isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}>
                                 <Eye size={16} />
                               </button>
                             ) : (
@@ -273,7 +273,7 @@ const ExpensesLog: React.FC = () => {
         <div className={`w-full max-w-3xl border-l flex-shrink-0 relative ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
           }`}>
           <div className="absolute top-4 right-4 z-10">
-            <button
+            <button aria-label="Close"
               onClick={handleCloseDetails}
               className={`transition-colors rounded p-1 ${isDarkMode
                   ? 'text-slate-400 hover:text-white bg-slate-800'

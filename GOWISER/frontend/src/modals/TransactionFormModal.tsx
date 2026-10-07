@@ -719,7 +719,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Account No.<span className="text-red-500">*</span>
             </label>
             <div className="relative">
-              <select
+              <select aria-label="Account No."
                 value={formData.accountNo}
                 onChange={(e) => handleInputChange('accountNo', e.target.value)}
                 className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -739,7 +739,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Full Name
             </label>
-            <input
+            <input aria-label="Full Name"
               type="text"
               value={formData.fullName}
               readOnly
@@ -754,7 +754,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               ContactNo
             </label>
-            <input
+            <input aria-label="ContactNo"
               type="text"
               value={formData.contactNo}
               readOnly
@@ -774,7 +774,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             {showPlanPicker ? (
               <>
                 <div className="relative">
-                  <select
+                  <select aria-label="Plan"
                     value={formData.selectedPlanId ?? ''}
                     disabled={isLoadingPlans || plans.length === 0}
                     onChange={(e) => {
@@ -865,7 +865,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 )}
               </>
             ) : (
-              <input
+              <input aria-label="Plan"
                 type="text"
                 value={formData.plan}
                 readOnly
@@ -882,7 +882,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Account Balance<span className="text-red-500">*</span>
             </label>
-            <input
+            <input aria-label="Account Balance"
               type="text"
               value={`₱ ${formData.accountBalance}`}
               readOnly
@@ -899,7 +899,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Payment Date<span className="text-red-500">*</span>
             </label>
             <div className="relative">
-              <input
+              <input aria-label="Payment Date"
                 type="date"
                 value={formData.paymentDate}
                 onChange={(e) => handleInputChange('paymentDate', e.target.value)}
@@ -921,7 +921,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             </label>
             <div className="flex items-center">
               <div className="flex-1 relative">
-                <input
+                <input aria-label="Received Payment"
                   type="text"
                   value={`₱ ${formData.receivedPayment}`}
                   onChange={(e) => {
@@ -936,7 +936,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 />
               </div>
               <div className="flex flex-col">
-                <button
+                <button aria-label="Increase received payment"
                   type="button"
                   onClick={() => handleReceivedPaymentChange('increase')}
                   className={`px-3 py-1 border text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
@@ -944,7 +944,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 >
                   <Plus size={16} />
                 </button>
-                <button
+                <button aria-label="Decrease received payment"
                   type="button"
                   onClick={() => handleReceivedPaymentChange('decrease')}
                   className={`px-3 py-1 border rounded-r text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
@@ -963,7 +963,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Processed By<span className="text-red-500">*</span>
             </label>
-            <input
+            <input aria-label="Processed By"
               type="text"
               value={formData.processedBy}
               readOnly
@@ -980,7 +980,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Payment Method<span className="text-red-500">*</span>
             </label>
             <div className="relative">
-              <select
+              <select aria-label="Payment Method"
                 value={formData.paymentMethod}
                 onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
                 className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.paymentMethod ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -1005,7 +1005,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Reference No.<span className="text-red-500">*</span>
             </label>
-            <input
+            <input aria-label="Reference No."
               type="text"
               value={formData.referenceNo}
               onChange={(e) => handleInputChange('referenceNo', e.target.value)}
@@ -1022,7 +1022,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               OR No.<span className="text-red-500">*</span>
             </label>
-            <input
+            <input aria-label="OR No."
               type="text"
               value={formData.orNo}
               onChange={(e) => handleInputChange('orNo', e.target.value)}
@@ -1045,7 +1045,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               {transactionTypes.map((type) => {
                 const isSelected = formData.transactionType === type;
                 return (
-                  <button
+                  <button aria-label={`Select ${type}`}
                     key={type}
                     type="button"
                     onClick={() => handleTransactionTypeChange(type)}
@@ -1091,7 +1091,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Remarks
             </label>
-            <textarea
+            <textarea aria-label="Remarks"
               value={formData.remarks}
               onChange={(e) => handleInputChange('remarks', e.target.value)}
               rows={3}
@@ -1108,7 +1108,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             </label>
             <div className={`relative w-full border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
               } ${imagePreview ? 'h-auto' : 'h-48'}`}>
-              <input
+              <input aria-label="Payment Proof Image"
                 type="file"
                 accept="image/*"
                 onChange={handleImageUpload}

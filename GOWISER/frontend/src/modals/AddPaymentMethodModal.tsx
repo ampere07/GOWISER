@@ -278,10 +278,10 @@ const AddPaymentMethodContent: React.FC<{
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className={`block text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="addpaymentmethodmodal-modified-date" className={`block text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified Date
           </label>
-          <input
+          <input id="addpaymentmethodmodal-modified-date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -289,10 +289,10 @@ const AddPaymentMethodContent: React.FC<{
           />
         </div>
         <div className="space-y-2">
-          <label className={`block text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="addpaymentmethodmodal-modified-by" className={`block text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified By
           </label>
-          <input
+          <input id="addpaymentmethodmodal-modified-by"
             type="text"
             value={modifiedBy}
             readOnly

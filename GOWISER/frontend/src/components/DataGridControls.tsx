@@ -244,7 +244,7 @@ export function ColumnMenu<Row>({
           <div className="max-h-72 overflow-y-auto py-1">
             {adjustable.map((column, index) => (
               <div key={column.key} className={`flex items-center gap-2 px-3 py-1.5 ${t.hover}`}>
-                <input
+                <input aria-label={`Select ${column.label}`}
                   type="checkbox"
                   checked={!hidden.has(column.key)}
                   onChange={() => onToggle(column.key)}
@@ -327,6 +327,7 @@ export function GridFilterBar<Row>({
       <div className="relative flex-1 min-w-[200px]">
         <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${t.muted}`} />
         <input
+          aria-label="Search"
           value={search}
           onChange={(event) => onSearch(event.target.value)}
           placeholder={placeholder}
@@ -337,6 +338,7 @@ export function GridFilterBar<Row>({
       {filters.map((filter) => (
         <select
           key={filter.key}
+          aria-label={`Filter by ${filter.label}`}
           value={filterValues[filter.key] ?? ''}
           onChange={(event) => onFilterChange(filter.key, event.target.value)}
           title={filter.label}

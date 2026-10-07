@@ -270,10 +270,10 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
 
             <form onSubmit={handleSubmit}>
               <div className="mb-4">
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label htmlFor="support-concern" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   Concern
                 </label>
-                <select
+                <select id="support-concern"
                   value={selectedConcern}
                   onChange={(e) => setSelectedConcern(e.target.value)}
                   className={`w-full px-3 py-2 rounded border focus:outline-none focus:ring-1 ${isDarkMode
@@ -596,7 +596,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                   Reference ID: <span className="font-mono font-bold" style={{ color: colorPalette?.primary || '#3b82f6' }}>{selectedRequest.requestId}</span>
                 </p>
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={() => setShowDetailModal(false)}
                 className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
               >

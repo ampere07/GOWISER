@@ -137,7 +137,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange }) => 
               key={item.id}
               onPress={() => onSectionChange(item.id)}
               accessibilityRole="tab"
-              accessibilityLabel={item.label}
+              accessibilityLabel={`Open ${item.label}`}
               aria-selected={isActive}
               style={{
                 flex: 1,

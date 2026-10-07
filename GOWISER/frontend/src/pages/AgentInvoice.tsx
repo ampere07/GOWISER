@@ -514,7 +514,7 @@ const AgentInvoice: React.FC = () => {
                     />
                 </div>
 
-                <select
+                <select aria-label="Type"
                     value={typeFilter}
                     onChange={(e) => setTypeFilter(e.target.value)}
                     className={`px-3 py-2 rounded-lg border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -585,7 +585,7 @@ const AgentInvoice: React.FC = () => {
 
                             return (
                                 <div key={group.key} className="space-y-2">
-                                    <button
+                                    <button aria-label={`Toggle ${group.label}`}
                                         onClick={() => togglePeriod(group.key)}
                                         className={`w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors ${
                                             isDarkMode ? 'bg-gray-800/70 text-gray-100' : 'bg-gray-100 text-gray-800'
@@ -604,7 +604,7 @@ const AgentInvoice: React.FC = () => {
                                     </button>
 
                                     {isOpen && group.records.map(record => (
-                                        <button
+                                        <button aria-label={`Open invoice ${record.id}`}
                                             key={record.id}
                                             onClick={() => handleOpenDetails(record)}
                                             className={`w-full rounded-lg border p-4 text-left transition-colors ${
@@ -671,7 +671,7 @@ const AgentInvoice: React.FC = () => {
                                         {/* The period header. Clicking it opens or closes the
                                             week; the count and total describe what is in the
                                             group on this page, not across every page. */}
-                                        <tr
+                                        <tr role="button"
                                             onClick={() => togglePeriod(group.key)}
                                             className={`border-b cursor-pointer select-none transition-colors ${
                                                 isDarkMode
@@ -699,7 +699,7 @@ const AgentInvoice: React.FC = () => {
                                         </tr>
 
                                         {isOpen && group.records.map(record => (
-                                            <tr
+                                            <tr role="button" aria-label={`Open agent invoice ${record.id}`}
                                                 key={record.id}
                                                 onClick={() => handleOpenDetails(record)}
                                                 className={`border-b cursor-pointer transition-colors ${isDarkMode ? 'border-gray-800 hover:bg-gray-800/60 text-gray-200' : 'border-gray-100 hover:bg-gray-50 text-gray-700'} ${
@@ -734,7 +734,7 @@ const AgentInvoice: React.FC = () => {
                     <div className={`flex flex-wrap items-center gap-3 sm:gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                         <div className="flex items-center gap-2">
                             <span>Show</span>
-                            <select
+                            <select aria-label="Rows per page"
                                 value={itemsPerPage}
                                 onChange={(e) => setItemsPerPage(Number(e.target.value))}
                                 className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
