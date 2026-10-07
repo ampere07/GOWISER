@@ -34,6 +34,23 @@ class ProcessJobOrderImageQueue extends Command
         $this->logToFile("Processing limit: {$limit} images");
 
         try {
+            // Before the stats, so recovered and retryable rows count as pending and this run
+            // picks them up. Done every run: a row that failed while nothing else was pending
+            // used to wait for some later run to fail too before it was ever retried.
+            $recovery = $this->imageProcessingService->recoverStaleJobOrderProcessing();
+            if ($recovery['recovered'] > 0) {
+                $recoveryMessage = "Recovered {$recovery['recovered']} job order image(s) stuck in processing";
+                $this->info($recoveryMessage);
+                $this->logToFile($recoveryMessage);
+            }
+
+            $retryResult = $this->imageProcessingService->retryFailedJobOrderImages();
+            if ($retryResult['retried'] > 0) {
+                $retryMessage = "Marked {$retryResult['retried']} failed job order image(s) for retry";
+                $this->info($retryMessage);
+                $this->logToFile($retryMessage);
+            }
+
             $stats = $this->imageProcessingService->getJobOrderQueueStats();
             
             $statsMessage = sprintf(
@@ -79,13 +96,6 @@ class ProcessJobOrderImageQueue extends Command
             $this->logToFile($resultMessage);
 
             Log::info('Job Order Image Queue Processing: Completed', $result);
-
-            if ($result['failed'] > 0) {
-                $retryResult = $this->imageProcessingService->retryFailedJobOrderImages();
-                $retryMessage = "Marked {$retryResult['retried']} failed job order image(s) for retry";
-                $this->info($retryMessage);
-                $this->logToFile($retryMessage);
-            }
 
             $endTime = now();
             $duration = $endTime->diffInSeconds($startTime);

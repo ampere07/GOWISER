@@ -2460,8 +2460,16 @@ class JobOrderController extends Controller
                         'mime_type' => $file->getMimeType(),
                     ]);
 
-                    $fileName = $field . '_' . time() . '.' . $file->getClientOriginalExtension();
+                    // Job order id + a random suffix: `{field}_{time()}` alone collided whenever
+                    // two job orders uploaded the same field in the same second, and the second
+                    // file overwrote the first — one customer's photo landing on another's order.
+                    $extension = $file->getClientOriginalExtension() ?: ($file->guessExtension() ?: 'jpg');
+                    $fileName = $id . '_' . $field . '_' . time() . '_' . uniqid() . '.' . $extension;
                     $localPath = $file->storeAs('images_queue', $fileName, 'public');
+
+                    if (!$localPath) {
+                        throw new \RuntimeException("Could not save {$field} to local storage for the upload queue");
+                    }
 
                     \App\Models\JobOrderImageQueue::create([
                         'job_order_id' => $id,

@@ -152,6 +152,20 @@ class Kernel extends ConsoleKernel
                      \Illuminate\Support\Facades\Log::error('Email queue cron failed');
                  });
 
+        // Upload queued job order images (Done form) to Google Drive every minute
+        // Uses: ImageProcessingService via joborderimages:process
+        // Dependencies: GoogleDriveService
+        // Job order upload-images only QUEUES the files; nothing reaches the job order until
+        // this runs. Rows are claimed one at a time, so a crontab entry running the same
+        // command alongside the scheduler cannot upload an image twice.
+        $schedule->command('joborderimages:process --limit=30')
+                 ->everyMinute()
+                 ->withoutOverlapping(15)
+                 ->runInBackground()
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Job order image queue cron failed');
+                 });
+
         // Retry failed emails every 5 minutes
         // Uses: EmailQueueService via dedicated cron command
         // Dependencies: ResendEmailService

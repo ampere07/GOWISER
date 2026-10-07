@@ -67,6 +67,20 @@ class ImageProcessingService
         Log::info("Image Processing: Found {$pendingImages->count()} pending application images to process");
 
         foreach ($pendingImages as $imageQueue) {
+            // Application images are queued by the APPLY backend and their files live on THAT
+            // server. Run here, a missing file is not a failure — it is someone else's row.
+            // Failing it would burn its retries and the APPLY worker would then give up on an
+            // image it could have uploaded, so leave it pending for the server that owns it.
+            if (!file_exists(Storage::disk('public')->path($imageQueue->local_path))) {
+                $skipped++;
+                continue;
+            }
+
+            if (!$this->claim($imageQueue)) {
+                $skipped++;
+                continue;
+            }
+
             try {
                 $result = $this->processImage($imageQueue);
                 
@@ -77,7 +91,7 @@ class ImageProcessingService
                 }
             } catch (\Exception $e) {
                 Log::error("Image Processing Error for queue ID {$imageQueue->id}: " . $e->getMessage());
-                $imageQueue->markAsFailed($e->getMessage());
+                $this->failRow($imageQueue, $e->getMessage());
                 $failed++;
             }
         }
@@ -103,9 +117,14 @@ class ImageProcessingService
         Log::info("Image Processing: Found {$pendingJobOrderImages->count()} pending job order images to process");
 
         foreach ($pendingJobOrderImages as $imageQueue) {
+            if (!$this->claim($imageQueue)) {
+                $skipped++;
+                continue;
+            }
+
             try {
                 $result = $this->processImage($imageQueue);
-                
+
                 if ($result['success']) {
                     $processed++;
                 } else {
@@ -113,7 +132,7 @@ class ImageProcessingService
                 }
             } catch (\Exception $e) {
                 Log::error("Image Processing Error for queue ID {$imageQueue->id}: " . $e->getMessage());
-                $imageQueue->markAsFailed($e->getMessage());
+                $this->failRow($imageQueue, $e->getMessage());
                 $failed++;
             }
         }
@@ -147,7 +166,7 @@ class ImageProcessingService
                 'queue_id' => $imageQueue->id,
                 'reference_id' => $referenceId
             ]);
-            $imageQueue->markAsFailed($errorMsg);
+            $this->failRow($imageQueue, $errorMsg);
             return ['success' => false, 'error' => $errorMsg];
         }
 
@@ -262,7 +281,7 @@ class ImageProcessingService
                 'local_path' => $fullLocalPath,
                 'exception' => $e->getTraceAsString()
             ]);
-            $imageQueue->markAsFailed($errorMsg);
+            $this->failRow($imageQueue, $errorMsg);
             
             return [
                 'success' => false,
@@ -350,6 +369,79 @@ class ImageProcessingService
         }
 
         return ['retried' => $retried];
+    }
+
+    /** Minutes a row may sit in 'processing' before it is treated as abandoned. */
+    private const STALE_PROCESSING_MINUTES = 15;
+
+    /**
+     * Take a pending row for this worker. The status only moves pending -> processing if no
+     * other worker got there first, so two runs (the scheduler and a manual or crontab run)
+     * can never upload the same image twice.
+     */
+    private function claim($imageQueue): bool
+    {
+        $claimed = $imageQueue->newQuery()
+            ->where('id', $imageQueue->id)
+            ->where('status', 'pending')
+            ->update(['status' => 'processing', 'updated_at' => now()]);
+
+        if ($claimed === 1) {
+            $imageQueue->status = 'processing';
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Mark a row failed. Once it has used its last retry nothing will pick it up again, so
+     * say so loudly instead of leaving a silently missing image.
+     */
+    private function failRow($imageQueue, string $errorMessage): void
+    {
+        $imageQueue->markAsFailed($errorMessage);
+
+        if (!$imageQueue->canRetry()) {
+            $isJobOrder = $imageQueue instanceof JobOrderImageQueue;
+            Log::error('[IMAGE QUEUE GAVE UP] ' . ($isJobOrder ? 'Job order' : 'Application') . ' image will not be retried', [
+                'queue_id' => $imageQueue->id,
+                ($isJobOrder ? 'job_order_id' : 'application_id') => $isJobOrder ? $imageQueue->job_order_id : $imageQueue->application_id,
+                'field_name' => $imageQueue->field_name,
+                'retry_count' => $imageQueue->retry_count,
+                'error' => $errorMessage,
+            ]);
+        }
+    }
+
+    /**
+     * Put job order rows abandoned in 'processing' (the worker died or timed out mid-upload)
+     * back in line, counting it as a failed attempt so a row that keeps crashing the worker
+     * still runs out of retries.
+     */
+    public function recoverStaleJobOrderProcessing(): array
+    {
+        $recovered = 0;
+
+        $staleImages = JobOrderImageQueue::where('status', 'processing')
+            ->where('updated_at', '<', now()->subMinutes(self::STALE_PROCESSING_MINUTES))
+            ->get();
+
+        foreach ($staleImages as $imageQueue) {
+            $this->failRow($imageQueue, 'Abandoned in processing for over ' . self::STALE_PROCESSING_MINUTES . ' minutes');
+
+            if ($imageQueue->canRetry()) {
+                $imageQueue->resetForRetry();
+            }
+
+            $recovered++;
+        }
+
+        if ($recovered > 0) {
+            Log::warning("Recovered {$recovered} job order image queue row(s) stuck in processing");
+        }
+
+        return ['recovered' => $recovered];
     }
 
     public function retryFailedJobOrderImages(): array

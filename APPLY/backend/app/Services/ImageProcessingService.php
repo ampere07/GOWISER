@@ -66,6 +66,12 @@ class ImageProcessingService
         Log::info("Image Processing: Found {$pendingImages->count()} pending images to process");
 
         foreach ($pendingImages as $imageQueue) {
+            if (!$this->claim($imageQueue)) {
+                // Another worker took this row between the select and now.
+                $skipped++;
+                continue;
+            }
+
             try {
                 $result = $this->processImage($imageQueue);
                 
@@ -359,12 +365,113 @@ class ImageProcessingService
         }
     }
 
+    /** Applications younger than this are left alone by reconcilePlaceholders(). */
+    private const ORPHAN_GRACE_MINUTES = 30;
+
+    /** Same limit retryFailedImages() and ImageQueue::canRetry() use. */
+    private const MAX_RETRIES = 3;
+
+    /**
+     * Take a pending row for this worker. The status only moves pending -> processing if no
+     * other worker got there first, so overlapping runs can never upload one image twice.
+     */
+    private function claim(ImageQueue $imageQueue): bool
+    {
+        $claimed = ImageQueue::where('id', $imageQueue->id)
+            ->where('status', 'pending')
+            ->update(['status' => 'processing', 'updated_at' => now()]);
+
+        if ($claimed === 1) {
+            $imageQueue->status = 'processing';
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Safety net for the 'processing' placeholder, run every pass. Whatever left it behind —
+     * an older build that set it without a file, a queue row removed by hand, a crash between
+     * upload and save — the record ends up with either its Drive link or nothing, never a
+     * permanent 'processing':
+     *
+     *   - a completed upload whose link never reached the record gets the link;
+     *   - a placeholder with nothing left that could replace it (no pending/processing row,
+     *     no failed row with retries left) is cleared.
+     *
+     * Mirrored onto the customer copied from the application, like the normal path.
+     */
+    public function reconcilePlaceholders(): array
+    {
+        $filled = 0;
+        $cleared = 0;
+
+        foreach (self::PLACEHOLDER_FIELDS as $field) {
+            $completed = DB::table('applications as a')
+                ->join('images_queue as iq', function ($join) use ($field) {
+                    $join->on('iq.application_id', '=', 'a.id')
+                        ->where('iq.field_name', '=', $field)
+                        ->where('iq.status', '=', 'completed')
+                        ->where('iq.gdrive_url', 'like', 'http%');
+                })
+                ->where("a.{$field}", 'processing')
+                ->orderByDesc('iq.id') // newest upload wins
+                ->get(['a.id', 'iq.gdrive_url']);
+
+            foreach ($completed as $row) {
+                $updated = Application::where('id', $row->id)
+                    ->where($field, 'processing')
+                    ->update([$field => $row->gdrive_url]);
+
+                if ($updated) {
+                    $this->replaceCustomerPlaceholder((int) $row->id, $field, $row->gdrive_url);
+                    $filled++;
+                }
+            }
+
+            $orphanIds = DB::table('applications as a')
+                ->where("a.{$field}", 'processing')
+                ->where('a.created_at', '<', now()->subMinutes(self::ORPHAN_GRACE_MINUTES))
+                ->whereNotExists(function ($query) use ($field) {
+                    $query->select(DB::raw(1))
+                        ->from('images_queue as iq')
+                        ->whereColumn('iq.application_id', 'a.id')
+                        ->where('iq.field_name', $field)
+                        ->where(function ($alive) {
+                            $alive->whereIn('iq.status', ['pending', 'processing'])
+                                ->orWhere(function ($retryable) {
+                                    $retryable->where('iq.status', 'failed')
+                                        ->where('iq.retry_count', '<', self::MAX_RETRIES);
+                                });
+                        });
+                })
+                ->pluck('a.id');
+
+            foreach ($orphanIds as $applicationId) {
+                $updated = Application::where('id', $applicationId)
+                    ->where($field, 'processing')
+                    ->update([$field => null]);
+
+                if ($updated) {
+                    $this->replaceCustomerPlaceholder((int) $applicationId, $field, null);
+                    $cleared++;
+                }
+            }
+        }
+
+        if ($filled > 0 || $cleared > 0) {
+            Log::warning("Image placeholders reconciled: {$filled} filled from completed uploads, {$cleared} cleared with nothing left to upload");
+        }
+
+        return ['filled' => $filled, 'cleared' => $cleared];
+    }
+
     public function retryFailedImages(): array
     {
         $retried = 0;
 
         $failedImages = ImageQueue::where('status', 'failed')
-            ->where('retry_count', '<', 3)
+            ->where('retry_count', '<', self::MAX_RETRIES)
             ->get();
 
         foreach ($failedImages as $imageQueue) {

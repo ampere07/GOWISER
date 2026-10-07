@@ -25,6 +25,7 @@ import { getBillingRecords, getBillingRecordDetails, BillingDetailRecord } from 
 import { getAllInventoryItems } from '../services/inventoryItemService';
 import { isAgentUser } from '../utils/agentReferral';
 import { usePermissions } from '../hooks/usePermissions';
+import ImageLinkValue from './common/ImageLinkValue';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const UserDetails = React.lazy(() => import('./UserDetails'));
@@ -1622,19 +1623,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!clientSignatureImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Signature</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {clientSignatureImg}
-              </span>
-              {clientSignatureImg && (
-                <button aria-label="Open client signature"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(clientSignatureImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Signature</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={clientSignatureImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1644,19 +1635,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!setupImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Setup Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {setupImg}
-              </span>
-              {setupImg && (
-                <button aria-label="Open setup"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(setupImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Setup Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={setupImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1666,19 +1647,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!speedtestImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Speedtest Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {speedtestImg}
-              </span>
-              {speedtestImg && (
-                <button aria-label="Open speedtest"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(speedtestImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Speedtest Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={speedtestImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1688,19 +1659,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!contractImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Signed Contract Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {contractImg}
-              </span>
-              {contractImg && (
-                <button aria-label="Open contract"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(contractImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Signed Contract Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={contractImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1710,19 +1671,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!boxReadingImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Box Reading Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {boxReadingImg}
-              </span>
-              {boxReadingImg && (
-                <button aria-label="Open box reading"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(boxReadingImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Box Reading Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={boxReadingImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1732,19 +1683,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!routerReadingImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Modem Reading Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {routerReadingImg}
-              </span>
-              {routerReadingImg && (
-                <button aria-label="Open router reading"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(routerReadingImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Modem Reading Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={routerReadingImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1754,19 +1695,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!portLabelImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Port Label Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {portLabelImg}
-              </span>
-              {portLabelImg && (
-                <button aria-label="Open port label"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(portLabelImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Port Label Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={portLabelImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1776,19 +1707,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!houseFrontImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>House Front Picture</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {houseFrontImg}
-              </span>
-              {houseFrontImg && (
-                <button aria-label="Open house front"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(houseFrontImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>House Front Picture</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={houseFrontImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1798,19 +1719,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!clientTaggingImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Tagging</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {clientTaggingImg}
-              </span>
-              {clientTaggingImg && (
-                <button aria-label="Open client tagging"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(clientTaggingImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Tagging</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={clientTaggingImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1820,19 +1731,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!proofImg) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Proof Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">
-                {proofImg}
-              </span>
-              {proofImg && (
-                <button aria-label="Open proof"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => window.open(proofImg)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Proof Image</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={proofImg} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1842,15 +1743,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!proofOfBilling) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Photo Documentation</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">{proofOfBilling}</span>
-              <button aria-label="Open proof of billing"
-                className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => window.open(proofOfBilling)}
-              >
-                <ExternalLink size={16} />
-              </button>
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Photo Documentation</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={proofOfBilling} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1860,15 +1755,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!govId) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Government ID</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">{govId}</span>
-              <button aria-label="Open gov id"
-                className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => window.open(govId)}
-              >
-                <ExternalLink size={16} />
-              </button>
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Government ID</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={govId} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1878,15 +1767,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!secondGovId) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Second Government ID</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">{secondGovId}</span>
-              <button aria-label="Open second gov id"
-                className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => window.open(secondGovId)}
-              >
-                <ExternalLink size={16} />
-              </button>
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Second Government ID</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={secondGovId} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1896,15 +1779,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!docAttach) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Document Attachment</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">{docAttach}</span>
-              <button aria-label="Open doc attach"
-                className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => window.open(docAttach)}
-              >
-                <ExternalLink size={16} />
-              </button>
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Document Attachment</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={docAttach} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1914,15 +1791,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!ispBill) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Other ISP Bill</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              <span className="truncate mr-2">{ispBill}</span>
-              <button aria-label="Open isp bill"
-                className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => window.open(ispBill)}
-              >
-                <ExternalLink size={16} />
-              </button>
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Other ISP Bill</div>
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <ImageLinkValue value={ispBill} isDarkMode={isDarkMode} />
             </div>
           </div>
         );

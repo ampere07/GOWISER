@@ -18,6 +18,7 @@ import { planService, Plan } from '../services/planService';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { usePermissions } from '../hooks/usePermissions';
+import ImageLinkValue from './common/ImageLinkValue';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
@@ -799,22 +800,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Client Photo Documentation</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.proof_of_billing_url}
-              </span>
-              {detailedApplication?.proof_of_billing_url && (
-                <button aria-label="Open proof of billing"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.proof_of_billing_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.proof_of_billing_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -824,22 +814,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Government Valid ID</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.government_valid_id_url}
-              </span>
-              {detailedApplication?.government_valid_id_url && (
-                <button aria-label="Open government valid id"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.government_valid_id_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.government_valid_id_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -849,25 +828,14 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>
               <div>Secondary Government</div>
               <div>Valid ID</div>
             </div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.secondary_government_valid_id_url}
-              </span>
-              {detailedApplication?.secondary_government_valid_id_url && (
-                <button aria-label="Open secondary government valid id"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.secondary_government_valid_id_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.secondary_government_valid_id_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -877,22 +845,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>House Front Picture</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.house_front_picture_url}
-              </span>
-              {detailedApplication?.house_front_picture_url && (
-                <button aria-label="Open house front picture"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.house_front_picture_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.house_front_picture_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -902,22 +859,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Promo Image</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.promo_url}
-              </span>
-              {detailedApplication?.promo_url && (
-                <button aria-label="Open promo"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.promo_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.promo_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -927,22 +873,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Nearest Landmark 1</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.nearest_landmark1_url}
-              </span>
-              {detailedApplication?.nearest_landmark1_url && (
-                <button aria-label="Open nearest landmark1"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.nearest_landmark1_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.nearest_landmark1_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -952,22 +887,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Nearest Landmark 2</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.nearest_landmark2_url}
-              </span>
-              {detailedApplication?.nearest_landmark2_url && (
-                <button aria-label="Open nearest landmark2"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.nearest_landmark2_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.nearest_landmark2_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -977,22 +901,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Document Attachment</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.document_attachment_url}
-              </span>
-              {detailedApplication?.document_attachment_url && (
-                <button aria-label="Open document attachment"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.document_attachment_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.document_attachment_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );
@@ -1002,22 +915,11 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            <div className={`w-40 flex-shrink-0 pr-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>Other ISP Bill</div>
-            <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
-              <span className="truncate mr-2">
-                {detailedApplication.other_isp_bill_url}
-              </span>
-              {detailedApplication?.other_isp_bill_url && (
-                <button aria-label="Open other isp bill"
-                  className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  onClick={() => window.open(detailedApplication.other_isp_bill_url)}
-                >
-                  <ExternalLink size={16} />
-                </button>
-              )}
+              <ImageLinkValue value={detailedApplication.other_isp_bill_url} isDarkMode={isDarkMode} />
             </div>
           </div>
         );

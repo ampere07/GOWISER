@@ -42,6 +42,24 @@ class ProcessImageQueue extends Command
                 $this->logToFile($recoveryMessage);
             }
 
+            // Every run, before the "nothing pending" exit: a row that failed while nothing else
+            // was pending used to wait for some later run to fail too before it was retried,
+            // and its record showed 'processing' the whole time.
+            $retryResult = $this->imageProcessingService->retryFailedImages();
+            if ($retryResult['retried'] > 0) {
+                $retryMessage = "Marked {$retryResult['retried']} failed image(s) for retry";
+                $this->info($retryMessage);
+                $this->logToFile($retryMessage);
+            }
+
+            // Fill or clear any 'processing' placeholder nothing in the queue will ever replace.
+            $reconciled = $this->imageProcessingService->reconcilePlaceholders();
+            if ($reconciled['filled'] > 0 || $reconciled['cleared'] > 0) {
+                $reconcileMessage = "Placeholders reconciled - filled: {$reconciled['filled']}, cleared: {$reconciled['cleared']}";
+                $this->info($reconcileMessage);
+                $this->logToFile($reconcileMessage);
+            }
+
             $stats = $this->imageProcessingService->getQueueStats();
             
             $statsMessage = sprintf(
@@ -87,13 +105,6 @@ class ProcessImageQueue extends Command
             $this->logToFile($resultMessage);
 
             Log::info('Image Queue Processing: Completed', $result);
-
-            if ($result['failed'] > 0) {
-                $retryResult = $this->imageProcessingService->retryFailedImages();
-                $retryMessage = "Marked {$retryResult['retried']} failed image(s) for retry";
-                $this->info($retryMessage);
-                $this->logToFile($retryMessage);
-            }
 
             $endTime = now();
             $duration = $endTime->diffInSeconds($startTime);
