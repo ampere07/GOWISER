@@ -470,7 +470,7 @@ const DataLogs: React.FC = () => {
           </div>
 
           {/* Log Type select filter */}
-          <select
+          <select aria-label="Log type"
             value={logTypeFilter}
             onChange={(e) => setLogTypeFilter(e.target.value)}
             className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-all cursor-pointer focus:outline-none flex-shrink-0 ${logTypeFilter !== 'all'
@@ -566,7 +566,7 @@ const DataLogs: React.FC = () => {
               <thead className="sticky top-0 z-10">
                 <tr className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-gray-100 border-gray-300'} border-b`}>
                   {displayedColumns.map((column, index) => (
-                    <th
+                    <th role="button" aria-label={`Sort by ${column.label}`}
                       key={column.key}
                       draggable
                       onDragStart={(e) => handleDragStart(e, column.key)}
@@ -602,7 +602,7 @@ const DataLogs: React.FC = () => {
               </thead>
               <tbody>
                 {paginatedLogs.map((row) => (
-                  <tr
+                  <tr role="button" aria-label="Click to compare details"
                     key={`${row.log_type}-${row.id}`}
                     onClick={() => setSelectedCompareLog(row)}
                     className={`border-b cursor-pointer transition-colors hover:bg-slate-500/5 ${isDarkMode ? 'border-gray-800/80 hover:bg-gray-800/30' : 'border-gray-200 hover:bg-gray-100/30'
@@ -649,7 +649,7 @@ const DataLogs: React.FC = () => {
             <div className={`flex flex-col sm:flex-row items-center gap-4 text-sm text-center md:text-left ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
               <div className="flex items-center gap-2">
                 <span>Show</span>
-                <select
+                <select aria-label="Rows per page"
                   value={itemsPerPage}
                   onChange={(e) => {
                     setItemsPerPage(Number(e.target.value));
@@ -832,7 +832,7 @@ const DetailsCompareModal: React.FC<DetailsCompareModalProps> = ({
               Data Log Comparison
             </h3>
           </div>
-          <button
+          <button aria-label="Close"
             onClick={onClose}
             className={`p-2 rounded-xl transition-all ${
               isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-950'

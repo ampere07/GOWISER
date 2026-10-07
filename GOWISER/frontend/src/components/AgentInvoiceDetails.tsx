@@ -173,7 +173,7 @@ const AgentInvoiceDetails: React.FC<AgentInvoiceDetailsProps> = ({
               <ChevronRight size={18} />
             </button>
           </div>
-          <button
+          <button aria-label="Close"
             onClick={onClose}
             className={`p-2 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
           >
@@ -300,7 +300,7 @@ const AgentInvoiceDetails: React.FC<AgentInvoiceDetailsProps> = ({
                 {customers.length} items
               </span>
             </div>
-            <button
+            <button aria-label="Close"
               onClick={() => setExpandedModal(false)}
               className={`p-2 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
             >

@@ -650,7 +650,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     <div className="flex-1 flex overflow-hidden">
                         {/* Mobile Overlay */}
                         {isMobileMenuOpen && (
-                            <div
+                            <div role="button" aria-label="Close"
                                 className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
                                 onClick={closeMobileMenu}
                             />

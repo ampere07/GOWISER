@@ -340,7 +340,7 @@ const RadiusConfig: React.FC = () => {
                           }`}>
                           Connection Type
                         </label>
-                        <select
+                        <select aria-label="Connection Type"
                           value={formData.ssl_type}
                           onChange={(e) => handleInputChange('ssl_type', e.target.value)}
                           className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode
@@ -649,11 +649,11 @@ const RadiusConfig: React.FC = () => {
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      <label htmlFor="radiusconfig-connection-type" className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                         }`}>
                         Connection Type
                       </label>
-                      <select
+                      <select id="radiusconfig-connection-type"
                         value={formData.ssl_type}
                         onChange={(e) => handleInputChange('ssl_type', e.target.value)}
                         className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode

@@ -391,7 +391,7 @@ const Expenses: React.FC = () => {
                   ))}
                 </select>
 
-                <select
+                <select aria-label="Category"
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value ? Number(e.target.value) : '')}
                   className={controlClass}

@@ -1628,7 +1628,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {clientSignatureImg}
               </span>
               {clientSignatureImg && (
-                <button
+                <button aria-label="Open client signature"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(clientSignatureImg)}
                 >
@@ -1650,7 +1650,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {setupImg}
               </span>
               {setupImg && (
-                <button
+                <button aria-label="Open setup"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(setupImg)}
                 >
@@ -1672,7 +1672,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {speedtestImg}
               </span>
               {speedtestImg && (
-                <button
+                <button aria-label="Open speedtest"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(speedtestImg)}
                 >
@@ -1694,7 +1694,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {contractImg}
               </span>
               {contractImg && (
-                <button
+                <button aria-label="Open contract"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(contractImg)}
                 >
@@ -1716,7 +1716,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {boxReadingImg}
               </span>
               {boxReadingImg && (
-                <button
+                <button aria-label="Open box reading"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(boxReadingImg)}
                 >
@@ -1738,7 +1738,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {routerReadingImg}
               </span>
               {routerReadingImg && (
-                <button
+                <button aria-label="Open router reading"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(routerReadingImg)}
                 >
@@ -1760,7 +1760,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {portLabelImg}
               </span>
               {portLabelImg && (
-                <button
+                <button aria-label="Open port label"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(portLabelImg)}
                 >
@@ -1782,7 +1782,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {houseFrontImg}
               </span>
               {houseFrontImg && (
-                <button
+                <button aria-label="Open house front"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(houseFrontImg)}
                 >
@@ -1804,7 +1804,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {clientTaggingImg}
               </span>
               {clientTaggingImg && (
-                <button
+                <button aria-label="Open client tagging"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(clientTaggingImg)}
                 >
@@ -1826,7 +1826,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {proofImg}
               </span>
               {proofImg && (
-                <button
+                <button aria-label="Open proof"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(proofImg)}
                 >
@@ -1842,10 +1842,10 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         if (!proofOfBilling) return null;
         return (
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Client Photo Documentation</div>
+            <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Proof of Billing</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{proofOfBilling}</span>
-              <button
+              <button aria-label="Open proof of billing"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(proofOfBilling)}
               >
@@ -1863,7 +1863,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Government ID</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{govId}</span>
-              <button
+              <button aria-label="Open gov id"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(govId)}
               >
@@ -1881,7 +1881,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Second Government ID</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{secondGovId}</span>
-              <button
+              <button aria-label="Open second gov id"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(secondGovId)}
               >
@@ -1899,7 +1899,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Document Attachment</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{docAttach}</span>
-              <button
+              <button aria-label="Open doc attach"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(docAttach)}
               >
@@ -1917,7 +1917,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Other ISP Bill</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{ispBill}</span>
-              <button
+              <button aria-label="Open isp bill"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(ispBill)}
               >
@@ -2195,7 +2195,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                               : ''
                             }`}
                         >
-                          <input
+                          <input aria-label={`Show ${getFieldLabel(fieldKey)}`}
                             type="checkbox"
                             checked={fieldVisibility[fieldKey]}
                             onChange={() => toggleFieldVisibility(fieldKey)}
@@ -2316,7 +2316,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 {relatedDataCounts[expandedModalSection]} items
               </span>
             </div>
-            <button
+            <button aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'

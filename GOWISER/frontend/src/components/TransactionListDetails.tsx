@@ -584,7 +584,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           {value || '-'}
         </span>
         {hasInfo && (
-          <button className={`ml-2 flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}>
+          <button aria-label="View details" className={`ml-2 flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}>
             <Info size={16} />
           </button>
         )}
@@ -1107,7 +1107,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                   {invoicesCount} items
                 </span>
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={handleExpandModalClose}
                 className={`p-2 rounded transition-colors ${isDarkMode
                   ? 'text-gray-400 hover:text-white hover:bg-gray-700'

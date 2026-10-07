@@ -406,7 +406,7 @@ const AddLocationModal: React.FC<AddLocationModalProps> = ({
                   'Save'
                 )}
               </button>
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
               >
@@ -495,7 +495,7 @@ const AddLocationModal: React.FC<AddLocationModalProps> = ({
                     </div>
                   ) : (
                     <div className="relative">
-                      <select
+                      <select aria-label="Region"
                         value={formData.regionId?.toString() || ''}
                         onChange={(e) => handleRegionChange(e.target.value)}
                         className={`w-full px-3 py-2 border rounded focus:outline-none appearance-none transition-all duration-200 ${errors.regionId ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -568,7 +568,7 @@ const AddLocationModal: React.FC<AddLocationModalProps> = ({
                     </div>
                   ) : (
                     <div className="relative">
-                      <select
+                      <select aria-label="City"
                         value={formData.cityId?.toString() || ''}
                         onChange={(e) => handleCityChange(e.target.value)}
                         disabled={!formData.regionId && !showNewRegionInput}
@@ -642,7 +642,7 @@ const AddLocationModal: React.FC<AddLocationModalProps> = ({
                     </div>
                   ) : (
                     <div className="relative">
-                      <select
+                      <select aria-label="Barangay"
                         value={formData.barangayId?.toString() || ''}
                         onChange={(e) => handleBarangayChange(e.target.value)}
                         disabled={!formData.cityId && !showNewCityInput}

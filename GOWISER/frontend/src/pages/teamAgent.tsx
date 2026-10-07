@@ -127,7 +127,7 @@ const TeamAgent: React.FC = () => {
                 <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 text-xs">
                     <div className="flex items-center gap-2">
                         <span>Show</span>
-                        <select
+                        <select aria-label="Rows per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -158,13 +158,13 @@ const TeamAgent: React.FC = () => {
                         <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Manage system agents and teams</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button
+                        <button aria-label="Refresh agents"
                             onClick={() => refreshAgents()}
                             className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
                         >
                             <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
                         </button>
-                        <button
+                        <button aria-label="Add agent"
                             onClick={() => { setSelectedAgent(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
                             style={{ backgroundColor: colorPalette?.primary || '#3b82f6' }}
@@ -234,13 +234,13 @@ const TeamAgent: React.FC = () => {
                                                 >
                                                     <Banknote size={16} />
                                                 </button>
-                                                <button
+                                                <button aria-label="Edit agent"
                                                     onClick={() => { setSelectedAgent(agent); setShowModal(true); }}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                 >
                                                     <Edit size={16} />
                                                 </button>
-                                                <button
+                                                <button aria-label="Delete agent"
                                                     onClick={() => handleDeleteAgent(agent.id)}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                 >

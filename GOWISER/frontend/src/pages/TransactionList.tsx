@@ -82,7 +82,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
       <div className={`flex flex-wrap items-center justify-center sm:justify-start gap-3 sm:gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
         <div className="flex items-center gap-2">
           <span>Show</span>
-          <select
+          <select aria-label="Rows per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -111,7 +111,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           <ChevronsLeft size={16} />
         </button>
 
-        <button
+        <button aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -128,7 +128,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           </span>
         </div>
 
-        <button
+        <button aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1396,8 +1396,8 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
             </div>
             <div className="space-y-2">
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                <input
+                <label htmlFor="transactionlist-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                <input id="transactionlist-from"
                   type="date"
                   value={processedDateFrom}
                   onChange={(e) => setProcessedDateFrom(e.target.value)}
@@ -1409,8 +1409,8 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 />
               </div>
               <div className="relative">
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                <input
+                <label htmlFor="transactionlist-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                <input id="transactionlist-to"
                   type="date"
                   value={processedDateTo}
                   onChange={(e) => setProcessedDateTo(e.target.value)}
@@ -1468,7 +1468,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           {/* Region Level */}
           {locationItems.regions.map((region: any) => (
             <div key={region.id}>
-              <button
+              <button aria-label={`Open ${region.name}`}
                 onClick={() => setSelectedLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
@@ -1481,7 +1481,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 } : {}}
               >
                 <div className="flex items-center flex-1">
-                  <button
+                  <button aria-label={`Toggle ${region.name}`}
                     onClick={(e) => toggleLocationExpansion(e, region.id)}
                     className="p-1 mr-1"
                   >
@@ -1512,7 +1512,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               {/* City Level */}
               {expandedLocations.has(region.id) && region.cities.map((city: any) => (
                 <div key={city.id}>
-                  <button
+                  <button aria-label={`Open ${city.name}`}
                     onClick={() => setSelectedLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
@@ -1525,7 +1525,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                     } : {}}
                   >
                     <div className="flex items-center flex-1">
-                      <button
+                      <button aria-label={`Toggle ${city.name}`}
                         onClick={(e) => toggleLocationExpansion(e, city.id)}
                         className="p-1 mr-1"
                       >
@@ -1544,7 +1544,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
                   {/* Barangay Level */}
                   {expandedLocations.has(city.id) && city.barangays.map((barangay: any) => (
-                    <button
+                    <button aria-label={`Select ${barangay.name}`}
                       key={barangay.id}
                       onClick={() => setSelectedLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1837,7 +1837,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   >
                     <span className="opacity-70 mr-1">{label}:</span>
                     <span className="truncate max-w-[150px]">{displayValue}</span>
-                    <button
+                    <button aria-label="Close"
                       onClick={() => removeFilter(key)}
                       className={`ml-1 p-0.5 rounded-full transition-colors`}
                       onMouseEnter={(e) => {
@@ -1903,7 +1903,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                       <tr className={`border-b sticky top-0 z-10 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-100'}`}>
                         {isBatchApproveMode && (
                           <th className={`px-4 py-3 text-left ${isDarkMode ? 'text-gray-400 bg-gray-800' : 'text-gray-600 bg-gray-100'}`}>
-                            <input
+                            <input aria-label="Select all transactions"
                               type="checkbox"
                               checked={
                                 selectedTransactionIds.length > 0 &&
@@ -1917,7 +1917,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                           </th>
                         )}
                         {filteredColumns.map((column, index) => (
-                          <th
+                          <th role="button" aria-label={`Sort by ${column.label}`}
                             key={column.key}
                             draggable
                             onDragStart={(e) => handleDragStart(e, column.key)}
@@ -1954,7 +1954,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                           const canSelect = isBatchApproveMode && isPending;
 
                           return (
-                            <tr
+                            <tr role="button" aria-label={`Open transaction ${transaction.id}`}
                               key={transaction.id}
                               className={`border-b transition-colors ${canSelect ? 'cursor-pointer' : isBatchApproveMode ? 'cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'} ${!isSelected && selectedTransaction?.id === transaction.id ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : !isSelected && isBatchApproveMode && !isPending ? (isDarkMode ? 'bg-gray-800 opacity-50' : 'bg-gray-200 opacity-50') : ''}`}
                               style={isSelected ? { backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)' } : {}}
@@ -1962,7 +1962,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                             >
                               {isBatchApproveMode && (
                                 <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                                  <input
+                                  <input aria-label={`Select transaction ${transaction.id}`}
                                     type="checkbox"
                                     checked={isSelected}
                                     onChange={() => toggleTransactionSelection(transaction.id)}

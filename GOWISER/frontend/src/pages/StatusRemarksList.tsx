@@ -238,7 +238,7 @@ const StatusRemarksList: React.FC = () => {
 
   const renderListItem = (remark: StatusRemark) => {
     return (
-      <div key={remark.id} className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
+      <div role="button" aria-label={`Open ${remark.id}`} key={remark.id} className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
         }`}
         onClick={() => handleEdit(remark)}
       >
@@ -383,7 +383,7 @@ const StatusRemarksList: React.FC = () => {
           <div className={`flex items-center gap-4 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             <div className="flex items-center gap-2">
               <span>Show</span>
-              <select
+              <select aria-label="Rows per page"
                 value={itemsPerPage}
                 onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                 className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -414,7 +414,7 @@ const StatusRemarksList: React.FC = () => {
               <ChevronsLeft size={14} />
             </button>
 
-            <button
+            <button aria-label="Previous page"
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -431,7 +431,7 @@ const StatusRemarksList: React.FC = () => {
               </span>
             </div>
 
-            <button
+            <button aria-label="Next page"
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
               className={`p-1.5 rounded transition-colors ${currentPage === totalPages

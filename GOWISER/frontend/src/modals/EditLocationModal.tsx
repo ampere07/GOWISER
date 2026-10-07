@@ -209,7 +209,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
             >
               Save
             </button>
-            <button
+            <button aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -223,11 +223,11 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
           <div className="max-w-3xl space-y-6">
             {/* Name Field */}
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="editlocationmodal-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Name<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="editlocationmodal-name"
                 type="text"
                 value={editedName}
                 onChange={(e) => setEditedName(e.target.value)}
@@ -241,11 +241,11 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
             {/* Barangay Field (for Locations) */}
             {location.type === 'location' && (
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="editlocationmodal-barangay" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Barangay<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="editlocationmodal-barangay"
                   type="text"
                   value={barangayName}
                   disabled
@@ -260,11 +260,11 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
             {/* City Field (for Locations) */}
             {location.type === 'location' && (
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="editlocationmodal-city" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   City<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="editlocationmodal-city"
                   type="text"
                   value={cityName}
                   disabled
@@ -279,11 +279,11 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
             {/* Region Field (for Locations) */}
             {location.type === 'location' && (
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="editlocationmodal-region" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Region<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="editlocationmodal-region"
                   type="text"
                   value={regionName}
                   disabled
@@ -304,7 +304,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                     location.type === 'borough' ? 'City' : 'Parent'}
                   <span className="text-red-500">*</span>
                 </label>
-                <input
+                <input aria-label="Parent location"
                   type="text"
                   value={location.parentName}
                   disabled
@@ -318,11 +318,11 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
 
             {/* ID Field */}
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="editlocationmodal-id" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 id<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="editlocationmodal-id"
                 type="text"
                 value={location.id}
                 disabled

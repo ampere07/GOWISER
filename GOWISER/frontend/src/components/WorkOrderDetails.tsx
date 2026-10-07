@@ -374,7 +374,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
               <div className={labelClass}>{getFieldLabel(fieldKey)}:</div>
               <div className={valueClass}>
                 <div className={`mt-2 rounded-lg border overflow-hidden max-w-sm ${isDarkMode ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-100'}`}>
-                  <img
+                  <img aria-label={`Open ${getFieldLabel(fieldKey)}`} role="button"
                     src={imageUrl}
                     alt={getFieldLabel(fieldKey)}
                     className="w-full h-auto object-contain cursor-pointer transition-transform hover:scale-105"
@@ -489,7 +489,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
                         onDragEnd={handleDragEnd}
                         className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-move transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draggedIndex === index ? isDarkMode ? 'bg-gray-600' : 'bg-gray-200' : ''}`}
                       >
-                        <input
+                        <input aria-label={`Show ${getFieldLabel(fieldKey)}`}
                           type="checkbox"
                           checked={fieldVisibility[fieldKey]}
                           onChange={() => toggleFieldVisibility(fieldKey)}

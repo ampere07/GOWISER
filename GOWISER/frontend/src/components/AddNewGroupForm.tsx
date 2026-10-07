@@ -233,11 +233,11 @@ const AddNewGroupForm: React.FC<AddNewGroupFormProps> = ({ onCancel, onGroupCrea
               </div>
 
               <div className="md:col-span-2">
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="addnewgroupform-organization-optional" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Organization (Optional)
                 </label>
-                <select
+                <select id="addnewgroupform-organization-optional"
                   name="org_id"
                   value={formData.org_id || ''}
                   onChange={handleInputChange}

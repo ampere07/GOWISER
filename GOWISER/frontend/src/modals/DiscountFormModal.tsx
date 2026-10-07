@@ -410,7 +410,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   'Save'
                 )}
               </button>
-              <button
+              <button aria-label="Close"
                 onClick={onClose}
                 className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
               >
@@ -427,7 +427,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               </label>
               <div className="relative" ref={accountDropdownRef}>
                 {/* Custom Searchable Dropdown */}
-                <div
+                <div role="button"
                   className={`w-full px-3 py-2 border rounded cursor-pointer ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                     } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     }`}
@@ -485,7 +485,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                           const displayText = `${accountNumber} | ${fullName || account.customerName} | ${addressParts}`;
 
                           return (
-                            <div
+                            <div role="button" aria-label={`Select ${account.id}`}
                               key={account.id}
                               className={`px-3 py-2 cursor-pointer ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
                                 } ${formData.accountNo === accountNumber
@@ -526,12 +526,12 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="discountformmodal-discount-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Discount Status
               </label>
               <div className="relative">
-                <select
+                <select id="discountformmodal-discount-status"
                   value={formData.status}
                   onChange={(e) => handleInputChange('status', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-pointer ${isDarkMode
@@ -550,13 +550,13 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="discountformmodal-discount-amount" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Discount Amount<span className="text-red-500">*</span>
               </label>
               <div className="flex items-center">
                 <div className="flex-1 relative">
-                  <input
+                  <input id="discountformmodal-discount-amount"
                     type="text"
                     value={`₱ ${formData.discountAmount}`}
                     onChange={(e) => handleInputChange('discountAmount', e.target.value.replace('₱ ', '').replace(/[^0-9.]/g, ''))}
@@ -566,7 +566,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   />
                 </div>
                 <div className="flex flex-col">
-                  <button
+                  <button aria-label="Decrease discount amount"
                     type="button"
                     onClick={() => handleDiscountAmountChange('decrease')}
                     className={`px-3 py-1 border border-l-0 text-sm ${isDarkMode
@@ -576,7 +576,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   >
                     <Minus size={16} />
                   </button>
-                  <button
+                  <button aria-label="Increase discount amount"
                     type="button"
                     onClick={() => handleDiscountAmountChange('increase')}
                     className={`px-3 py-1 border border-l-0 border-t-0 rounded-r text-sm ${isDarkMode
@@ -592,12 +592,12 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="discountformmodal-processed-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Processed By<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="discountformmodal-processed-by"
                   value={formData.processedByUserId || ''}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -622,12 +622,12 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="discountformmodal-approved-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Approved By<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="discountformmodal-approved-by"
                   value={formData.approvedByUserId || ''}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -651,11 +651,11 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="discountformmodal-remarks" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Remarks
               </label>
-              <textarea
+              <textarea id="discountformmodal-remarks"
                 value={formData.remarks}
                 onChange={(e) => handleInputChange('remarks', e.target.value)}
                 rows={4}

@@ -85,7 +85,7 @@ const ImageUploadField = ({
                 <>
                     <Camera size={32} className={isDarkMode ? 'text-gray-500' : 'text-gray-400'} />
                     <span className={`mt-2 text-xs font-medium ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Click to upload {label}</span>
-                    <input 
+                    <input aria-label="Choose file" 
                         type="file" 
                         className="absolute inset-0 opacity-0 cursor-pointer" 
                         accept="image/*" 
@@ -339,7 +339,7 @@ const CustomerAttachmentModal: React.FC<CustomerAttachmentModalProps> = ({
                 loading={loading}
             >
                 <div className="space-y-6">
-                    <ImageUploadField label="Client Photo Documentation" field="proofOfBilling" preview={previews.proofOfBilling} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
+                    <ImageUploadField label="Proof of Billing" field="proofOfBilling" preview={previews.proofOfBilling} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="Government Valid ID" field="governmentValidId" preview={previews.governmentValidId} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="Secondary Government Valid ID" field="secondaryGovernmentValidId" preview={previews.secondaryGovernmentValidId} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                     <ImageUploadField label="House Front Image" field="houseFrontImage" preview={previews.houseFrontImage} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />

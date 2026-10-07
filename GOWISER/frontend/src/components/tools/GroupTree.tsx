@@ -47,7 +47,7 @@ const GroupTree: React.FC<GroupTreeProps> = ({
 
       return (
         <div key={node.id}>
-          <button
+          <button aria-label={`Open ${node.label}`}
             onClick={() => onSelect(node.id)}
             className={`w-full flex items-center justify-between py-2 pr-4 transition-colors ${
               isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -85,7 +85,7 @@ const GroupTree: React.FC<GroupTreeProps> = ({
               </span>
 
               {hasChildren && (
-                <span
+                <span aria-label={`Toggle ${node.label}`}
                   role="button"
                   tabIndex={0}
                   onClick={(event) => {

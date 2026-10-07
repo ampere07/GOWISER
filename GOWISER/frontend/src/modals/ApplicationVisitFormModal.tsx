@@ -626,7 +626,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 'Save'
               )}
             </button>
-            <button
+            <button aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -638,11 +638,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="space-y-4">
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-first-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 First Name<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="applicationvisitformmodal-first-name"
                 type="text"
                 value={formData.firstName}
                 onChange={(e) => handleInputChange('firstName', e.target.value)}
@@ -664,11 +664,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-middle-initial" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Middle Initial
               </label>
-              <input
+              <input id="applicationvisitformmodal-middle-initial"
                 type="text"
                 value={formData.middleInitial}
                 onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -691,11 +691,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-last-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Last Name<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="applicationvisitformmodal-last-name"
                 type="text"
                 value={formData.lastName}
                 onChange={(e) => handleInputChange('lastName', e.target.value)}
@@ -717,11 +717,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Contact Number<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="applicationvisitformmodal-contact-number"
                 type="text"
                 value={formData.contactNumber}
                 onChange={(e) => handleInputChange('contactNumber', e.target.value)}
@@ -743,11 +743,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-second-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Second Contact Number
               </label>
-              <input
+              <input id="applicationvisitformmodal-second-contact-number"
                 type="text"
                 value={formData.secondContactNumber || ''}
                 onChange={(e) => handleInputChange('secondContactNumber', e.target.value)}
@@ -769,11 +769,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-applicant-email-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Applicant Email Address<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="applicationvisitformmodal-applicant-email-address"
                 type="email"
                 value={formData.email}
                 onChange={(e) => handleInputChange('email', e.target.value)}
@@ -795,11 +795,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Address<span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="applicationvisitformmodal-address"
                 type="text"
                 value={formData.address}
                 onChange={(e) => handleInputChange('address', e.target.value)}
@@ -821,12 +821,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-region" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Region<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-region"
                   value={formData.region}
                   onChange={(e) => handleInputChange('region', e.target.value)}
                   onFocus={(e) => {
@@ -860,12 +860,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-city" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 City<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-city"
                   value={formData.city}
                   onChange={(e) => handleInputChange('city', e.target.value)}
                   disabled={!formData.region}
@@ -899,12 +899,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-barangay" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Barangay<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-barangay"
                   value={formData.barangay}
                   onChange={(e) => handleInputChange('barangay', e.target.value)}
                   disabled={!formData.city}
@@ -938,12 +938,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-location" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Location<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-location"
                   value={formData.location}
                   onChange={(e) => handleInputChange('location', e.target.value)}
                   disabled={!formData.barangay}
@@ -977,12 +977,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-choose-plan" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Choose Plan<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-choose-plan"
                   value={formData.choosePlan}
                   onChange={(e) => handleInputChange('choosePlan', e.target.value)}
                   onFocus={(e) => {
@@ -1021,12 +1021,12 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-promo" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Promo
               </label>
               <div className="relative">
-                <select
+                <select id="applicationvisitformmodal-promo"
                   value={formData.promo}
                   onChange={(e) => handleInputChange('promo', e.target.value)}
                   onFocus={(e) => {
@@ -1060,11 +1060,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-remarks" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Remarks
               </label>
-              <textarea
+              <textarea id="applicationvisitformmodal-remarks"
                 value={formData.remarks}
                 onChange={(e) => handleInputChange('remarks', e.target.value)}
                 rows={3}
@@ -1086,11 +1086,11 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="applicationvisitformmodal-assigned-email" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Assigned Email<span className="text-red-500">*</span>
               </label>
-              <select
+              <select id="applicationvisitformmodal-assigned-email"
                 value={formData.assignedEmail}
                 onChange={(e) => handleInputChange('assignedEmail', e.target.value)}
                 onFocus={(e) => {

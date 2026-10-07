@@ -445,7 +445,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   'Save'
                 )}
               </button>
-              <button
+              <button aria-label="Close"
                 onClick={onClose}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -457,12 +457,12 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
 
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="rebateformmodal-number-of-days" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Number of Days<span className="text-red-500">*</span>
               </label>
               <div className="flex items-center">
-                <input
+                <input id="rebateformmodal-number-of-days"
                   type="number"
                   value={formData.numberOfDays}
                   onChange={(e) => handleInputChange('numberOfDays', parseInt(e.target.value) || 0)}
@@ -473,7 +473,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   }}
                 />
                 <div className="flex flex-col">
-                  <button
+                  <button aria-label="Decrease number of days"
                     type="button"
                     onClick={() => handleNumberChange('decrease')}
                     className={`px-3 py-1 text-white border border-l-0 ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 border-gray-700' : 'bg-gray-300 hover:bg-gray-400 border-gray-300'
@@ -481,7 +481,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   >
                     <Minus size={16} />
                   </button>
-                  <button
+                  <button aria-label="Increase number of days"
                     type="button"
                     onClick={() => handleNumberChange('increase')}
                     className={`px-3 py-1 text-white border border-l-0 border-t-0 rounded-r ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 border-gray-700' : 'bg-gray-300 hover:bg-gray-400 border-gray-300'
@@ -573,7 +573,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                       onFocus={() => setIsLcpnapOpen(true)}
                       className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                     />
-                    <button
+                    <button aria-label="Toggle LCPNAP options"
                       type="button"
                       onClick={() => {
                         if (isLcpnapOpen) {
@@ -600,7 +600,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                         {lcpnapList
                           .filter(item => item.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase()))
                           .map((item) => (
-                            <div
+                            <div role="button" aria-label={`Select ${item.lcpnap_name}`}
                               key={item.id}
                               className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                               onClick={() => {
@@ -622,7 +622,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   )}
 
                   {isLcpnapOpen && (
-                    <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpnapOpen(false); setLcpnapSearch(''); }} />
+                    <div role="button" aria-label="Close" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpnapOpen(false); setLcpnapSearch(''); }} />
                   )}
                 </div>
                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -650,7 +650,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                       onFocus={() => setIsLcpOpen(true)}
                       className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                     />
-                    <button
+                    <button aria-label="Toggle LCP options"
                       type="button"
                       onClick={() => {
                         if (isLcpOpen) {
@@ -677,7 +677,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                         {lcpList
                           .filter(item => item.lcp_name.toLowerCase().includes(lcpSearch.toLowerCase()))
                           .map((item) => (
-                            <div
+                            <div role="button" aria-label={`Select ${item.lcp_name}`}
                               key={item.id}
                               className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                               onClick={() => {
@@ -699,7 +699,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   )}
 
                   {isLcpOpen && (
-                    <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpOpen(false); setLcpSearch(''); }} />
+                    <div role="button" aria-label="Close" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpOpen(false); setLcpSearch(''); }} />
                   )}
                 </div>
                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -727,7 +727,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                       onFocus={() => setIsBarangayOpen(true)}
                       className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                     />
-                    <button
+                    <button aria-label="Toggle barangay options"
                       type="button"
                       onClick={() => {
                         if (isBarangayOpen) {
@@ -754,7 +754,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                         {barangayList
                           .filter(item => item.barangay.toLowerCase().includes(barangaySearch.toLowerCase()))
                           .map((item) => (
-                            <div
+                            <div role="button" aria-label={`Select ${item.barangay}`}
                               key={item.id}
                               className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                               onClick={() => {
@@ -776,7 +776,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   )}
 
                   {isBarangayOpen && (
-                    <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsBarangayOpen(false); setBarangaySearch(''); }} />
+                    <div role="button" aria-label="Close" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsBarangayOpen(false); setBarangaySearch(''); }} />
                   )}
                 </div>
                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -784,12 +784,12 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
             )}
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="rebateformmodal-month" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Month<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="rebateformmodal-month"
                   value={formData.month}
                   onChange={(e) => handleInputChange('month', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
@@ -818,11 +818,11 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="rebateformmodal-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Status
               </label>
-              <input
+              <input id="rebateformmodal-status"
                 type="text"
                 value={formData.status}
                 readOnly
@@ -834,11 +834,11 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="rebateformmodal-created-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Created By
               </label>
-              <input
+              <input id="rebateformmodal-created-by"
                 type="text"
                 value={formData.createdBy}
                 readOnly
@@ -848,12 +848,12 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="rebateformmodal-approved-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>
                 Approved By<span className="text-red-500">*</span>
               </label>
               <div className="relative">
-                <select
+                <select id="rebateformmodal-approved-by"
                   value={formData.approvedBy}
                   onChange={(e) => handleInputChange('approvedBy', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'

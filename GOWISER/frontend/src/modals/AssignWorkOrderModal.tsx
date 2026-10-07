@@ -336,7 +336,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
           <div className="relative overflow-hidden rounded border border-gray-700">
             <img src={imagePreviews[field]} alt={label} className="w-full h-32 object-cover" />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <button
+              <button aria-label="Remove image"
                 onClick={() => {
                   setImagePreviews(prev => ({ ...prev, [field]: '' }));
                   setImages(prev => ({ ...prev, [field]: null }));
@@ -398,6 +398,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Work Category<span className="text-red-500 ml-1">*</span></label>
                   <div className="relative">
                     <select
+                      aria-label="Work Category"
                       value={formData.work_category}
                       onChange={(e) => handleInputChange('work_category', e.target.value)}
                       disabled={isAssignedToCurrentUser}
@@ -415,9 +416,9 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
 
                 {((userRole !== 1 && userRole !== 7) || isEditMode) && (
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Work Status</label>
+                    <label htmlFor="assignworkordermodal-work-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Work Status</label>
                     <div className="relative">
-                      <select
+                      <select id="assignworkordermodal-work-status"
                         value={formData.work_status}
                         onChange={(e) => handleInputChange('work_status', e.target.value)}
                         className={`w-full px-3 py-2 border rounded appearance-none transition-all duration-300 focus:outline-none focus:border-orange-500 ${isDarkMode
@@ -481,7 +482,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                         className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                       />
                       {!isAssignedToCurrentUser && (
-                        <button
+                        <button aria-label="Toggle assignee options"
                           type="button"
                           onClick={() => {
                             if (isAssignToOpen) {
@@ -505,7 +506,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                           {assignees
                             .filter(a => a.name.toLowerCase().includes(assignToSearch.toLowerCase()) || a.email.toLowerCase().includes(assignToSearch.toLowerCase()))
                             .map((assignee) => (
-                              <div
+                              <div role="button" aria-label={`Select ${assignee.name}`}
                                 key={assignee.email}
                                 className={`px-3 py-2 cursor-pointer transition-colors flex flex-col ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${formData.assign_to === assignee.email ? (isDarkMode ? 'bg-gray-700 text-orange-400' : 'bg-gray-50 text-orange-600') : ''}`}
                                 onClick={() => {
@@ -553,7 +554,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                       {imagePreviews.signature ? (
                         <div className="absolute inset-0 flex items-center justify-center p-6">
                           <img src={imagePreviews.signature} alt="Signature Preview" className="max-h-full max-w-full drop-shadow-xl" />
-                          <button
+                          <button aria-label="Clear signature"
                             onClick={() => {
                               setImagePreviews(prev => ({ ...prev, signature: '' }));
                               setImages(prev => ({ ...prev, signature: null }));
@@ -590,7 +591,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                             >
                               <Camera size={16} />
                             </label>
-                            <button
+                            <button aria-label="Clear signature"
                               type="button"
                               onClick={() => sigCanvas.current?.clear()}
                               className={`p-2 rounded shadow transition-all ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-white text-gray-600 border'}`}

@@ -479,7 +479,7 @@ const SOChargePage: React.FC = () => {
         <div className={`flex items-center gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
           <div className="flex items-center gap-2">
             <span>Show</span>
-            <select
+            <select aria-label="Rows per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -496,17 +496,17 @@ const SOChargePage: React.FC = () => {
           </span>
         </div>
         <div className="flex items-center space-x-2">
-          <button onClick={() => handlePageChange(1)} disabled={currentPage === 1} className={`p-1 rounded transition-colors ${currentPage === 1 ? 'text-gray-600 cursor-not-allowed' : (isDarkMode ? 'text-white hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100')}`}>
+          <button aria-label="First page" onClick={() => handlePageChange(1)} disabled={currentPage === 1} className={`p-1 rounded transition-colors ${currentPage === 1 ? 'text-gray-600 cursor-not-allowed' : (isDarkMode ? 'text-white hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100')}`}>
             <ChevronsLeft className="h-5 w-5" />
           </button>
-          <button onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1 ? 'text-gray-600 bg-gray-800 cursor-not-allowed' : (isDarkMode ? 'text-white bg-gray-700 hover:bg-gray-600' : 'text-gray-700 bg-white hover:bg-gray-50 border border-gray-300')}`}>
+          <button aria-label="Previous page" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1 ? 'text-gray-600 bg-gray-800 cursor-not-allowed' : (isDarkMode ? 'text-white bg-gray-700 hover:bg-gray-600' : 'text-gray-700 bg-white hover:bg-gray-50 border border-gray-300')}`}>
             <ChevronLeft size={16} />
           </button>
           <span className={`px-2 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Page {currentPage} of {totalPages}</span>
-          <button onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages ? 'text-gray-600 bg-gray-800 cursor-not-allowed' : (isDarkMode ? 'text-white bg-gray-700 hover:bg-gray-600' : 'text-gray-700 bg-white hover:bg-gray-50 border border-gray-300')}`}>
+          <button aria-label="Next page" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages ? 'text-gray-600 bg-gray-800 cursor-not-allowed' : (isDarkMode ? 'text-white bg-gray-700 hover:bg-gray-600' : 'text-gray-700 bg-white hover:bg-gray-50 border border-gray-300')}`}>
             <ChevronRight size={16} />
           </button>
-          <button onClick={() => handlePageChange(totalPages)} disabled={currentPage === totalPages} className={`p-1 rounded transition-colors ${currentPage === totalPages ? 'text-gray-600 cursor-not-allowed' : (isDarkMode ? 'text-white hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100')}`}>
+          <button aria-label="Last page" onClick={() => handlePageChange(totalPages)} disabled={currentPage === totalPages} className={`p-1 rounded transition-colors ${currentPage === totalPages ? 'text-gray-600 cursor-not-allowed' : (isDarkMode ? 'text-white hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100')}`}>
             <ChevronsRight className="h-5 w-5" />
           </button>
         </div>
@@ -560,8 +560,8 @@ const SOChargePage: React.FC = () => {
               )}
             </div>
             <div className="space-y-2">
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`} style={dateFrom ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}} />
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`} style={dateTo ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}} />
+              <input aria-label="From date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`} style={dateFrom ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}} />
+              <input aria-label="To date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`} style={dateTo ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}} />
             </div>
           </div>
 
@@ -583,7 +583,7 @@ const SOChargePage: React.FC = () => {
             {isDateDropdownOpen && (
               <div className={isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}>
                 {dateItems.dates.map((item, index) => (
-                  <button key={index} onClick={() => setSelectedDate(item.date)} className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} ${selectedDate === item.date ? '' : (isDarkMode ? 'text-gray-400' : 'text-gray-600')}`} style={selectedDate === item.date ? { backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)', color: colorPalette?.primary || '#7c3aed' } : {}}>
+                  <button aria-label={`Select ${item.date}`} key={index} onClick={() => setSelectedDate(item.date)} className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} ${selectedDate === item.date ? '' : (isDarkMode ? 'text-gray-400' : 'text-gray-600')}`} style={selectedDate === item.date ? { backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)', color: colorPalette?.primary || '#7c3aed' } : {}}>
                     <span>{item.date}</span>
                     <span className="text-xs opacity-60">{item.count}</span>
                   </button>
@@ -602,7 +602,7 @@ const SOChargePage: React.FC = () => {
           <div className="flex flex-col space-y-3">
             <div className="flex items-center justify-between space-x-3 overflow-x-auto scrollbar-none pb-1 -mb-1 w-full">
               <div className="flex items-center space-x-3 flex-1 min-w-[250px]">
-                <button
+                <button aria-label="Open menu"
                   onClick={() => setMobileMenuOpen(true)}
                   className={`md:hidden p-2 rounded-lg transition-colors flex items-center justify-center flex-shrink-0 border ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 border-gray-700' : 'hover:bg-gray-100 text-gray-600 border-gray-300'
                     }`}
@@ -772,7 +772,7 @@ const SOChargePage: React.FC = () => {
                   <thead>
                     <tr className={`sticky top-0 z-10 ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'}`}>
                       {filteredColumns.map((col, idx) => (
-                        <th key={col.key} draggable onDragStart={e => handleDragStart(e, col.key)} onDragOver={e => handleDragOver(e, col.key)} onDrop={e => handleDrop(e, col.key)} onClick={() => handleSort(col.key)} className={`relative text-left py-3 px-3 font-normal whitespace-nowrap cursor-pointer transition-colors ${isDarkMode ? 'text-gray-400 border-gray-700 hover:bg-gray-700' : 'text-gray-600 border-gray-200 hover:bg-gray-200'} ${idx < filteredColumns.length - 1 ? 'border-r' : ''}`} style={{ width: columnWidths[col.key] ? `${columnWidths[col.key]}px` : undefined }}>
+                        <th role="button" aria-label={`Sort by ${col.label}`} key={col.key} draggable onDragStart={e => handleDragStart(e, col.key)} onDragOver={e => handleDragOver(e, col.key)} onDrop={e => handleDrop(e, col.key)} onClick={() => handleSort(col.key)} className={`relative text-left py-3 px-3 font-normal whitespace-nowrap cursor-pointer transition-colors ${isDarkMode ? 'text-gray-400 border-gray-700 hover:bg-gray-700' : 'text-gray-600 border-gray-200 hover:bg-gray-200'} ${idx < filteredColumns.length - 1 ? 'border-r' : ''}`} style={{ width: columnWidths[col.key] ? `${columnWidths[col.key]}px` : undefined }}>
                           <div className="flex items-center space-x-1"><span>{col.label}</span>{sortColumn === col.key && (sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />)}</div>
                           <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize opacity-0 group-hover:opacity-100" onMouseDown={e => handleMouseDownResize(e, col.key)} />
                         </th>

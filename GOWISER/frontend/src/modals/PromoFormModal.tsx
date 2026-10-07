@@ -281,10 +281,10 @@ const PromoFormContent: React.FC<{
       </div>
 
       <div className="space-y-2">
-        <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+        <label htmlFor="promoformmodal-status" className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
           Status
         </label>
-        <select
+        <select id="promoformmodal-status"
           value={formData.status}
           onChange={(e) => setFormData({ ...formData, status: e.target.value })}
           className={inputClasses}
@@ -307,10 +307,10 @@ const PromoFormContent: React.FC<{
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="promoformmodal-modified-date" className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified Date
           </label>
-          <input
+          <input id="promoformmodal-modified-date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -318,10 +318,10 @@ const PromoFormContent: React.FC<{
           />
         </div>
         <div className="space-y-2">
-          <label className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="promoformmodal-modified-by" className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified By
           </label>
-          <input
+          <input id="promoformmodal-modified-by"
             type="text"
             value={modifiedBy}
             readOnly

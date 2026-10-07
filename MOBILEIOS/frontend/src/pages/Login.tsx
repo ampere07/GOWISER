@@ -201,7 +201,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, notice }) => {
   // Moved forgot password logic into a Modal below
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f3f4f6' }}>
+    <SafeAreaView testID="customer-sign-in-screen" style={{ flex: 1, backgroundColor: '#f3f4f6' }}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}

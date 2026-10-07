@@ -266,10 +266,10 @@ const StatusRemarkFormContent: React.FC<{
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="statusremarksformmodal-modified-date" className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified Date
           </label>
-          <input
+          <input id="statusremarksformmodal-modified-date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -277,10 +277,10 @@ const StatusRemarkFormContent: React.FC<{
           />
         </div>
         <div className="space-y-2">
-          <label className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+          <label htmlFor="statusremarksformmodal-modified-by" className={`block text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             Modified By
           </label>
-          <input
+          <input id="statusremarksformmodal-modified-by"
             type="text"
             value={modifiedBy}
             readOnly

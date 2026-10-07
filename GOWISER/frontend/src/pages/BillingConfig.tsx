@@ -767,10 +767,10 @@ const BillingConfig: React.FC = () => {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                    <label htmlFor="billingconfig-advance-generation-day" className="block text-sm font-medium text-gray-300 mb-2">
                       Advance Generation Day
                     </label>
-                    <input
+                    <input id="billingconfig-advance-generation-day"
                       type="number"
                       value={billingConfigInput.advance_generation_day}
                       onChange={(e) => handleBillingConfigInputChange('advance_generation_day', e.target.value)}
@@ -790,11 +790,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-due-date-day" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Due Date Day
                     </label>
-                    <input
+                    <input id="billingconfig-due-date-day"
                       type="number"
                       value={billingConfigInput.due_date_day}
                       onChange={(e) => handleBillingConfigInputChange('due_date_day', e.target.value)}
@@ -814,11 +814,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-disconnection-day" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Disconnection Day
                     </label>
-                    <input
+                    <input id="billingconfig-disconnection-day"
                       type="number"
                       value={billingConfigInput.disconnection_day}
                       onChange={(e) => handleBillingConfigInputChange('disconnection_day', e.target.value)}
@@ -838,11 +838,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-overdue-day" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Overdue Day
                     </label>
-                    <input
+                    <input id="billingconfig-overdue-day"
                       type="number"
                       value={billingConfigInput.overdue_day}
                       onChange={(e) => handleBillingConfigInputChange('overdue_day', e.target.value)}
@@ -862,11 +862,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-disconnection-notice" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Disconnection Notice
                     </label>
-                    <input
+                    <input id="billingconfig-disconnection-notice"
                       type="number"
                       value={billingConfigInput.disconnection_notice}
                       onChange={(e) => handleBillingConfigInputChange('disconnection_notice', e.target.value)}
@@ -886,13 +886,13 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-disconnection-fee" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Disconnection Fee
                     </label>
                     <div className="relative">
                       <span className={`absolute left-3 top-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>₱</span>
-                      <input
+                      <input id="billingconfig-disconnection-fee"
                         type="number"
                         step="0.01"
                         value={billingConfigInput.disconnection_fee}
@@ -913,11 +913,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-pullout-day" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Pullout Day
                     </label>
-                    <input
+                    <input id="billingconfig-pullout-day"
                       type="number"
                       value={billingConfigInput.pullout_day}
                       onChange={(e) => handleBillingConfigInputChange('pullout_day', e.target.value)}
@@ -937,12 +937,12 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-convenience-fee" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Convenience Fee (%)
                     </label>
                     <div className="relative">
-                      <input
+                      <input id="billingconfig-convenience-fee"
                         type="number"
                         step="0.01"
                         value={billingConfigInput.convenience_fee_percentage}
@@ -965,11 +965,11 @@ const BillingConfig: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="billingconfig-prepaid-pre-expiry-notice-days" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Prepaid Pre-Expiry Notice (Days)
                     </label>
-                    <input
+                    <input id="billingconfig-prepaid-pre-expiry-notice-days"
                       type="number"
                       value={billingConfigInput.prepaid_pre_expiry_days}
                       onChange={(e) => handleBillingConfigInputChange('prepaid_pre_expiry_days', e.target.value)}

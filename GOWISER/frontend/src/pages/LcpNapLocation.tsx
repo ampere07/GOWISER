@@ -882,7 +882,7 @@ const LcpNapLocation: React.FC = () => {
 
           {lcpNapItems.map((group) => (
             <div key={group.lcp_name}>
-              <button
+              <button aria-label={`Open ${group.lcp_name}`}
                 onClick={() => handleLcpNapSelect(group.lcp_name)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors group/lp ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLcpNapId === group.lcp_name
@@ -895,7 +895,7 @@ const LcpNapLocation: React.FC = () => {
                 } : {}}
               >
                 <div className="flex items-center overflow-hidden">
-                  <div 
+                  <div role="button" aria-label={`Toggle ${group.lcp_name}`} 
                     onClick={(e) => toggleGroup(group.lcp_name, e)}
                     className={`mr-2 p-1 rounded hover:bg-black/10 transition-colors`}
                   >
@@ -923,7 +923,7 @@ const LcpNapLocation: React.FC = () => {
               {expandedGroups.has(group.lcp_name) && (
                 <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50'}`}>
                   {group.locations.sort((a,b) => a.lcpnap_name.localeCompare(b.lcpnap_name)).map((loc) => (
-                    <button
+                    <button aria-label={`Select ${loc.lcpnap_name}`}
                       key={loc.id}
                       onClick={() => {
                         setSelectedLocation(loc);
@@ -979,7 +979,7 @@ const LcpNapLocation: React.FC = () => {
                 <h3 className={`text-lg font-semibold flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                   }`}>
                   {isMobile && mobileViewMode === 'map' && (
-                    <button
+                    <button aria-label="Back"
                       onClick={() => setMobileViewMode('sidebar')}
                       className={`p-1 mr-1 rounded-lg transition-colors ${
                         isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-900'
@@ -1023,7 +1023,7 @@ const LcpNapLocation: React.FC = () => {
                       }`}
                   />
                   {searchQuery && (
-                    <button
+                    <button aria-label="Close"
                       onClick={() => {
                         setSearchQuery('');
                         setShowSuggestions(false);
@@ -1069,7 +1069,7 @@ const LcpNapLocation: React.FC = () => {
                       </div>
                     )}
                     {addressSuggestions.map(suggestion => (
-                      <button
+                      <button aria-label={`Select ${suggestion.description}`}
                         key={suggestion.id}
                         className={`w-full text-left px-4 py-2 text-sm transition-colors border-b last:border-0 ${isDarkMode
                           ? 'border-gray-700 hover:bg-gray-700 text-gray-200'

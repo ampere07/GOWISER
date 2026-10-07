@@ -1024,7 +1024,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               >
                 {loading ? 'Saving...' : 'Save'}
               </button>
-              <button
+              <button aria-label="Close"
                 onClick={onClose}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -1037,12 +1037,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-timestamp" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Timestamp<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <input
+                  <input id="joassignformmodal-timestamp"
                     type="datetime-local"
                     value={formData.timestamp}
                     onChange={(e) => handleInputChange('timestamp', e.target.value)}
@@ -1058,12 +1058,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Status<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <select
+                  <select id="joassignformmodal-status"
                     value={formData.status}
                     onChange={(e) => handleInputChange('status', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1109,11 +1109,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-first-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   First Name<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="joassignformmodal-first-name"
                   type="text"
                   value={formData.firstName}
                   onChange={(e) => handleInputChange('firstName', e.target.value)}
@@ -1126,9 +1126,9 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-middle-initial" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Middle Initial</label>
-                <input
+                <input id="joassignformmodal-middle-initial"
                   type="text"
                   value={formData.middleInitial}
                   onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -1146,11 +1146,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-last-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Last Name<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="joassignformmodal-last-name"
                   type="text"
                   value={formData.lastName}
                   onChange={(e) => handleInputChange('lastName', e.target.value)}
@@ -1163,11 +1163,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Contact Number<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="joassignformmodal-contact-number"
                   type="text"
                   value={formData.contactNumber}
                   onChange={(e) => handleInputChange('contactNumber', e.target.value)}
@@ -1180,11 +1180,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-applicant-email-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Applicant Email Address<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="joassignformmodal-applicant-email-address"
                   type="email"
                   value={formData.email}
                   onChange={(e) => handleInputChange('email', e.target.value)}
@@ -1199,11 +1199,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Address<span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="joassignformmodal-address"
                   type="text"
                   value={formData.address}
                   onChange={(e) => handleInputChange('address', e.target.value)}
@@ -1256,12 +1256,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-choose-plan" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Choose Plan<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <select
+                  <select id="joassignformmodal-choose-plan"
                     value={formData.choosePlan}
                     onChange={(e) => handleInputChange('choosePlan', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1293,12 +1293,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-billing-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Billing Type<span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <select
+                  <select id="joassignformmodal-billing-type"
                     value={formData.generationType}
                     onChange={(e) => handleInputChange('generationType', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1404,12 +1404,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
                 {formData.vipEnabled && (
                   <div className="mt-3">
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    <label htmlFor="joassignformmodal-expiration-date" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>
                       Expiration Date<span className="text-red-500">*</span>
                     </label>
                     <div className="relative">
-                      <input
+                      <input id="joassignformmodal-expiration-date"
                         type="date"
                         value={formData.vipExpiration}
                         onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
@@ -1433,12 +1433,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-promo" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Promo
                 </label>
                 <div className="relative">
-                  <select
+                  <select id="joassignformmodal-promo"
                     value={formData.promo}
                     onChange={(e) => handleInputChange('promo', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1463,9 +1463,9 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-remarks" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Remarks</label>
-                <textarea
+                <textarea id="joassignformmodal-remarks"
                   value={formData.remarks}
                   onChange={(e) => handleInputChange('remarks', e.target.value)}
                   rows={3}
@@ -1518,13 +1518,13 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </div>
               ) : (
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-billing-day" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Billing Day<span className="text-red-500">*</span>
                 </label>
                 <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                   }`}>
-                  <input
+                  <input id="joassignformmodal-billing-day"
                     type="number"
                     min="1"
                     max="30"
@@ -1535,7 +1535,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                       } ${errors.billingDay ? 'border-red-500' : ''}`}
                   />
                   <div className="flex">
-                    <button
+                    <button aria-label="Decrease billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', false)}
                       disabled={false}
@@ -1546,7 +1546,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                     >
                       <Minus size={16} />
                     </button>
-                    <button
+                    <button aria-label="Increase billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', true)}
                       disabled={false}
@@ -1569,12 +1569,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
             <div className="space-y-4">
               {formData.status === 'Confirmed' && (
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  <label htmlFor="joassignformmodal-onsite-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>
                     Onsite Status<span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="joassignformmodal-onsite-status"
                       value={formData.onsiteStatus}
                       onChange={(e) => handleInputChange('onsiteStatus', e.target.value)}
                       className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1647,9 +1647,9 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               </div>
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="joassignformmodal-installation-landmark" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Installation Landmark</label>
-                <input
+                <input id="joassignformmodal-installation-landmark"
                   type="text"
                   value={formData.installationLandmark}
                   onChange={(e) => handleInputChange('installationLandmark', e.target.value)}

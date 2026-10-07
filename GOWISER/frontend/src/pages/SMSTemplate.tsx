@@ -365,10 +365,10 @@ const SMSTemplate: React.FC = () => {
               />
             </div>
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label htmlFor="smstemplate-template-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Template Type
               </label>
-              <select
+              <select id="smstemplate-template-type"
                 value={formData.template_type}
                 onChange={(e) => setFormData({ ...formData, template_type: e.target.value })}
                 className={`w-full px-3 py-2 rounded border ${isDarkMode
@@ -494,7 +494,7 @@ const SMSTemplate: React.FC = () => {
                       <tr className={isDarkMode ? 'bg-gray-800 hover:bg-gray-750' : 'bg-white hover:bg-gray-50'}>
                         <td className="px-6 py-4">
                           <div className="flex items-center">
-                            <button
+                            <button aria-label="Toggle template details"
                               onClick={() => toggleRowExpand(template.id)}
                               className={`mr-2 ${isDarkMode ? 'text-gray-400 hover:text-gray-300' : 'text-gray-600 hover:text-gray-900'}`}
                             >

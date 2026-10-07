@@ -2004,7 +2004,7 @@ class EnhancedBillingGenerationServiceWithNotifications
         $total = 0;
 
         $discounts = Discount::where('account_no', $account->account_no)
-            ->whereIn('status', ['Unused', 'Permanent', 'Monthly'])
+            ->withStatus(['Unused', 'Permanent', 'Monthly'])
             ->get();
 
         foreach ($discounts as $discount) {
@@ -2175,7 +2175,7 @@ class EnhancedBillingGenerationServiceWithNotifications
     protected function markDiscountsAsUsed(BillingAccount $account, int $userId, string $invoiceId): void
     {
         $discounts = Discount::where('account_no', $account->account_no)
-            ->whereIn('status', ['Unused', 'Permanent', 'Monthly'])
+            ->withStatus(['Unused', 'Permanent', 'Monthly'])
             ->get();
 
         foreach ($discounts as $discount) {

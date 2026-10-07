@@ -93,7 +93,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
 
     return (
         <CustomerDataProvider>
-            <View style={{ flex: 1, overflow: 'hidden', backgroundColor: '#f9fafb' }}>
+            <View testID="customer-home-screen" style={{ flex: 1, overflow: 'hidden', backgroundColor: '#f9fafb' }}>
                 {/* Main Content Area */}
                 <View style={{ flex: 1 }}>
                     <ErrorBoundary resetKey={activeSection} sectionName={activeSection}>

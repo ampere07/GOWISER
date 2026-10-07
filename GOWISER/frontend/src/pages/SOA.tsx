@@ -44,7 +44,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
       <div className={`flex flex-wrap items-center justify-center sm:justify-start gap-3 sm:gap-4 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
         <div className="flex items-center gap-2">
           <span>Show</span>
-          <select
+          <select aria-label="Rows per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -73,7 +73,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           <ChevronsLeft className="h-5 w-5" />
         </button>
 
-        <button
+        <button aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -90,7 +90,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
           </span>
         </div>
 
-        <button
+        <button aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1178,8 +1178,8 @@ const SOA: React.FC = () => {
               </div>
               <div className="space-y-2">
                 <div className="relative">
-                  <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                  <input
+                  <label htmlFor="soa-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                  <input id="soa-from"
                     type="date"
                     value={statementDateFrom}
                     onChange={(e) => setStatementDateFrom(e.target.value)}
@@ -1191,8 +1191,8 @@ const SOA: React.FC = () => {
                   />
                 </div>
                 <div className="relative">
-                  <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                  <input
+                  <label htmlFor="soa-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                  <input id="soa-to"
                     type="date"
                     value={statementDateTo}
                     onChange={(e) => setStatementDateTo(e.target.value)}
@@ -1264,7 +1264,7 @@ const SOA: React.FC = () => {
               {isDateDropdownOpen && (
                 <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                   {dateItems.dates.map((item, index) => (
-                    <button
+                    <button aria-label={`Select ${item.date}`}
                       key={index}
                       onClick={() => setSelectedDate(item.date)}
                       className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1576,7 +1576,7 @@ const SOA: React.FC = () => {
                     >
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
-                      <button
+                      <button aria-label="Close"
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -1652,7 +1652,7 @@ const SOA: React.FC = () => {
                             : 'border-gray-200 bg-gray-100'
                             }`}>
                             {filteredColumns.map((column, index) => (
-                              <th
+                              <th role="button" aria-label={`Sort by ${column.label}`}
                                 key={column.key}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, column.key)}
@@ -1688,7 +1688,7 @@ const SOA: React.FC = () => {
                         <tbody>
                           {paginatedRecords.length > 0 ? (
                             paginatedRecords.map((record: SOARecordUI) => (
-                              <tr
+                              <tr role="button" aria-label={`Open statement ${record.id}`}
                                 key={record.id}
                                 className={`border-b cursor-pointer transition-colors ${isDarkMode
                                   ? 'border-gray-800 hover:bg-gray-900'

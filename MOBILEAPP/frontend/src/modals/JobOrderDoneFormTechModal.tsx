@@ -345,6 +345,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     clientTaggingImage: null,
     proofImage: null
   });
+  const [clientPhotoDocumentationUrl, setClientPhotoDocumentationUrl] = useState<string | null>(null);
 
   const [showModal, setShowModal] = useState(false);
   const [modalContent, setModalContent] = useState<{
@@ -908,6 +909,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     };
 
     const fetchApplicationData = async () => {
+      setClientPhotoDocumentationUrl(null);
       try {
         const applicationId = jobOrderData.application_id || jobOrderData.Application_ID;
         if (applicationId) {
@@ -922,6 +924,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           if (appResponse.data.success && appResponse.data.application) {
             setFormData(prev => ({ ...prev, ...buildFormData(appResponse.data.application) }));
             setImagePreviews(buildImagePreviews(safeConvertUrl));
+            setClientPhotoDocumentationUrl(safeConvertUrl(appResponse.data.application.proof_of_billing_url));
           } else {
             setFormData(prev => ({ ...prev, ...buildFormData() }));
             setImagePreviews(buildImagePreviews(safeConvertUrl));
@@ -2871,6 +2874,14 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                         )}
                       </View>
 
+                      <View style={styles.inputGroup}>
+                        <ImagePreview
+                          imageUrl={clientPhotoDocumentationUrl}
+                          label="Proof of Billing"
+                          isDarkMode={isDarkMode}
+                          colorPrimary={colorPalette?.primary || '#7c3aed'}
+                        />
+                      </View>
 
                       {formData.onsiteStatus === 'Done' && (isDoneRendering ? (
                         <>

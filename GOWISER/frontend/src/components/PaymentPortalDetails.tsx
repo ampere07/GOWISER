@@ -462,7 +462,7 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({ record, onC
               <div className={`flex-1 flex items-center ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>
                 {record.plan || 'SwitchNet - P999'}
-                <button className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
+                <button aria-label="View details" className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
                   <Info size={16} />
                 </button>
               </div>
@@ -483,7 +483,7 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({ record, onC
               <div className={`flex-1 flex items-center ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>
                 {record.barangay || 'Bilibiran'}
-                <button className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
+                <button aria-label="View details" className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
                   <Info size={16} />
                 </button>
               </div>
@@ -554,7 +554,7 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({ record, onC
                 {invoicesCount} items
               </span>
             </div>
-            <button
+            <button aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'

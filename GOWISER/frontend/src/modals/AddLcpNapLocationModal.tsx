@@ -756,7 +756,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
         ? 'bg-gray-800 border-gray-700 hover:bg-gray-750'
         : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
         }`}>
-        <input
+        <input aria-label="Choose file"
           type="file"
           accept="image/*"
           onChange={(e) => {
@@ -842,7 +842,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
         </div>
       )}
 
-      <div
+      <div role="button" aria-label="Close"
         className="fixed inset-0 bg-black bg-opacity-50 z-[9998]"
         onClick={handleClose}
       />
@@ -855,7 +855,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
           }`}>
           <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`}>{editData ? 'Edit LCP NAP Location' : 'LCP NAP Location Form'}</h2>
-          <button onClick={handleClose} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}>
+          <button aria-label="Close" onClick={handleClose} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}>
             <X size={24} />
           </button>
         </div>
@@ -865,9 +865,9 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             <ImageUploadField label="Reading Image" field="reading_image" />
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-street" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>Street</label>
-              <input
+              <input id="addlcpnaplocationmodal-street"
                 type="text"
                 value={formData.street}
                 onChange={(e) => setFormData({ ...formData, street: e.target.value })}
@@ -889,10 +889,10 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-region" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>Region</label>
               <div className="relative">
-                <select
+                <select id="addlcpnaplocationmodal-region"
                   value={formData.region}
                   onChange={(e) => handleRegionChange(e.target.value)}
                   className={`w-full px-3 py-2 rounded border focus:outline-none appearance-none ${isDarkMode
@@ -913,10 +913,10 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-city" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>City</label>
               <div className="relative">
-                <select
+                <select id="addlcpnaplocationmodal-city"
                   value={formData.city}
                   onChange={(e) => handleCityChange(e.target.value)}
                   disabled={!formData.region}
@@ -937,10 +937,10 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-barangay" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>Barangay</label>
               <div className="relative">
-                <select
+                <select id="addlcpnaplocationmodal-barangay"
                   value={formData.barangay}
                   onChange={(e) => handleBarangayChange(e.target.value)}
                   disabled={!formData.city}
@@ -961,11 +961,11 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-lcp" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>
                 LCP<span className="text-red-500">*</span>
               </label>
-              <select
+              <select id="addlcpnaplocationmodal-lcp"
                 value={formData.lcp_name}
                 onChange={(e) => setFormData({ ...formData, lcp_name: e.target.value })}
                 className={`w-full px-3 py-2 rounded border focus:outline-none ${isDarkMode
@@ -984,11 +984,11 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             </div>
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-nap" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>
                 NAP<span className="text-red-500">*</span>
               </label>
-              <select
+              <select id="addlcpnaplocationmodal-nap"
                 value={formData.nap_name}
                 onChange={(e) => setFormData({ ...formData, nap_name: e.target.value })}
                 className={`w-full px-3 py-2 rounded border focus:outline-none ${isDarkMode
@@ -1104,7 +1104,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
                   onFocus={(e) => e.target.style.borderColor = colorPalette?.primary || '#7c3aed'}
                   onBlur={(e) => e.target.style.borderColor = ''}
                 />
-                <button
+                <button aria-label="Toggle map"
                   type="button"
                   onClick={handleToggleMap}
                   className={`absolute right-3 top-2.5 transition-colors ${isDarkMode
@@ -1144,9 +1144,9 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
             <ImageUploadField label="Image 2" field="image_2" required error={errors.image_2} />
 
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <label htmlFor="addlcpnaplocationmodal-modified-by" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>Modified By</label>
-              <input
+              <input id="addlcpnaplocationmodal-modified-by"
                 type="text"
                 value={formData.modified_by}
                 readOnly

@@ -136,8 +136,8 @@ const RoleForm: React.FC<{
         {/* The hybrid picker. Choosing one of the eight starts the role from
             that role's access; the ticks below then only add to it. */}
         <div>
-          <label className={labelClass}>Start From a System Role</label>
-          <select
+          <label htmlFor="rolemodal-start-from-a-system-role" className={labelClass}>Start From a System Role</label>
+          <select id="rolemodal-start-from-a-system-role"
             value={baseRoleId}
             onChange={(e) => handleBaseRoleChange(Number(e.target.value))}
             className={inputClass()}

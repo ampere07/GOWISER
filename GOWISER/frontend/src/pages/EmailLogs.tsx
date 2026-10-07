@@ -437,8 +437,8 @@ const EmailLogs: React.FC = () => {
             </div>
             <div className="space-y-2">
               <div>
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                <input
+                <label htmlFor="emaillogs-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                <input id="emaillogs-from"
                   type="date"
                   value={statementDateFrom}
                   onChange={(e) => setStatementDateFrom(e.target.value)}
@@ -447,8 +447,8 @@ const EmailLogs: React.FC = () => {
                 />
               </div>
               <div>
-                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                <input
+                <label htmlFor="emaillogs-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                <input id="emaillogs-to"
                   type="date"
                   value={statementDateTo}
                   onChange={(e) => setStatementDateTo(e.target.value)}
@@ -492,7 +492,7 @@ const EmailLogs: React.FC = () => {
             {isDateDropdownOpen && (
               <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                 {dateItems.dates.map((item, index) => (
-                  <button
+                  <button aria-label={`Select ${item.date}`}
                     key={index}
                     onClick={() => { setSelectedDate(item.date); if (isMobile) setMobileViewMode('list'); }}
                     className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} ${selectedDate === item.date ? '' : isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}
@@ -517,7 +517,7 @@ const EmailLogs: React.FC = () => {
           {/* Status list */}
           <div className="py-2">
             {statusItems.map((status) => (
-              <button
+              <button aria-label={`Select ${status.name}`}
                 key={status.id}
                 onClick={() => { setSelectedStatus(status.id); if (isMobile) setMobileViewMode('list'); }}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${selectedStatus === status.id ? '' : isDarkMode ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
@@ -573,7 +573,7 @@ const EmailLogs: React.FC = () => {
           <div className={`p-4 border-b flex-shrink-0 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
             <div className="flex items-center space-x-3 w-full overflow-x-auto scrollbar-none pb-1 -mb-1">
               {isMobile && mobileViewMode === 'list' && (
-                <button
+                <button aria-label="Back"
                   onClick={() => setMobileViewMode('sidebar')}
                   className={`p-2 rounded-lg transition-colors flex-shrink-0 ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'}`}
                 >
@@ -677,7 +677,7 @@ const EmailLogs: React.FC = () => {
                     <thead>
                       <tr className={`border-b sticky top-0 z-10 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
                         {displayedColumns.map((column, index) => (
-                          <th
+                          <th role="button" aria-label={`Sort by ${column.label}`}
                             key={column.key}
                             draggable
                             onDragStart={(e) => handleDragStart(e, column.key)}
@@ -707,7 +707,7 @@ const EmailLogs: React.FC = () => {
                     <tbody>
                       {paginatedLogs.length > 0 ? (
                         paginatedLogs.map((log) => (
-                          <tr
+                          <tr role="button" aria-label={`Open email log ${log.id}`}
                             key={log.id}
                             className={`border-b cursor-pointer transition-colors ${isDarkMode ? 'border-gray-800 hover:bg-gray-900' : 'border-gray-200 hover:bg-gray-50'} ${selectedLog?.id === log.id ? isDarkMode ? 'bg-gray-800' : 'bg-gray-100' : ''}`}
                             onClick={() => setSelectedLog(log)}
@@ -762,7 +762,7 @@ const EmailLogs: React.FC = () => {
       {selectedLog && (
         <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-auto md:flex-shrink-0 md:w-full md:max-w-md border-l ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
           <div className="absolute top-4 right-4 z-10">
-            <button
+            <button aria-label="Close"
               onClick={() => setSelectedLog(null)}
               className={`transition-colors rounded p-1 ${isDarkMode ? 'text-gray-400 hover:text-white bg-gray-800' : 'text-gray-600 hover:text-gray-900 bg-gray-200'}`}
             >

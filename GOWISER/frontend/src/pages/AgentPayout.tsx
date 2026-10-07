@@ -112,7 +112,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
             <div className={`flex flex-wrap items-center justify-center md:justify-start gap-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                 <div className="flex items-center gap-2">
                     <span>Show</span>
-                    <select
+                    <select aria-label="Rows per page"
                         value={itemsPerPage}
                         onChange={(e) => setItemsPerPage(Number(e.target.value))}
                         className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -142,7 +142,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
                     <ChevronsLeft size={16} />
                 </button>
 
-                <button
+                <button aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -159,7 +159,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
                     </span>
                 </div>
 
-                <button
+                <button aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -687,8 +687,8 @@ const AgentPayout: React.FC = () => {
                         </div>
                         <div className="space-y-2">
                             <div className="relative">
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                                <input
+                                <label htmlFor="agentpayout-from" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                                <input id="agentpayout-from"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -697,8 +697,8 @@ const AgentPayout: React.FC = () => {
                                 />
                             </div>
                             <div className="relative">
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                                <input
+                                <label htmlFor="agentpayout-to" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                                <input id="agentpayout-to"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}
@@ -730,7 +730,7 @@ const AgentPayout: React.FC = () => {
                         const agentName = `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim();
                         const isSelected = selectedAgentId === agent.id;
                         return (
-                            <button
+                            <button aria-label={`Select ${agent.id}`}
                                 key={agent.id}
                                 onClick={() => setSelectedAgentId(agent.id)}
                                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} ${isSelected ? '' : isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}
@@ -924,8 +924,8 @@ const AgentPayout: React.FC = () => {
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                             <div>
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
-                                <input
+                                <label htmlFor="agentpayout-from-1" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
+                                <input id="agentpayout-from-1"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -934,8 +934,8 @@ const AgentPayout: React.FC = () => {
                                 />
                             </div>
                             <div>
-                                <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
-                                <input
+                                <label htmlFor="agentpayout-to-1" className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
+                                <input id="agentpayout-to-1"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}
@@ -962,7 +962,7 @@ const AgentPayout: React.FC = () => {
                                         const width = columnWidths[colKey] || colDef.minWidth;
 
                                         return (
-                                            <th
+                                            <th role="button" aria-label={`Sort by ${colDef.label}`}
                                                 key={colKey}
                                                 draggable
                                                 onDragStart={(e) => handleDragStart(colKey, e)}
@@ -992,7 +992,7 @@ const AgentPayout: React.FC = () => {
                         <tbody className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-100'}`}>
                             {paginatedData.length > 0 ? (
                                 paginatedData.map((row: any, i) => (
-                                    <tr
+                                    <tr aria-label={`Open row ${i + 1}`} role="button"
                                         key={i}
                                         onClick={() => handleRowClick(row)}
                                         className={`border-b transition-colors cursor-pointer ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'}`}

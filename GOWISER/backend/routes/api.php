@@ -429,6 +429,7 @@ Route::prefix('statement-of-accounts')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/by-account/{accountNo}', [RelatedDataController::class , 'getInvoicesByAccount']);
     Route::get('/{id}', [RelatedDataController::class , 'getInvoiceById']);
+    Route::delete('/{id}', [\App\Http\Controllers\InvoiceController::class , 'destroy'])->whereNumber('id')->middleware('auth:sanctum');
 });
 
 // Payment Portal Logs Routes

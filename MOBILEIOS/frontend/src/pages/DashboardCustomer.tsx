@@ -1529,7 +1529,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 onRequestClose={() => setShowSuccessModal(false)}
             >
                 <View style={styles.modalOverlayDark}>
-                    <Pressable accessibilityRole="button" style={styles.modalBackdrop} onPress={() => setShowSuccessModal(false)} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Close" style={styles.modalBackdrop} onPress={() => setShowSuccessModal(false)} />
                     <Animated.View style={[styles.modalSheet30, { transform: [{ translateY: pan.y }] }]}>
                         <View {...panResponder.panHandlers} style={styles.modalHeader}>
                             <View style={styles.modalHandleSm} />
@@ -1563,7 +1563,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 onRequestClose={() => setShowEmailErrorModal(false)}
             >
                 <View style={styles.modalOverlayDark}>
-                    <Pressable accessibilityRole="button" style={styles.modalBackdrop} onPress={() => setShowEmailErrorModal(false)} />
+                    <Pressable accessibilityRole="button" accessibilityLabel="Close" style={styles.modalBackdrop} onPress={() => setShowEmailErrorModal(false)} />
                     <Animated.View style={[styles.modalSheet30, { transform: [{ translateY: pan.y }] }]}>
                         <View {...panResponder.panHandlers} style={styles.modalHeader}>
                             <View style={styles.modalHandleSm} />

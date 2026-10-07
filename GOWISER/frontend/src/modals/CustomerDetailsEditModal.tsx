@@ -773,7 +773,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           }`}>{label}</label>
         <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
           }`}>
-          <input
+          <input aria-label="Choose file"
             type="file"
             accept="image/*"
             onChange={(e) => {
@@ -1185,7 +1185,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 'Save'
               )}
             </button>
-            <button
+            <button aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -1197,10 +1197,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div className="space-y-4">
             <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              <label htmlFor="customerdetailseditmodal-edit-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Edit Type</label>
               <div className="relative">
-                <select
+                <select id="customerdetailseditmodal-edit-type"
                   value={editType}
                   onChange={(e) => setEditType(e.target.value as 'customer_details' | 'billing_details' | 'technical_details')}
                   className={`w-full px-3 py-2 rounded border appearance-none ${isDarkMode
@@ -1219,10 +1219,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
             {editType === 'customer_details' && (
               <>
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-first-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     First Name<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-first-name"
                     type="text"
                     value={formData.firstName || ''}
                     onChange={(e) => handleInputChange('firstName', e.target.value)}
@@ -1243,10 +1243,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-middle-initial" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Middle Initial
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-middle-initial"
                     type="text"
                     value={formData.middleInitial || ''}
                     onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -1267,10 +1267,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-last-name" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Last Name<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-last-name"
                     type="text"
                     value={formData.lastName || ''}
                     onChange={(e) => handleInputChange('lastName', e.target.value)}
@@ -1291,10 +1291,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-email-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Email Address<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-email-address"
                     type="email"
                     value={formData.emailAddress || ''}
                     onChange={(e) => handleInputChange('emailAddress', e.target.value)}
@@ -1318,10 +1318,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Contact Number<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-contact-number"
                     type="text"
                     value={formData.contactNumberPrimary || ''}
                     onChange={(e) => handleInputChange('contactNumberPrimary', e.target.value)}
@@ -1345,10 +1345,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-second-contact-number" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Second Contact Number
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-second-contact-number"
                     type="text"
                     value={formData.contactNumberSecondary || ''}
                     onChange={(e) => handleInputChange('contactNumberSecondary', e.target.value)}
@@ -1368,10 +1368,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Address<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-address"
                     type="text"
                     value={formData.address || ''}
                     onChange={(e) => handleInputChange('address', e.target.value)}
@@ -1392,11 +1392,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-region" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Region<span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-region"
                       value={formData.region || ''}
                       onChange={(e) => handleInputChange('region', e.target.value)}
                       onFocus={(e) => {
@@ -1428,11 +1428,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-city" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     City<span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-city"
                       value={formData.city || ''}
                       onChange={(e) => handleInputChange('city', e.target.value)}
                       disabled={!formData.region}
@@ -1465,11 +1465,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-barangay" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Barangay<span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-barangay"
                       value={formData.barangay || ''}
                       onChange={(e) => handleInputChange('barangay', e.target.value)}
                       disabled={!formData.city}
@@ -1502,11 +1502,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-housing-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Housing Status
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-housing-status"
                       value={formData.housingStatus || ''}
                       onChange={(e) => handleInputChange('housingStatus', e.target.value)}
                       onFocus={(e) => {
@@ -1563,11 +1563,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-billing-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Billing Status<span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-billing-status"
                       value={formData.billing_status_id || ''}
                       onChange={(e) => handleInputChange('billing_status_id', e.target.value)}
                       onFocus={(e) => {
@@ -1599,10 +1599,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   formData.billing_status_id?.toString() === '7') && (
                   <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
                     <div>
-                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      <label htmlFor="customerdetailseditmodal-vip-expiration-date" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                         VIP Expiration Date<span className="text-red-500">*</span>
                       </label>
-                      <input
+                      <input id="customerdetailseditmodal-vip-expiration-date"
                         type="date"
                         value={formData.vip_expiration || ''}
                         onChange={(e) => handleInputChange('vip_expiration', e.target.value)}
@@ -1693,11 +1693,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 {/* Billing Type — the generation_type column. Switching this moves the account
                     between the fixed-billing-day flow and the rolling prepaid-period flow. */}
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-billing-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Billing Type
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-billing-type"
                       value={formData.generation_type || ''}
                       onChange={(e) => handleInputChange('generation_type', e.target.value)}
                       onFocus={(e) => {
@@ -1828,10 +1828,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-date-installed" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Date Installed
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-date-installed"
                     type="date"
                     value={formData.date_installed || ''}
                     onChange={(e) => handleInputChange('date_installed', e.target.value)}
@@ -1855,10 +1855,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
             {editType === 'technical_details' && (
               <>
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-pppoe-username" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     PPPOE Username<span className="text-red-500">*</span>
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-pppoe-username"
                     type="text"
                     value={formData.username || ''}
                     onChange={(e) => handleInputChange('username', e.target.value)}
@@ -1942,7 +1942,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 />
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-router-modem-sn" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Router Modem SN
                   </label>
                   <div className="flex items-center gap-2">
@@ -1964,7 +1964,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                         )}
                       </button>
                     )}
-                    <input
+                    <input id="customerdetailseditmodal-router-modem-sn"
                       type="text"
                       value={formData.router_modem_sn || ''}
                       onChange={(e) => handleInputChange('router_modem_sn', e.target.value)}
@@ -1987,10 +1987,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
                 {(formData.connection_type === 'Antenna' || formData.connection_type === 'Local') && (
                   <div>
-                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    <label htmlFor="customerdetailseditmodal-ip-address" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                       IP Address<span className="text-red-500">*</span>
                     </label>
-                    <input
+                    <input id="customerdetailseditmodal-ip-address"
                       type="text"
                       value={formData.ip_address || ''}
                       onChange={(e) => handleInputChange('ip_address', e.target.value)}
@@ -2026,11 +2026,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     />
 
                     <div>
-                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      <label htmlFor="customerdetailseditmodal-port" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                         Port<span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
-                        <select
+                        <select id="customerdetailseditmodal-port"
                           value={formData.port || ''}
                           onChange={(e) => handleInputChange('port', e.target.value)}
                           disabled={!formData.lcpnap}
@@ -2079,11 +2079,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     </div>
 
                     <div>
-                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      <label htmlFor="customerdetailseditmodal-vlan" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                         VLAN<span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
-                        <select
+                        <select id="customerdetailseditmodal-vlan"
                           value={formData.vlan || ''}
                           onChange={(e) => handleInputChange('vlan', e.target.value)}
                           onFocus={(e) => {
@@ -2114,11 +2114,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 )}
 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-usage-type" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Usage Type
                   </label>
                   <div className="relative">
-                    <select
+                    <select id="customerdetailseditmodal-usage-type"
                       value={formData.usage_type || ''}
                       onChange={(e) => handleInputChange('usage_type', e.target.value)}
                       onFocus={(e) => {
@@ -2146,10 +2146,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 </div>
                 
                 <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <label htmlFor="customerdetailseditmodal-group-session-group" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Group (Session Group)
                   </label>
-                  <input
+                  <input id="customerdetailseditmodal-group-session-group"
                     type="text"
                     value={formData.session_group || ''}
                     readOnly

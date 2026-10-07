@@ -103,7 +103,7 @@ const NotificationToast: React.FC<ToastProps> = ({
                     <div className="flex-shrink-0 animate-in fade-in zoom-in duration-300">
                         {getIcon()}
                     </div>
-                    <div
+                    <div role="button" aria-label={`Open ${title}`}
                         className="flex-1 min-w-0 pt-1 cursor-pointer group"
                         onClick={() => {
                             if (onClick) onClick();

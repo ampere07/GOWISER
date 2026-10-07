@@ -565,7 +565,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
           <span className="truncate mr-2" title={url}>
             {displayText}
           </span>
-          <button
+          <button aria-label="Open attachment"
             className={`flex-shrink-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}
             onClick={() => window.open(url, '_blank')}
@@ -1118,7 +1118,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
                           : ''
                         }`}
                     >
-                      <input
+                      <input aria-label={`Show ${getFieldLabel(fieldKey)}`}
                         type="checkbox"
                         checked={fieldVisibility[fieldKey]}
                         onChange={() => toggleFieldVisibility(fieldKey)}
@@ -1213,7 +1213,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
                 {relatedDataCounts[expandedModalSection]} items
               </span>
             </div>
-            <button
+            <button aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
             >

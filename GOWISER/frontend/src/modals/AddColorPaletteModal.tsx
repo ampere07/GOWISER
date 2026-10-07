@@ -180,7 +180,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                 {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                 Save
               </button>
-              <button
+              <button aria-label="Close"
                 onClick={handleClose}
                 disabled={isLoading}
                 className={`transition-colors disabled:cursor-not-allowed ${isDarkMode
@@ -241,7 +241,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
 
             <div className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="addcolorpalettemodal-primary-color" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Primary Color<span className="text-red-500">*</span>
                 </label>
@@ -270,7 +270,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                     />
                     {errors.primary && <p className="text-red-500 text-xs mt-1">{errors.primary}</p>}
                   </div>
-                  <input
+                  <input id="addcolorpalettemodal-primary-color"
                     type="color"
                     value={primaryColor}
                     onChange={(e) => setPrimaryColor(e.target.value)}
@@ -291,7 +291,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
 
 
               <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                <label htmlFor="addcolorpalettemodal-accent-color" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
                   Accent Color<span className="text-red-500">*</span>
                 </label>
@@ -320,7 +320,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                     />
                     {errors.accent && <p className="text-red-500 text-xs mt-1">{errors.accent}</p>}
                   </div>
-                  <input
+                  <input id="addcolorpalettemodal-accent-color"
                     type="color"
                     value={accentColor}
                     onChange={(e) => setAccentColor(e.target.value)}

@@ -351,7 +351,7 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
                 'Save'
               )}
             </button>
-            <button
+            <button aria-label="Close"
               onClick={handleClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -362,11 +362,11 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           <div>
-            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+            <label htmlFor="addapplicationmodal-status" className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
               Status<span className="text-red-500">*</span>
             </label>
-            <select
+            <select id="addapplicationmodal-status"
               value={formData.status}
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
               className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode

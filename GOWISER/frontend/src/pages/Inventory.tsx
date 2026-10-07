@@ -476,7 +476,7 @@ const Inventory: React.FC = () => {
         <div className="flex-1 overflow-y-auto">
           <div className="flex flex-col">
             {categories.map((category) => (
-              <button
+              <button aria-label={`Select ${category.name}`}
                 key={category.id}
                 onClick={() => setSelectedCategory(category.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -553,7 +553,7 @@ const Inventory: React.FC = () => {
             <div className="divide-y divide-gray-700">
               {filteredItems.length > 0 ? (
                 filteredItems.map((item, index) => (
-                  <div
+                  <div role="button" aria-label={`Open ${item.item_name}`}
                     key={item.item_name + index}
                     className={`px-6 py-4 flex items-center justify-between transition-colors cursor-pointer group ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedItem?.item_name === item.item_name
@@ -652,7 +652,7 @@ const Inventory: React.FC = () => {
         }`}>
         <div className="flex overflow-x-auto hide-scrollbar">
           {categories.map((category) => (
-            <button
+            <button aria-label={`Select ${category.name}`}
               key={category.id}
               onClick={() => setSelectedCategory(category.id)}
               className={`flex-shrink-0 flex flex-col items-center justify-center px-4 py-2 text-xs transition-colors ${selectedCategory === category.id

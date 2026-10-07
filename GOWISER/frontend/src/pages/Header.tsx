@@ -703,7 +703,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           </div>
 
           {/* Mobile Hamburger - Right Side */}
-          <button
+          <button aria-label="Toggle mobile menu"
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
             className="md:hidden p-1.5 text-gray-700 transition hover:bg-gray-50 active:scale-95"
           >
@@ -789,7 +789,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     <header className={`${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
       } border-b h-16 flex items-center px-4`}>
       <div className="flex items-center space-x-4">
-        <button
+        <button aria-label="Toggle sidebar"
           onClick={handleToggleClick}
           className={`${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-black'
             } p-2 transition-colors cursor-pointer`}
@@ -837,7 +837,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
         </button>
 
         <div className="relative" ref={notificationRef}>
-          <button
+          <button aria-label="Notifications"
             onClick={toggleNotifications}
             className={`p-2 relative ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-black'
               } transition-colors`}
@@ -883,7 +883,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   </div>
                   <div className="space-y-1">
                     {ATTENTION_ROWS.filter(row => navBadges[row.key] > 0 && canOpen(row.section)).map(row => (
-                      <button
+                      <button aria-label={`Open ${row.label}`}
                         key={row.key}
                         onClick={() => {
                           setShowNotifications(false);
@@ -918,7 +918,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   </div>
                 ) : (
                   notifications.map((notification) => (
-                    <div
+                    <div role="button" aria-label={`Open ${notification.formatted_date}`}
                       key={notificationKeyFor(notification)}
                       onClick={() => handleNotificationClick(notification)}
                       className={`p-4 border-b ${isDarkMode ? 'border-gray-700 hover:bg-gray-750' : 'border-gray-200 hover:bg-gray-50'

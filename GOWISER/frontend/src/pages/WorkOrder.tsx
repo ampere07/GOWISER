@@ -486,7 +486,7 @@ const WorkOrderPage: React.FC = () => {
         <div className={`flex flex-col sm:flex-row items-center gap-3 text-xs text-center sm:text-left ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
           <div className="flex items-center gap-2">
             <span>Show</span>
-            <select
+            <select aria-label="Rows per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -517,7 +517,7 @@ const WorkOrderPage: React.FC = () => {
             <ChevronsLeft size={14} />
           </button>
 
-          <button
+          <button aria-label="Previous page"
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
             className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -534,7 +534,7 @@ const WorkOrderPage: React.FC = () => {
             </span>
           </div>
 
-          <button
+          <button aria-label="Next page"
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages || totalPages <= 1}
             className={`p-1.5 rounded transition-colors ${currentPage === totalPages || totalPages <= 1
@@ -998,7 +998,7 @@ const WorkOrderPage: React.FC = () => {
                 {paginatedWorkOrders.length > 0 ? (
                   <div>
                     {paginatedWorkOrders.map((wo) => (
-                      <div
+                      <div role="button" aria-label={`Open ${wo.id}`}
                         key={wo.id}
                         className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'}`}
                         onClick={() => handleEdit(wo)}
@@ -1059,7 +1059,7 @@ const WorkOrderPage: React.FC = () => {
                           >
                             <div className="flex items-center justify-between">
                               <span>{column.label}</span>
-                              <button onClick={() => handleSort(column.key)} className="ml-1 opacity-40 hover:opacity-100 transition-opacity">
+                              <button aria-label={`Sort by ${column.label}`} onClick={() => handleSort(column.key)} className="ml-1 opacity-40 hover:opacity-100 transition-opacity">
                                 {sortColumn === column.key ? (
                                   sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                                 ) : (
@@ -1079,7 +1079,7 @@ const WorkOrderPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {sortedWorkOrders.map((wo) => (
-                        <tr
+                        <tr role="button" aria-label={`Open work order ${wo.id}`}
                           key={wo.id}
                           onClick={() => handleEdit(wo)}
                           className={`transition-colors cursor-pointer border-b ${

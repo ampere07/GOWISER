@@ -643,7 +643,7 @@ const DashboardAgent: React.FC<DashboardAgentProps> = ({ onNavigate }) => {
                         {cardTabs.map((tab, i) => {
                             const isActive = i === activeCardTab;
                             return (
-                                <button
+                                <button aria-label={`Open ${tab.label}`}
                                     key={tab.key}
                                     onClick={() => selectCardTab(i)}
                                     className="relative h-[38px] flex-1 overflow-hidden rounded-t-xl text-xs font-bold transition-colors"
