@@ -420,10 +420,6 @@ const Invoice: React.FC = () => {
             invoiceRecord={selectedRecord as any}
             onViewCustomer={handleViewCustomer}
             onClose={() => setSelectedRecord(null)}
-            onDeleteSuccess={() => {
-              setSelectedRecord(null);
-              silentRefresh();
-            }}
           />
         ) : null}
       </Modal>

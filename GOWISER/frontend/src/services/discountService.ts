@@ -80,15 +80,3 @@ export const update = async (id: number, data: Partial<DiscountData>): Promise<D
   }
 };
 
-export const remove = async (id: number): Promise<DiscountResponse> => {
-  try {
-    const response = await apiClient.delete<any>(`/discounts/${id}`);
-    return {
-      success: true,
-      message: response.data.message
-    };
-  } catch (error) {
-    console.error('Error deleting discount:', error);
-    throw error;
-  }
-};

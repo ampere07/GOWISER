@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info, Trash2 } from 'lucide-react';
-import { update, remove } from '../services/discountService';
-import { isSuperAdminUser } from '../utils/agentAccess';
-import ConfirmDeleteDialog from './ConfirmDeleteDialog';
+import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info } from 'lucide-react';
+import { update } from '../services/discountService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
@@ -67,22 +65,17 @@ interface DiscountDetailsProps {
   discountRecord: DiscountRecord;
   onClose?: () => void;
   onApproveSuccess?: () => void;
-  onDeleteSuccess?: () => void;
   onViewCustomer?: (accountNo: string) => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
 
-const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onDeleteSuccess, onViewCustomer, onPrevious, onNext }) => {
+const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onViewCustomer, onPrevious, onNext }) => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [showApproveButton, setShowApproveButton] = useState<boolean>(false);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
   const [isApproving, setIsApproving] = useState<boolean>(false);
-  const canDeleteDiscount = isSuperAdminUser();
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [isDeleting, setIsDeleting] = useState<boolean>(false);
-  const [deleteError, setDeleteError] = useState<string>('');
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
@@ -224,37 +217,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
     setShowConfirmModal(false);
   };
 
-  const openDeleteModal = () => {
-    setDeleteError('');
-    setShowDeleteModal(true);
-  };
-
-  const closeDeleteModal = () => {
-    if (isDeleting) return;
-    setShowDeleteModal(false);
-    setDeleteError('');
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!discountRecord.id) {
-      setDeleteError('This discount has no ID, so it cannot be deleted.');
-      return;
-    }
-
-    setIsDeleting(true);
-    setDeleteError('');
-
-    try {
-      await remove(parseInt(discountRecord.id));
-      setShowDeleteModal(false);
-      onDeleteSuccess?.();
-    } catch (error: any) {
-      setDeleteError(error.response?.data?.message || error.message || 'The discount could not be deleted. Please try again.');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
   return (
     <div className={`flex flex-col relative md:border-l overflow-hidden ${
       isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
@@ -342,20 +304,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
             >
               <Check size={16} />
               <span>Approve</span>
-            </button>
-          )}
-          {canDeleteDiscount && (
-            <button
-              onClick={openDeleteModal}
-              disabled={isDeleting}
-              className={`p-2 rounded transition-colors disabled:opacity-50 ${isDarkMode
-                ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700'
-                : 'text-gray-600 hover:text-red-600 hover:bg-gray-200'
-                }`}
-              title="Delete Discount"
-              aria-label="Delete Discount"
-            >
-              <Trash2 size={18} />
             </button>
           )}
           {onClose && (
@@ -532,27 +480,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
           </div>
         </div>
       </div>
-
-      <ConfirmDeleteDialog
-        isOpen={showDeleteModal}
-        isDarkMode={isDarkMode}
-        title="Delete Discount?"
-        description="This permanently removes the discount from the database. It cannot be undone."
-        details={[
-          { label: 'Account No:', value: discountRecord.accountNo },
-          { label: 'Customer:', value: discountRecord.fullName },
-          { label: 'Amount:', value: `₱${discountRecord.discountAmount.toFixed(2)}` },
-          { label: 'Status:', value: discountRecord.discountStatus },
-        ]}
-        warning={String(discountRecord.discountStatus ?? '').toLowerCase() === 'used'
-          ? 'This discount was already taken off a bill. Deleting it removes the record only; that bill keeps the discount.'
-          : undefined}
-        error={deleteError}
-        isDeleting={isDeleting}
-        confirmLabel="Delete Discount"
-        onCancel={closeDeleteModal}
-        onConfirm={handleConfirmDelete}
-      />
 
       {showConfirmModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

@@ -344,7 +344,6 @@ Route::prefix('discounts')->middleware('auth:sanctum')->group(function () {
     Route::post('/', [\App\Http\Controllers\DiscountController::class , 'store']);
     Route::get('/{id}', [\App\Http\Controllers\DiscountController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\DiscountController::class , 'update']);
-    Route::delete('/{id}', [\App\Http\Controllers\DiscountController::class , 'destroy']);
 });
 
 // Form UI Configuration - Public Route (no auth required)
@@ -429,7 +428,6 @@ Route::prefix('statement-of-accounts')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/by-account/{accountNo}', [RelatedDataController::class , 'getInvoicesByAccount']);
     Route::get('/{id}', [RelatedDataController::class , 'getInvoiceById']);
-    Route::delete('/{id}', [\App\Http\Controllers\InvoiceController::class , 'destroy'])->whereNumber('id')->middleware('auth:sanctum');
 });
 
 // Payment Portal Logs Routes
