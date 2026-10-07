@@ -162,7 +162,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
 };
 
 const Invoice: React.FC = () => {
-  const { invoiceRecords, totalCount, isLoading, error, fetchInvoiceRecords, refreshInvoiceRecords, silentRefresh, pollLatestUpdates, removeInvoiceRecord } = useInvoiceStore();
+  const { invoiceRecords, totalCount, isLoading, error, fetchInvoiceRecords, refreshInvoiceRecords, silentRefresh, pollLatestUpdates } = useInvoiceStore();
   const isFullyLoaded = totalCount === 0 || invoiceRecords.length >= totalCount;
   const [isRefreshingManual, setIsRefreshingManual] = useState<boolean>(false);
   const [hasNewData, setHasNewData] = useState<boolean>(false);
@@ -2009,10 +2009,6 @@ const Invoice: React.FC = () => {
             invoiceRecord={selectedRecord as any}
             onViewCustomer={handleViewCustomer}
             onClose={handleCloseDetails}
-            onDeleteSuccess={() => {
-              removeInvoiceRecord(selectedRecord.id);
-              handleCloseDetails();
-            }}
             onPrevious={currentInvoiceIndex > 0 ? handlePreviousRecord : undefined}
             onNext={currentInvoiceIndex < filteredRecords.length - 1 ? handleNextRecord : undefined}
           />

@@ -64,7 +64,6 @@ interface InvoiceStore {
     refreshInvoiceRecords: () => Promise<void>;
     silentRefresh: () => Promise<void>;
     pollLatestUpdates: () => Promise<void>;
-    removeInvoiceRecord: (id: string) => void;
     lastUpdated: Date | null;
 }
 
@@ -200,13 +199,6 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
             return;
         }
         await get().pollLatestUpdates();
-    },
-
-    removeInvoiceRecord: (id: string) => {
-        set(state => ({
-            invoiceRecords: state.invoiceRecords.filter(record => record.id !== id),
-            totalCount: Math.max(0, state.totalCount - 1)
-        }));
     },
 
     pollLatestUpdates: async () => {
