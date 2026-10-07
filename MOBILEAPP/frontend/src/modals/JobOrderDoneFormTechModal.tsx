@@ -2877,7 +2877,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                       <View style={styles.inputGroup}>
                         <ImagePreview
                           imageUrl={clientPhotoDocumentationUrl}
-                          label="Proof of Billing"
+                          label="Client Photo Documentation"
                           isDarkMode={isDarkMode}
                           colorPrimary={colorPalette?.primary || '#7c3aed'}
                         />

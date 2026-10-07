@@ -493,7 +493,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
       desiredPlan: 'Desired Plan',
       promo: 'Promo',
       termsAgreed: 'Terms and Conditions',
-      proofOfBilling: 'Proof of Billing',
+      proofOfBilling: 'Client Photo Documentation',
       governmentValidId: 'Government Valid ID',
       secondaryGovernmentValidId: 'Secondary Government Valid ID',
       houseFrontPicture: 'House Front Picture',
@@ -800,7 +800,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
           <div className={`flex border-b py-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'
             }`}>
             <div className={`w-40 text-sm whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-              }`}>Proof of Billing</div>
+              }`}>Client Photo Documentation</div>
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>
               <span className="truncate mr-2">

@@ -28,7 +28,7 @@ type DocumentField =
     | 'house_front_image';
 
 const DOCUMENT_FIELDS: { field: DocumentField; label: string; required?: boolean }[] = [
-    { field: 'proof_of_billing', label: 'Proof of Billing' },
+    { field: 'proof_of_billing', label: 'Client Photo Documentation' },
     { field: 'government_valid_id', label: 'Government Valid ID (Primary)', required: true },
     { field: 'secondary_government_valid_id', label: 'Government Valid ID (Secondary)' },
     { field: 'house_front_image', label: 'House Front Picture' }

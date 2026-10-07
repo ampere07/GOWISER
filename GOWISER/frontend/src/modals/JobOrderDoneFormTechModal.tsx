@@ -2055,7 +2055,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
             <ImagePreview
               imageUrl={clientPhotoDocumentationUrl}
-              label="Proof of Billing"
+              label="Client Photo Documentation"
             />
 
             {formData.onsiteStatus === 'Done' && (
