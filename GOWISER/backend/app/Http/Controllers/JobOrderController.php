@@ -127,6 +127,11 @@ class JobOrderController extends Controller
             $search = $request->input('search', '');
             $fastMode = $request->input('fast', false); // Fast mode: skip heavy processing
 
+            // Taken before the query, so any row changed after it is strictly newer. The web list
+            // polls with updated_since from this rather than the browser's clock, which need not
+            // agree with updated_at.
+            $serverTime = now()->format('Y-m-d H:i:s');
+
             \Log::info('JobOrderController: Starting to fetch job orders', [
                 'page' => $page,
                 'limit' => $limit,
@@ -278,7 +283,8 @@ class JobOrderController extends Controller
                         'current_page' => (int) $page,
                         'per_page' => (int) $limit,
                         'total_count' => (int) $totalCount,
-                        'has_more' => $hasMore
+                        'has_more' => $hasMore,
+                        'server_time' => $serverTime
                     ]
                 ]);
             }
@@ -429,7 +435,8 @@ class JobOrderController extends Controller
                     'current_page' => (int) $page,
                     'per_page' => (int) $limit,
                     'total_count' => (int) $totalCount,
-                    'has_more' => $hasMore
+                    'has_more' => $hasMore,
+                    'server_time' => $serverTime
                 ]
             ]);
         } catch (\Exception $e) {

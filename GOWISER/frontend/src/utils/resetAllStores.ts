@@ -114,6 +114,7 @@ export const resetAllStores = () => {
     currentPage: 1,
     lastUpdated: null,
     isFullyLoaded: false,
+    syncCursor: null,
   });
 
   useLcpStore.setState({

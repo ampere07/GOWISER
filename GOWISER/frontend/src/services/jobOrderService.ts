@@ -18,6 +18,8 @@ export interface ApiResponse<T> {
     per_page: number;
     total_count?: number;
     has_more: boolean;
+    // Server wall-clock time the request was read at; the job order list polls for changes since it.
+    server_time?: string;
   };
 }
 
