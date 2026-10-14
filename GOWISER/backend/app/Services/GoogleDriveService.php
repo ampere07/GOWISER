@@ -15,7 +15,9 @@ class GoogleDriveService
     public function __construct()
     {
         $this->service = $this->initializeGoogleDriveService();
-        $this->parentFolderId = env('GOOGLE_DRIVE_FOLDER_ID');
+        // config() first, like the credentials below: with the config cached, env() returns
+        // null, and every folder would be created outside the shared Drive folder.
+        $this->parentFolderId = config('services.google.drive.folder_id') ?? env('GOOGLE_DRIVE_FOLDER_ID');
     }
 
     private function getActiveImageSizePercentage()
@@ -212,32 +214,116 @@ class GoogleDriveService
         return $this->parentFolderId;
     }
 
+    /** Tries per Drive call, the first included. */
+    private const MAX_ATTEMPTS = 4;
+
+    /** 403 reasons Google documents as "slow down and retry", unlike a real permission denial. */
+    private const RETRYABLE_403_REASONS = ['userRateLimitExceeded', 'rateLimitExceeded', 'backendError'];
+
+    /**
+     * Run one Drive API call, retrying the failures Google documents as transient: 5xx,
+     * 429, the rate-limit 403s, and a network error with no response at all. Drive returns
+     * a bare "500 Internal Error" now and then, and these calls used to give up on the
+     * first one, dropping the photo being uploaded. Anything else (a bad query, a folder
+     * the service account cannot see) is final and thrown at once.
+     *
+     * Each attempt calls $call again, so a retried upload is a freshly built request
+     * rather than a resend of a body the failed attempt may already have consumed.
+     */
+    private function withRetry(string $operation, callable $call)
+    {
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $call();
+            } catch (\Throwable $e) {
+                if ($attempt >= self::MAX_ATTEMPTS || !$this->isTransient($e)) {
+                    throw $e;
+                }
+
+                // 1s, 2s, 4s, each with up to half a second of jitter.
+                $delayMs = 1000 * (2 ** ($attempt - 1)) + random_int(0, 500);
+
+                Log::warning('Google Drive call failed, retrying', [
+                    'operation' => $operation,
+                    'attempt' => $attempt,
+                    'retry_in_ms' => $delayMs,
+                    'error' => mb_substr($e->getMessage(), 0, 300),
+                ]);
+
+                usleep($delayMs * 1000);
+            }
+        }
+    }
+
+    private function isTransient(\Throwable $e): bool
+    {
+        if ($e instanceof \Google\Service\Exception) {
+            $code = (int) $e->getCode();
+
+            if ($code >= 500 || $code === 429 || $code === 408) {
+                return true;
+            }
+
+            if ($code === 403) {
+                foreach ((array) $e->getErrors() as $error) {
+                    if (in_array($error['reason'] ?? '', self::RETRYABLE_403_REASONS, true)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Timed out, refused or reset before Google answered.
+        return $e instanceof \GuzzleHttp\Exception\ConnectException
+            || ($e instanceof \GuzzleHttp\Exception\RequestException && !$e->hasResponse());
+    }
+
+    /**
+     * A Drive query string literal. An apostrophe in a customer's name ("D'Souza") used to
+     * end the literal early, so the search failed with a 400 every time.
+     */
+    private function quoteForQuery(string $value): string
+    {
+        return "'" . str_replace(['\\', "'"], ['\\\\', "\\'"], $value) . "'";
+    }
+
+    /**
+     * The folder's id, or null when there is no such folder. Throws when Drive could not be
+     * asked, which is not the same answer as "no such folder".
+     */
+    private function searchFolder(string $folderName, $parentId): ?string
+    {
+        $query = 'name=' . $this->quoteForQuery($folderName)
+            . " and mimeType='application/vnd.google-apps.folder' and "
+            . $this->quoteForQuery((string) $parentId) . ' in parents and trashed=false';
+
+        $response = $this->withRetry('findFolder', fn () => $this->service->files->listFiles([
+            'q' => $query,
+            'fields' => 'files(id, name)',
+            'supportsAllDrives' => true,
+            'includeItemsFromAllDrives' => true
+        ]));
+
+        $files = $response->getFiles();
+
+        if (count($files) > 0) {
+            Log::info('Found existing Google Drive folder', [
+                'folder_name' => $folderName,
+                'folder_id' => $files[0]->id,
+                'parent_id' => $parentId
+            ]);
+            return $files[0]->id;
+        }
+
+        return null;
+    }
+
     public function findFolder($folderName, $parentFolderId = null)
     {
         try {
-            $parentId = $parentFolderId ?? $this->parentFolderId;
-            
-            $query = "name='{$folderName}' and mimeType='application/vnd.google-apps.folder' and '{$parentId}' in parents and trashed=false";
-            
-            $response = $this->service->files->listFiles([
-                'q' => $query,
-                'fields' => 'files(id, name)',
-                'supportsAllDrives' => true,
-                'includeItemsFromAllDrives' => true
-            ]);
-            
-            $files = $response->getFiles();
-            
-            if (count($files) > 0) {
-                Log::info('Found existing Google Drive folder', [
-                    'folder_name' => $folderName,
-                    'folder_id' => $files[0]->id,
-                    'parent_id' => $parentId
-                ]);
-                return $files[0]->id;
-            }
-            
-            return null;
+            return $this->searchFolder($folderName, $parentFolderId ?? $this->parentFolderId);
         } catch (\Exception $e) {
             Log::error('Failed to search for Google Drive folder', [
                 'folder_name' => $folderName,
@@ -251,8 +337,10 @@ class GoogleDriveService
     {
         try {
             $parentId = $parentFolderId ?? $this->parentFolderId;
-            
-            $existingFolderId = $this->findFolder($folderName, $parentId);
+
+            // searchFolder, not findFolder: a search that failed is not "no folder yet", and
+            // treating it as one created a duplicate folder every time Drive hiccuped.
+            $existingFolderId = $this->searchFolder($folderName, $parentId);
             if ($existingFolderId) {
                 Log::info('Using existing Google Drive folder', [
                     'folder_name' => $folderName,
@@ -267,10 +355,10 @@ class GoogleDriveService
                 'parents' => [$parentId]
             ]);
             
-            $folder = $this->service->files->create($fileMetadata, [
+            $folder = $this->withRetry('createFolder', fn () => $this->service->files->create($fileMetadata, [
                 'fields' => 'id',
                 'supportsAllDrives' => true
-            ]);
+            ]));
             
             $this->makeFileViewable($folder->id);
             
@@ -312,13 +400,13 @@ class GoogleDriveService
                 'parents' => [$folderId]
             ]);
 
-            $uploadedFile = $this->service->files->create($fileMetadata, [
+            $uploadedFile = $this->withRetry('uploadContent', fn () => $this->service->files->create($fileMetadata, [
                 'data' => $content,
                 'mimeType' => $mimeType,
                 'uploadType' => 'multipart',
                 'fields' => 'id',
                 'supportsAllDrives' => true
-            ]);
+            ]));
 
             $this->makeFileViewable($uploadedFile->id);
 
@@ -343,7 +431,13 @@ class GoogleDriveService
         }
     }
 
-    public function uploadFile($file, $folderId, $fileName, $mimeType = null)
+    /**
+     * @param bool $resize  Shrink images by the image-size setting first. Pass false when the
+     *                      caller has already sized the image: the job order queue resized
+     *                      every photo and this then shrank it a second time, by the same
+     *                      percentage again, which is what left photos too blurred to read.
+     */
+    public function uploadFile($file, $folderId, $fileName, $mimeType = null, bool $resize = true)
     {
         try {
             $fileMetadata = new GoogleDrive\DriveFile([
@@ -359,18 +453,18 @@ class GoogleDriveService
                 $detectedMimeType = $mimeType ?? $file->getMimeType();
             }
 
-            if ($this->isImageMimeType($detectedMimeType)) {
+            if ($resize && $this->isImageMimeType($detectedMimeType)) {
                 $percentage = $this->getActiveImageSizePercentage();
                 $content = $this->resizeImage($content, $detectedMimeType, $percentage);
             }
             
-            $uploadedFile = $this->service->files->create($fileMetadata, [
+            $uploadedFile = $this->withRetry('uploadFile', fn () => $this->service->files->create($fileMetadata, [
                 'data' => $content,
                 'mimeType' => $detectedMimeType,
                 'uploadType' => 'multipart',
                 'fields' => 'id',
                 'supportsAllDrives' => true
-            ]);
+            ]));
             
             $this->makeFileViewable($uploadedFile->id);
             
@@ -408,10 +502,11 @@ class GoogleDriveService
                 'role' => 'reader'
             ]);
 
-            $this->service->permissions->create($fileId, $permission, [
+            // Retried like the upload: a link nobody can open is as good as a missing photo.
+            $this->withRetry('makeFileViewable', fn () => $this->service->permissions->create($fileId, $permission, [
                 'supportsAllDrives' => true
-            ]);
-            
+            ]));
+
             Log::info("Set file {$fileId} to viewable by anyone with link");
 
         } catch (\Exception $e) {

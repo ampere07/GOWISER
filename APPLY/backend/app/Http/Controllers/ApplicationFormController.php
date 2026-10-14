@@ -22,7 +22,9 @@ class ApplicationFormController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'email' => 'required|email|max:255',
+                // `filter` rejects a domain with no dot ("name@gmail"), which plain `email`
+                // let through and the mail provider then refused on every message.
+                'email' => 'required|email:rfc,filter|max:255',
                 'mobile' => 'required|string|max:20',
                 'firstName' => 'required|string|max:255',
                 'lastName' => 'required|string|max:255',

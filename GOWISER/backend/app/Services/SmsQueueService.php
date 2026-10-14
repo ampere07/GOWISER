@@ -242,7 +242,9 @@ class SmsQueueService
                 $stats['failed']++;
                 $log("[FAIL] Queue #{$job->id} - Account: {$job->account_no} - To: {$job->contact_no} - Attempt {$job->attempts}/" . self::MAX_ATTEMPTS);
                 $log("       Reason: {$error}");
-                Log::error('SMS failed from queue', [
+                // A bad number on the customer record is worth seeing, but it is not a fault in
+                // sending, and logged as one it buried the real gateway errors.
+                Log::log(!empty($result['invalid_recipient']) ? 'warning' : 'error', 'SMS failed from queue', [
                     'id' => $job->id,
                     'account_no' => $job->account_no,
                     'attempts' => $job->attempts,

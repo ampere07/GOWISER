@@ -12,6 +12,8 @@ class ProcessJobOrderImageQueue extends Command
     
     protected $description = 'Process pending job order images in the queue - resize and upload to Google Drive';
 
+    private const MEMORY_LIMIT = '512M';
+
     private $imageProcessingService;
 
     public function __construct(ImageProcessingService $imageProcessingService)
@@ -32,6 +34,15 @@ class ProcessJobOrderImageQueue extends Command
 
         $limit = (int) $this->option('limit');
         $this->logToFile("Processing limit: {$limit} images");
+
+        // GD decodes each photo to raw pixels twice (the resize, then again inside the Drive
+        // upload), roughly 50MB per decode for a 12MP phone photo. Running out is a fatal
+        // error, not an exception: the run dies and its row sits in 'processing' until it is
+        // recovered. This process exists only to drain the queue, so the ceiling ends with it.
+        $currentLimit = ini_get('memory_limit');
+        if ($currentLimit !== '-1' && $this->toBytes((string) $currentLimit) < $this->toBytes(self::MEMORY_LIMIT)) {
+            @ini_set('memory_limit', self::MEMORY_LIMIT);
+        }
 
         try {
             // Before the stats, so recovered and retryable rows count as pending and this run
@@ -104,7 +115,7 @@ class ProcessJobOrderImageQueue extends Command
 
             return Command::SUCCESS;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $errorMessage = "Error processing job order image queue: " . $e->getMessage();
             $this->error($errorMessage);
             $this->logToFile("ERROR: {$errorMessage}");
@@ -120,6 +131,24 @@ class ProcessJobOrderImageQueue extends Command
             $this->logToFile(str_repeat('=', 80) . "\n");
             
             return Command::FAILURE;
+        }
+    }
+
+    /** php.ini shorthand ("128M", "1G", "524288") to bytes. */
+    private function toBytes(string $value): int
+    {
+        $value = trim($value);
+        $number = (int) $value;
+
+        switch (strtolower(substr($value, -1))) {
+            case 'g':
+                return $number * 1024 * 1024 * 1024;
+            case 'm':
+                return $number * 1024 * 1024;
+            case 'k':
+                return $number * 1024;
+            default:
+                return $number;
         }
     }
 

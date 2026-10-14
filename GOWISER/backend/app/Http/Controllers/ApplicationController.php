@@ -246,7 +246,9 @@ class ApplicationController extends Controller
     {
         try {
             $validatedData = $request->validate([
-                'email_address' => 'required|email',
+                // `filter` rejects a domain with no dot ("name@gmail"), which plain `email`
+                // let through and the mail provider then refused on every message.
+                'email_address' => 'required|email:rfc,filter',
                 'first_name' => 'required|string|max:255',
                 'middle_initial' => 'nullable|string|max:1',
                 'last_name' => 'required|string|max:255',

@@ -130,7 +130,9 @@ class ImageProcessingService
                 } else {
                     $failed++;
                 }
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
+                // Throwable, not Exception: a TypeError or GD error used to escape this loop,
+                // abort the whole run and leave the row stuck in 'processing' for 15 minutes.
                 Log::error("Image Processing Error for queue ID {$imageQueue->id}: " . $e->getMessage());
                 $this->failRow($imageQueue, $e->getMessage());
                 $failed++;
@@ -160,7 +162,12 @@ class ImageProcessingService
             'original_filename' => $imageQueue->original_filename
         ]);
 
-        if (!file_exists($fullLocalPath)) {
+        // An earlier attempt may have put the file on Drive and then failed to write the link
+        // to the job order (e.g. the row was locked by a long Done save running RADIUS). The
+        // link was kept on the queue row, so finish that write instead of uploading again.
+        $gdriveUrl = $isJobOrderQueue ? $imageQueue->gdrive_url : null;
+
+        if (!$gdriveUrl && !file_exists($fullLocalPath)) {
             $errorMsg = "Local file not found: {$fullLocalPath}";
             Log::error($errorMsg, [
                 'queue_id' => $imageQueue->id,
@@ -169,6 +176,8 @@ class ImageProcessingService
             $this->failRow($imageQueue, $errorMsg);
             return ['success' => false, 'error' => $errorMsg];
         }
+
+        $resizedImagePath = $fullLocalPath;
 
         try {
             if ($isJobOrderQueue) {
@@ -196,44 +205,72 @@ class ImageProcessingService
                 'full_name' => $fullName
             ]);
 
-            $resizedImagePath = $this->resizeImageIfNeeded($fullLocalPath);
-            
-            Log::info("Image resize completed", [
-                'original_path' => $fullLocalPath,
-                'resized_path' => $resizedImagePath,
-                'file_exists' => file_exists($resizedImagePath)
-            ]);
-            
-            $requestFieldName = $this->getRequestFieldName($imageQueue->field_name);
-            
-            Log::info("Uploading to Google Drive", [
-                'full_name' => $fullName,
-                'db_field_name' => $imageQueue->field_name,
-                'request_field_name' => $requestFieldName,
-                'file_path' => $resizedImagePath
-            ]);
+            if ($gdriveUrl) {
+                Log::info("Reusing Drive link from an earlier attempt", [
+                    'queue_id' => $imageQueue->id,
+                    'gdrive_url' => $gdriveUrl
+                ]);
+            } else {
+                $resizedImagePath = $this->resizeImageIfNeeded($fullLocalPath);
 
-            $folderId = $this->googleDriveService->createFolder($fullName);
-            $fileName = $imageQueue->field_name . '_' . time() . '.jpg';
-            $gdriveUrl = $this->googleDriveService->uploadFile(
-                $resizedImagePath,
-                $folderId,
-                $fileName,
-                mime_content_type($resizedImagePath)
-            );
-            
-            Log::info("Upload completed", [
-                'gdrive_url' => $gdriveUrl
-            ]);
+                Log::info("Image resize completed", [
+                    'original_path' => $fullLocalPath,
+                    'resized_path' => $resizedImagePath,
+                    'file_exists' => file_exists($resizedImagePath)
+                ]);
 
-            if (!$gdriveUrl) {
-                throw new \Exception("Upload did not return URL for field: {$imageQueue->field_name}.");
+                $requestFieldName = $this->getRequestFieldName($imageQueue->field_name);
+
+                Log::info("Uploading to Google Drive", [
+                    'full_name' => $fullName,
+                    'db_field_name' => $imageQueue->field_name,
+                    'request_field_name' => $requestFieldName,
+                    'file_path' => $resizedImagePath
+                ]);
+
+                $folderId = $this->googleDriveService->createFolder($fullName);
+                $fileName = $imageQueue->field_name . '_' . time() . '.jpg';
+                $gdriveUrl = $this->googleDriveService->uploadFile(
+                    $resizedImagePath,
+                    $folderId,
+                    $fileName,
+                    mime_content_type($resizedImagePath),
+                    // Already sized by resizeImageIfNeeded; a second shrink blurred the photo.
+                    false
+                );
+
+                Log::info("Upload completed", [
+                    'gdrive_url' => $gdriveUrl
+                ]);
+
+                if (!$gdriveUrl) {
+                    throw new \Exception("Upload did not return URL for field: {$imageQueue->field_name}.");
+                }
+
+                if ($isJobOrderQueue) {
+                    // Saved before the job order write, so a write that fails is retried
+                    // without uploading the same photo to Drive a second time.
+                    $imageQueue->update(['gdrive_url' => $gdriveUrl]);
+                }
             }
 
             if ($isJobOrderQueue || (isset($imageQueue->table_process) && $imageQueue->table_process === 'job_orders')) {
                 $jobOrderToUpdate = $isJobOrderQueue ? $jobOrder : \App\Models\JobOrder::where('application_id', $imageQueue->application_id)->latest()->first();
-                if ($jobOrderToUpdate) {
-                    $dbColumn = $this->getJobOrderDbColumn($imageQueue->field_name);
+                $dbColumn = $this->getJobOrderDbColumn($imageQueue->field_name);
+
+                // A retake queues a second row for the same field. If that newer row has
+                // already landed, this older one (back from a retry) must not overwrite it.
+                $supersededByNewer = $isJobOrderQueue && JobOrderImageQueue::where('job_order_id', $imageQueue->job_order_id)
+                    ->where('field_name', $imageQueue->field_name)
+                    ->where('id', '>', $imageQueue->id)
+                    ->where('status', 'completed')
+                    ->exists();
+
+                if ($supersededByNewer) {
+                    Log::info("Skipped job_order {$imageQueue->job_order_id} field {$dbColumn}: a newer upload for it already completed", [
+                        'queue_id' => $imageQueue->id,
+                    ]);
+                } elseif ($jobOrderToUpdate) {
                     // forceFill so a trusted single-column URL write is never silently
                     // dropped by $fillable (this is what caused client_tagging_url to
                     // upload to Drive but never persist to the job_orders table).
@@ -272,7 +309,7 @@ class ImageProcessingService
                 'gdrive_url' => $gdriveUrl,
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $errorMsg = "Failed to process image: " . $e->getMessage();
             Log::error($errorMsg, [
                 'queue_id' => $imageQueue->id,
@@ -313,7 +350,9 @@ class ImageProcessingService
                 ]);
                 return $resizedPath;
             } else {
-                Log::warning("Resize failed, using original image: {$localPath}");
+                // Usually the image is already within the readable size (the apps size photos
+                // before uploading); ImageResizeService logs which reason applied.
+                Log::info("Not resized, uploading the image as received: {$localPath}");
                 return $localPath;
             }
         } catch (\Exception $e) {

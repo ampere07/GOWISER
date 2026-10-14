@@ -2165,10 +2165,7 @@ class JobOrderController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
-            \Log::error('Error approving job order: ' . $e->getMessage());
-            \Log::error('Stack trace: ' . $e->getTraceAsString());
-            
+
             // Map common error messages to user-friendly "duplicate" message
             $duplicateMessages = [
                 'there\'s already data in database',
@@ -2188,13 +2185,20 @@ class JobOrderController extends Controller
             }
             
             if ($isDuplicate) {
+                // Usually a second click on Approve. Answered with a 409, not a fault, so no
+                // stack trace in the error log.
+                \Log::warning('Job order approval refused, already approved: ' . $e->getMessage(), ['job_order_id' => $id]);
+
                 return response()->json([
                     'success' => false,
                     'message' => 'there\'s already data in database',
                     'error' => $e->getMessage(),
                 ], 409); // Conflict
             }
-            
+
+            \Log::error('Error approving job order: ' . $e->getMessage());
+            \Log::error('Stack trace: ' . $e->getTraceAsString());
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage() ?: 'Failed to approve job order',
@@ -2443,6 +2447,7 @@ class JobOrderController extends Controller
             ];
 
             $queuedCount = 0;
+            $queuedFields = [];
             $oldData = [];
             $newData = [];
             $dbColumnMap = [
@@ -2491,6 +2496,7 @@ class JobOrderController extends Controller
                     $newData[$dbColumn] = 'Queueing upload: ' . $file->getClientOriginalName();
 
                     $queuedCount++;
+                    $queuedFields[] = $field;
                 }
             }
 
@@ -2520,7 +2526,11 @@ class JobOrderController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Images queued successfully for background upload',
-                'data' => [],
+                // The Drive links do not exist yet; joborderimages:process writes them to the
+                // job order once each file is uploaded.
+                'data' => [
+                    'queued' => $queuedFields,
+                ],
             ]);
 
         } catch (\Exception $e) {

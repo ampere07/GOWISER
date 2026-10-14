@@ -67,6 +67,24 @@ class ItexmoSmsService
             ];
         }
 
+        // Refused here rather than by the gateway. Semaphore answers a malformed number with a
+        // 200 and "The number format is invalid", which cost a request and an error-log entry per
+        // message for what is a typo in the customer record, not a fault in sending.
+        if (!$this->isValidMobileNumber($contactNo)) {
+            Log::warning('SMS not sent: invalid mobile number', [
+                'contact_no' => $contactNo,
+                'account_no' => $data['account_no'] ?? null,
+            ]);
+
+            return [
+                'success' => false,
+                'error' => "Invalid mobile number: {$contactNo} (expected 11 digits starting with 09)",
+                // A data problem on this one recipient: no retry fixes it, and nothing is wrong
+                // with the gateway, so callers report it as a warning rather than an error.
+                'invalid_recipient' => true,
+            ];
+        }
+
         $provider = $this->config->provider ?? 'itexmo';
 
         if ($provider === 'semaphore') {
@@ -452,12 +470,32 @@ class ItexmoSmsService
     protected function normalizePhoneNumber(string $contactNo): string
     {
         $contactNo = trim($contactNo);
-        
+
+        // A field holding two numbers ("0917 123 4567 / 0918 765 4321") goes to the first.
+        $contactNo = trim(preg_split('/[\/,;|]/', $contactNo)[0]);
+
+        // Spacing and punctuation people type into a number: "0917-123-4567", "(0917) 123 4567".
+        $contactNo = preg_replace('/[\s\-().]/', '', $contactNo);
+
+        // International forms of a Philippine mobile: +639XXXXXXXXX and 639XXXXXXXXX.
+        if (preg_match('/^\+?63(9\d{9})$/', $contactNo, $matches)) {
+            $contactNo = '0' . $matches[1];
+        }
+
         if (strlen($contactNo) === 10 && substr($contactNo, 0, 1) === '9') {
             $contactNo = '0' . $contactNo;
         }
-        
+
         return $contactNo;
+    }
+
+    /**
+     * A Philippine mobile number, 09 followed by nine digits. Deliberately not "repaired" when it
+     * is too long or too short: trimming an extra digit could send a customer's bill to a stranger.
+     */
+    protected function isValidMobileNumber(string $contactNo): bool
+    {
+        return preg_match('/^09\d{9}$/', $contactNo) === 1;
     }
 
     protected function getRecipientsByFilter(string $filterType, string $filterValue)

@@ -235,7 +235,8 @@ class EmailQueueService
             } else {
                 $job->markAsFailed($result['error']);
                 $stats['failed']++;
-                Log::error('Email failed', ['id' => $job->id, 'error' => $result['error']]);
+                // A mistyped address is a data problem on one record, not a fault in sending.
+                Log::log(!empty($result['invalid_recipient']) ? 'warning' : 'error', 'Email failed', ['id' => $job->id, 'error' => $result['error']]);
             }
 
             // Sleep for 600ms to stay under Resend's 2 req/sec rate limit
@@ -294,7 +295,7 @@ class EmailQueueService
             } else {
                 $job->markAsFailed($result['error']);
                 $stats['failed']++;
-                Log::error('Email retry failed', ['id' => $job->id, 'attempts' => $job->attempts]);
+                Log::log(!empty($result['invalid_recipient']) ? 'warning' : 'error', 'Email retry failed', ['id' => $job->id, 'attempts' => $job->attempts]);
             }
 
             // Sleep for 600ms to stay under Resend's 2 req/sec rate limit

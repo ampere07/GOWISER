@@ -309,8 +309,6 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // No padding to 2 dp: 922.5 stays 922.5. Capped at 2 dp only because the fee above is already
     // rounded to centavos, so nothing here is ever actually rounded away.
     const formatPeso = (value: number) => value.toLocaleString('en-PH', { maximumFractionDigits: 2 });
-    // Trailing zeros trimmed so 2.50 reads as "2.5%".
-    const convenienceFeeLabel = String(Number(convenienceFeePercentage));
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
     const latestBillDiscount = Math.round(
@@ -1062,11 +1060,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                         )}
                                     </div>
 
-                                    {/* Convenience fee disclosure. The field above is the amount that
-                                        settles the bill; the gateway collects this total instead. */}
+                                    {/* The field above is the amount that settles the bill; the gateway
+                                        collects this total instead. Only the total is shown — the fee
+                                        itself is not itemised. */}
                                     {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
                                         <p className="text-xs text-gray-500 mt-2">
-                                            + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
+                                            Total: ₱{formatPeso(totalWithConvenienceFee)}
                                         </p>
                                     )}
                                 </div>

@@ -55,12 +55,17 @@ class GoogleDrivePdfGenerationService
                 'Amount_Rebates_value' => $pdfData['Amount_Rebates'] ?? 'NOT SET',
             ]);
 
-            $template = EmailTemplate::where('Template_Code', $templateCode)
-                ->where('Is_Active', true)
-                ->first();
+            // Fetched without the Is_Active filter so a template that is missing and one that is
+            // switched off are told apart: "not found" sent people looking for a row that was
+            // there all along, just deactivated on the Email Templates page.
+            $template = EmailTemplate::where('Template_Code', $templateCode)->first();
 
             if (!$template) {
-                throw new \Exception("PDF template {$templateCode} not found");
+                throw new \Exception("PDF template {$templateCode} not found: there is no {$templateCode} row in email_templates");
+            }
+
+            if (!$template->Is_Active) {
+                throw new \Exception("PDF template {$templateCode} is switched off (Is_Active = 0); activate it on the Email Templates page");
             }
 
             // Check what placeholders exist in the template

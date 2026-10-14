@@ -43,6 +43,24 @@ class ResendEmailService
             return ['success' => false, 'error' => $error];
         }
 
+        // An address Resend is certain to refuse ("name@gmail", with no ".com") is refused here
+        // instead: the call could only come back 422, and it was logged as a sending error for
+        // what is a typo on the customer's record.
+        $recipients = is_array($data['to']) ? $data['to'] : [$data['to']];
+        $invalid = array_values(array_filter($recipients, fn ($to) => !$this->isValidAddress((string) $to)));
+        if ($invalid !== []) {
+            Log::warning('Email not sent: invalid recipient address', [
+                'to'      => $data['to'],
+                'subject' => $data['subject'] ?? null,
+            ]);
+
+            return [
+                'success' => false,
+                'error' => 'Invalid recipient email address: ' . implode(', ', $invalid),
+                'invalid_recipient' => true,
+            ];
+        }
+
         $fromEmail = $data['email_sender'] ?? $this->fromEmail;
         $fromName  = $data['sender_name']  ?? $this->fromName;
 
@@ -180,6 +198,30 @@ class ResendEmailService
         ]);
 
         return ['success' => false, 'error' => $lastError];
+    }
+
+    /**
+     * Whether Resend will take this recipient: a plain address or "Name <address>", or a
+     * comma-separated list of them. PHP's filter is stricter than the RFC in the one way that
+     * matters here: it rejects a domain with no dot, which is how "name@gmail" slipped through.
+     */
+    protected function isValidAddress(string $recipient): bool
+    {
+        $parts = $this->parseEmails($recipient);
+
+        if ($parts === []) {
+            return false;
+        }
+
+        foreach ($parts as $part) {
+            $address = preg_match('/<([^>]+)>\s*$/', $part, $matches) ? $matches[1] : $part;
+
+            if (filter_var(trim($address), FILTER_VALIDATE_EMAIL) === false) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     protected function parseEmails($emails): array

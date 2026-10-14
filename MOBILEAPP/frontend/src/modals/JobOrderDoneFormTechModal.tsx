@@ -58,6 +58,7 @@ import { createJobOrderItems, JobOrderItem } from '../services/jobOrderItemServi
 import { updateApplication } from '../services/applicationService';
 import { formatToGMT8MySQL, formatToGMT8Display } from '../utils/dateUtils';
 import { referredByEcho } from '../utils/referredByField';
+import { optimizePhoto } from '../utils/optimizePhoto';
 import apiClient from '../config/api';
 import { getActiveImageSize } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -154,6 +155,69 @@ const MiniModalItem = React.memo<MiniModalItemProps>(
 );
 
 // Local helpers removed in favor of utility
+
+// The job order is only saved once the server holds every photo in its upload queue. Saved
+// without them, it has nothing to show and the photos are no longer on hand to send again.
+const IMAGE_UPLOAD_ATTEMPTS = 5;
+// Several phone photos over a weak signal routinely outlast the client's 60s default timeout.
+const IMAGE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+
+type ImagePart = { field: string; file: any; fileName: string };
+
+/**
+ * Sends the photos to the job order's upload queue and resolves only when the server reports
+ * every one of them queued. A dropped connection or server error is retried; a refusal (too
+ * large, not an image, not allowed) is not, since sending the same files again cannot change it.
+ */
+const queueJobOrderImages = async (
+  jobOrderId: string | number,
+  folderName: string,
+  parts: ImagePart[],
+  onAttempt: (attempt: number, previousError: string | null) => void
+): Promise<void> => {
+  const expected = parts.map(part => part.field);
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= IMAGE_UPLOAD_ATTEMPTS; attempt++) {
+    onAttempt(attempt, lastError);
+
+    // Built fresh for every attempt rather than resending a body that may already be half-read.
+    const body = new FormData();
+    body.append('folder_name', folderName);
+    parts.forEach(part => body.append(part.field, part.file, part.fileName));
+
+    try {
+      const response = await apiClient.post(`/job-orders/${jobOrderId}/upload-images`, body, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: IMAGE_UPLOAD_TIMEOUT_MS,
+      });
+      const result: any = response.data;
+      // `queued` lists the fields the server put in the queue. A server too old to report it
+      // only says success, which is then all there is to go on.
+      const queued: string[] | undefined = Array.isArray(result?.data?.queued) ? result.data.queued : undefined;
+      const missing = queued ? expected.filter(field => !queued.includes(field)) : [];
+
+      if (result?.success && missing.length === 0) return;
+
+      lastError = result?.success
+        ? `the server did not queue ${missing.join(', ')}`
+        : (result?.message || 'the server did not accept the photos');
+    } catch (error: any) {
+      lastError = error.response?.data?.message || error.message || 'Unknown error';
+      const status: number | undefined = error.response?.status;
+      // No response at all (offline, timed out), an expired session token, rate limiting and
+      // server errors can pass on another try. Anything else is the server refusing the photos.
+      const retryable = !status || status >= 500 || [408, 419, 429].includes(status);
+      if (!retryable) throw new Error(lastError || 'Photo upload failed');
+    }
+
+    if (attempt < IMAGE_UPLOAD_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(3000 * attempt, 15000)));
+    }
+  }
+
+  throw new Error(lastError || 'Photo upload failed');
+};
 
 const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   isOpen,
@@ -411,6 +475,11 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     };
   }, []);
 
+  // The newest photo picked per field, so an optimization that finishes late cannot replace a
+  // photo the technician has since retaken or removed. Cleared when the modal closes, so it
+  // cannot land on the next job order opened either.
+  const latestPhotoRef = useRef<Record<string, any>>({});
+
   // Open-session counter – incremented each time the modal transitions to isOpen=true.
   const openCycleRef = useRef(0);
   const initialDataLoadedRef = useRef(false);
@@ -518,6 +587,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     const joId = jobOrderData?.id || jobOrderData?.JobOrder_ID;
     if (!isOpen || !joId) {
       // Full cleanup when modal closes
+      latestPhotoRef.current = {};
       setFormData(prev => ({
         ...prev,
         dateInstalled: formatDateTimeForInput(new Date()),
@@ -974,10 +1044,25 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     });
   }, []);
 
-  const handleImageUpload = useCallback((field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'clientTaggingImage' | 'proofImage', file: any) => {
+  const handleImageUpload = useCallback(async (field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'clientTaggingImage' | 'proofImage', file: any) => {
+    latestPhotoRef.current[field] = file;
+    // Stored as taken straight away, so saving before the optimized copy is ready still works.
     setFormData(prev => ({ ...prev, [field]: file }));
     setImagePreviews(prev => ({ ...prev, [field]: file ? file.uri : null }));
     setErrors(prev => prev[field] ? { ...prev, [field]: '' } : prev);
+
+    // The drawn signature is a small PNG of lines; re-encoding it as JPEG would only smudge it.
+    if (!file || field === 'clientSignatureImage') return;
+
+    try {
+      const optimized = await optimizePhoto(file);
+      if (latestPhotoRef.current[field] === file) {
+        setFormData(prev => ({ ...prev, [field]: optimized }));
+      }
+    } catch (optimizeError) {
+      // The photo as taken still uploads; it is only larger.
+      console.warn(`[OPTIMIZE FAILED] ${field}:`, optimizeError);
+    }
   }, []);
 
   const handleSignatureOK = async (signature: string) => {
@@ -1391,96 +1476,45 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         const fullLastName = (jobOrderData?.Last_Name || jobOrderData?.last_name || '').trim();
         const folderName = `(joborder)${firstName} ${middleInitial} ${fullLastName}`.trim();
 
-        const imageFormData = new FormData();
-        imageFormData.append('folder_name', folderName);
-
-        let hasImages = false;
-        const safeAppendImage = (fieldName: string, fileObj: any) => {
+        const imageParts: ImagePart[] = [];
+        const addImage = (field: string, fileObj: any) => {
           if (!fileObj) return;
-          const fileName = fileObj.name || `${fieldName}_${Date.now()}.jpg`;
-          imageFormData.append(fieldName, fileObj, fileName);
-          hasImages = true;
+          imageParts.push({ field, file: fileObj, fileName: fileObj.name || `${field}_${Date.now()}.jpg` });
         };
 
         if (updatedFormData.onsiteStatus === 'Done') {
-
-          safeAppendImage('signed_contract_image', formData.signedContractImage);
-          safeAppendImage('setup_image', formData.setupImage);
-          safeAppendImage('box_reading_image', formData.boxReadingImage);
-          safeAppendImage('router_reading_image', formData.routerReadingImage);
-          safeAppendImage('port_label_image', formData.portLabelImage);
-          safeAppendImage('client_signature_image', formData.clientSignatureImage);
-          safeAppendImage('client_tagging_image', formData.clientTaggingImage);
-          safeAppendImage('proof_image', formData.proofImage);
+          addImage('signed_contract_image', formData.signedContractImage);
+          addImage('setup_image', formData.setupImage);
+          addImage('box_reading_image', formData.boxReadingImage);
+          addImage('router_reading_image', formData.routerReadingImage);
+          addImage('port_label_image', formData.portLabelImage);
+          addImage('client_signature_image', formData.clientSignatureImage);
+          addImage('client_tagging_image', formData.clientTaggingImage);
+          addImage('proof_image', formData.proofImage);
         }
 
         if (updatedFormData.onsiteStatus === 'Failed' || updatedFormData.onsiteStatus === 'Reschedule') {
-          safeAppendImage('proof_image', formData.proofImage);
+          addImage('proof_image', formData.proofImage);
         }
 
-        if (hasImages) {
-
+        if (imageParts.length > 0) {
+          // The loading modal stays up until the server has queued every photo. The job order
+          // itself is not touched before then, so a failure here leaves it exactly as it was.
           try {
-            const uploadResponse = await apiClient.post<{
-              success: boolean;
-              message: string;
-              data?: {
-                signed_contract_image_url?: string;
-                setup_image_url?: string;
-                box_reading_image_url?: string;
-                router_reading_image_url?: string;
-                port_label_image_url?: string;
-                client_signature_image_url?: string;
-                client_tagging_url?: string;
-                proof_image_url?: string;
-              };
-              folder_id?: string;
-            }>(`/job-orders/${jobOrderId}/upload-images`, imageFormData, {
-              headers: {
-                'Content-Type': 'multipart/form-data'
-              }
+            await queueJobOrderImages(jobOrderId, folderName, imageParts, (attempt, previousError) => {
+              setLoadingMessage(attempt === 1
+                ? `Uploading ${imageParts.length} photo${imageParts.length === 1 ? '' : 's'} to the server...`
+                : `Photo upload failed (${previousError}). Retrying, attempt ${attempt} of ${IMAGE_UPLOAD_ATTEMPTS}...`);
             });
-
-            if (uploadResponse.data.success && uploadResponse.data.data) {
-              const imageUrls = uploadResponse.data.data;
-
-              if (imageUrls.signed_contract_image_url) {
-                jobOrderUpdateData.signed_contract_image_url = imageUrls.signed_contract_image_url;
-              }
-              if (imageUrls.setup_image_url) {
-                jobOrderUpdateData.setup_image_url = imageUrls.setup_image_url;
-              }
-              if (imageUrls.box_reading_image_url) {
-                jobOrderUpdateData.box_reading_image_url = imageUrls.box_reading_image_url;
-              }
-              if (imageUrls.router_reading_image_url) {
-                jobOrderUpdateData.router_reading_image_url = imageUrls.router_reading_image_url;
-              }
-              if (imageUrls.port_label_image_url) {
-                jobOrderUpdateData.port_label_image_url = imageUrls.port_label_image_url;
-              }
-              if (imageUrls.client_signature_image_url) {
-                jobOrderUpdateData.client_signature_url = imageUrls.client_signature_image_url;
-              }
-              if (imageUrls.client_tagging_url) {
-                jobOrderUpdateData.client_tagging_url = imageUrls.client_tagging_url;
-              }
-              if (imageUrls.proof_image_url) {
-                jobOrderUpdateData.proof_image_url = imageUrls.proof_image_url;
-              }
-            } else {
-              throw new Error(uploadResponse.data.message || 'The server did not return the uploaded image links');
-            }
+            setLoadingMessage('Photos received by the server. Saving job order...');
           } catch (uploadError: any) {
-            // Images are required, so a failed upload stops the save here rather than
-            // closing the job order without them. Nothing has been written yet.
-            const errorMsg = uploadError.response?.data?.message || uploadError.message || 'Unknown error';
+            const errorMsg = uploadError.message || 'Unknown error';
             if (progressInterval) clearInterval(progressInterval);
             setLoading(false);
             setShowLoadingModal(false);
             setLoadingPercentage(0);
             showMessageModal('Upload Failed', [
-              { type: 'error', text: `Failed to upload images: ${errorMsg}. The job order was not saved. Please try again.` }
+              { type: 'error', text: `The photos could not be uploaded: ${errorMsg}. The job order was NOT saved. Your photos and entries are still in the form, so check your connection and tap Save again.` }
             ]);
             return;
           }

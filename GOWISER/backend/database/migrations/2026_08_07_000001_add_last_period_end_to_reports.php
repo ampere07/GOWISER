@@ -17,7 +17,13 @@ return new class extends Migration
     {
         Schema::table('reports', function (Blueprint $table) {
             if (!Schema::hasColumn('reports', 'last_period_end')) {
-                $table->date('last_period_end')->nullable()->after('last_dispatched_at');
+                $column = $table->date('last_period_end')->nullable();
+
+                // Positioned only when the anchor exists: on a reports table without
+                // last_dispatched_at, `after` made the whole migration fail.
+                if (Schema::hasColumn('reports', 'last_dispatched_at')) {
+                    $column->after('last_dispatched_at');
+                }
             }
         });
     }

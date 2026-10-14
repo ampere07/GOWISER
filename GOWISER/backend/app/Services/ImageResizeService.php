@@ -7,6 +7,12 @@ use Illuminate\Support\Facades\Log;
 
 class ImageResizeService
 {
+    /**
+     * The smallest long side, in pixels, a photo is resized to. Matches the size the job order
+     * forms optimize to on the phone: enough to read a serial label or a signed contract.
+     */
+    public const MIN_LONG_EDGE = 1600;
+
     public static function resizeImage($sourcePath, $destinationPath)
     {
         $setting = self::getActiveSetting();
@@ -39,9 +45,26 @@ class ImageResizeService
         ]);
 
         $resizePercentage = $setting->image_size_value / 100;
-        $newWidth = round($originalWidth * $resizePercentage);
-        $newHeight = round($originalHeight * $resizePercentage);
-        
+
+        // The percentage alone shrank every photo, including ones the app had already sized
+        // to stay legible, so labels and readings came out too blurred to read. It still
+        // applies to large photos, but never takes the long side below MIN_LONG_EDGE.
+        $longEdge = max($originalWidth, $originalHeight);
+        $targetLongEdge = min($longEdge, max($longEdge * $resizePercentage, self::MIN_LONG_EDGE));
+
+        if ($targetLongEdge >= $longEdge) {
+            Log::info('Image already within the readable size, not resized', [
+                'width' => $originalWidth,
+                'height' => $originalHeight,
+                'min_long_edge' => self::MIN_LONG_EDGE,
+            ]);
+            return false;
+        }
+
+        $scale = $targetLongEdge / $longEdge;
+        $newWidth = round($originalWidth * $scale);
+        $newHeight = round($originalHeight * $scale);
+
         Log::info('Resizing image based on percentage', [
             'percentage' => $setting->image_size_value . '%',
             'new_width' => $newWidth,

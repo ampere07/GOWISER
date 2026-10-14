@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Trash2, CheckCircle, Upload, ExternalLink } from 'lucide-react';
 import ModalUITemplate from './ui-modal/ModalUITemplate';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
+import { optimizePhoto } from '../services/imageSettingsService';
 import apiClient from '../config/api';
 import { updateJobOrder } from '../services/jobOrderService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
@@ -108,7 +108,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
 }) => {
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
-    const [activeImageSize, setActiveImageSize] = useState<ImageSizeSetting | null>(null);
     const [files, setFiles] = useState<{
         setupImage: File | null;
         speedTestImage: File | null;
@@ -158,14 +157,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
             }
         };
         fetchPalette();
-    }, []);
-
-    useEffect(() => {
-        const fetchImageSettings = async () => {
-            const settings = await getActiveImageSize();
-            setActiveImageSize(settings);
-        };
-        fetchImageSettings();
     }, []);
 
     const convertGoogleDriveUrl = (url: string | null | undefined): string | null => {
@@ -221,14 +212,17 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, field: string) => {
         if (e.target.files && e.target.files[0]) {
             let file = e.target.files[0];
-            
-            // Apply resizing if setting is active
-            if (activeImageSize && activeImageSize.status === 'active') {
-                try {
-                    file = await resizeImage(file, activeImageSize.image_size_value);
-                } catch (error) {
-                    console.error('Image resizing failed:', error);
+
+            // Capped at PHOTO_MAX_EDGE rather than shrunk by the image-size percentage, which
+            // also halved photos that were already small and left them too blurred to read.
+            try {
+                const optimized = await optimizePhoto(file);
+                if (optimized.size < file.size) {
+                    file = optimized;
                 }
+            } catch (error) {
+                // A photo the browser cannot decode (HEIC) goes up unchanged.
+                console.error('Image optimization failed:', error);
             }
 
             setFiles(prev => ({ ...prev, [field]: file }));

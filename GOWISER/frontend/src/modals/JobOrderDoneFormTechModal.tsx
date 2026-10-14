@@ -18,7 +18,7 @@ import { barangayService, Barangay } from '../services/barangayService';
 import { locationDetailService, LocationDetail } from '../services/locationDetailService';
 import { updateApplication } from '../services/applicationService';
 import apiClient from '../config/api';
-import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
+import { optimizePhoto, PHOTO_MAX_EDGE } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LocationPicker from '../components/LocationPicker';
 import { pppoeService, UsernamePattern } from '../services/pppoeService';
@@ -90,6 +90,68 @@ interface OrderItem {
   itemId: string;
   quantity: string;
 }
+
+// The job order is only saved once the server holds every photo in its upload queue. Saved
+// without them, it has nothing to show and the photos are no longer on hand to send again.
+const IMAGE_UPLOAD_ATTEMPTS = 5;
+// Several phone photos over a weak signal routinely outlast the client's 60s default timeout.
+const IMAGE_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+
+type ImagePart = { field: string; file: Blob; fileName: string };
+
+/**
+ * Sends the photos to the job order's upload queue and resolves only when the server reports
+ * every one of them queued. A dropped connection or server error is retried; a refusal (too
+ * large, not an image, not allowed) is not, since sending the same files again cannot change it.
+ */
+const queueJobOrderImages = async (
+  jobOrderId: string | number,
+  folderName: string,
+  parts: ImagePart[],
+  onAttempt: (attempt: number, previousError: string | null) => void
+): Promise<void> => {
+  const expected = parts.map(part => part.field);
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= IMAGE_UPLOAD_ATTEMPTS; attempt++) {
+    onAttempt(attempt, lastError);
+
+    const body = new FormData();
+    body.append('folder_name', folderName);
+    parts.forEach(part => body.append(part.field, part.file, part.fileName));
+
+    try {
+      const response = await apiClient.post(`/job-orders/${jobOrderId}/upload-images`, body, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: IMAGE_UPLOAD_TIMEOUT_MS,
+      });
+      const result: any = response.data;
+      // `queued` lists the fields the server put in the queue. A server too old to report it
+      // only says success, which is then all there is to go on.
+      const queued: string[] | undefined = Array.isArray(result?.data?.queued) ? result.data.queued : undefined;
+      const missing = queued ? expected.filter(field => !queued.includes(field)) : [];
+
+      if (result?.success && missing.length === 0) return;
+
+      lastError = result?.success
+        ? `the server did not queue ${missing.join(', ')}`
+        : (result?.message || 'the server did not accept the photos');
+    } catch (error: any) {
+      lastError = error.response?.data?.message || error.message || 'Unknown error';
+      const status: number | undefined = error.response?.status;
+      // No response at all (offline, timed out), an expired session token, rate limiting and
+      // server errors can pass on another try. Anything else is the server refusing the photos.
+      const retryable = !status || status >= 500 || [408, 419, 429].includes(status);
+      if (!retryable) throw new Error(lastError || 'Photo upload failed');
+    }
+
+    if (attempt < IMAGE_UPLOAD_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(3000 * attempt, 15000)));
+    }
+  }
+
+  throw new Error(lastError || 'Photo upload failed');
+};
 
 const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   isOpen,
@@ -242,7 +304,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   }>({ title: '', messages: [] });
   const [showLoadingModal, setShowLoadingModal] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
-  const [activeImageSize, setActiveImageSize] = useState<ImageSizeSetting | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [usernamePattern, setUsernamePattern] = useState<UsernamePattern | null>(null);
   const [techInputValue, setTechInputValue] = useState<string>('');
   const [lcpnapSearch, setLcpnapSearch] = useState('');
@@ -388,21 +450,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       </div>
     );
   };
-
-  useEffect(() => {
-    const fetchImageSizeSettings = async () => {
-      if (isOpen) {
-        try {
-          const settings = await getActiveImageSize();
-          setActiveImageSize(settings);
-        } catch (error) {
-          setActiveImageSize(null);
-        }
-      }
-    };
-
-    fetchImageSizeSettings();
-  }, [isOpen]);
 
   useEffect(() => {
     const fetchUsernamePattern = async () => {
@@ -986,21 +1033,22 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       let processedFile = file;
       const originalSize = (file.size / 1024 / 1024).toFixed(2);
 
-      if (activeImageSize && activeImageSize.image_size_value < 100) {
-        try {
-          const resizedFile = await resizeImage(file, activeImageSize.image_size_value);
-          const resizedSize = (resizedFile.size / 1024 / 1024).toFixed(2);
+      // Capped at PHOTO_MAX_EDGE rather than shrunk by the image-size percentage: the
+      // percentage also halved photos that were already small, leaving labels and readings
+      // too blurred to read. A photo the browser cannot decode (HEIC) goes up unchanged.
+      try {
+        const optimizedFile = await optimizePhoto(file);
+        const optimizedSize = (optimizedFile.size / 1024 / 1024).toFixed(2);
 
-          if (resizedFile.size < file.size) {
-            processedFile = resizedFile;
-            console.log(`[RESIZE SUCCESS] ${field}: ${originalSize}MB → ${resizedSize}MB (${activeImageSize.image_size_value}%, saved ${((1 - resizedFile.size / file.size) * 100).toFixed(1)}%)`);
-          } else {
-            console.log(`[RESIZE SKIP] ${field}: Resized file (${resizedSize}MB) is not smaller than original (${originalSize}MB), using original`);
-          }
-        } catch (resizeError) {
-          console.error(`[RESIZE FAILED] ${field}:`, resizeError);
-          processedFile = file;
+        if (optimizedFile.size < file.size) {
+          processedFile = optimizedFile;
+          console.log(`[OPTIMIZE SUCCESS] ${field}: ${originalSize}MB → ${optimizedSize}MB (max ${PHOTO_MAX_EDGE}px, saved ${((1 - optimizedFile.size / file.size) * 100).toFixed(1)}%)`);
+        } else {
+          console.log(`[OPTIMIZE SKIP] ${field}: Optimized file (${optimizedSize}MB) is not smaller than original (${originalSize}MB), using original`);
         }
+      } catch (optimizeError) {
+        console.error(`[OPTIMIZE FAILED] ${field}:`, optimizeError);
+        processedFile = file;
       }
 
       setFormData(prev => {
@@ -1250,6 +1298,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     setLoading(true);
     setShowLoadingModal(true);
     setLoadingPercentage(0);
+    setLoadingMessage('');
 
     const progressInterval = setInterval(() => {
       setLoadingPercentage(prev => {
@@ -1337,9 +1386,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         const fullLastName = (jobOrderData?.Last_Name || jobOrderData?.last_name || '').trim();
         const folderName = `(joborder)${firstName} ${middleInitial} ${fullLastName}`.trim();
 
-        const imageFormData = new FormData();
-        imageFormData.append('folder_name', folderName);
-
         console.log('[UPLOAD START] Preparing images for upload...');
 
         let tempSigFile: File | null = null;
@@ -1355,98 +1401,43 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           }
         }
 
-        if (formData.signedContractImage) {
-          console.log(`[APPEND] Signed Contract: ${(formData.signedContractImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('signed_contract_image', formData.signedContractImage, formData.signedContractImage.name);
-        }
-        if (formData.setupImage) {
-          console.log(`[APPEND] Setup: ${(formData.setupImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('setup_image', formData.setupImage, formData.setupImage.name);
-        }
-        if (formData.boxReadingImage) {
-          console.log(`[APPEND] Box Reading: ${(formData.boxReadingImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('box_reading_image', formData.boxReadingImage, formData.boxReadingImage.name);
-        }
-        if (formData.routerReadingImage) {
-          console.log(`[APPEND] Router Reading: ${(formData.routerReadingImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('router_reading_image', formData.routerReadingImage, formData.routerReadingImage.name);
-        }
-        if (formData.portLabelImage) {
-          console.log(`[APPEND] Port Label: ${(formData.portLabelImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('port_label_image', formData.portLabelImage, formData.portLabelImage.name);
-        }
-        if (formData.clientSignatureImage) {
-          console.log(`[APPEND] Client Signature: ${(formData.clientSignatureImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('client_signature_image', formData.clientSignatureImage, formData.clientSignatureImage.name);
-        } else if (tempSigFile) {
-          console.log(`[APPEND] Client Signature (from canvas): ${(tempSigFile.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('client_signature_image', tempSigFile, 'signature.png');
-        }
-        if (formData.speedTestImage) {
-          console.log(`[APPEND] Speed Test: ${(formData.speedTestImage.size / 1024 / 1024).toFixed(2)}MB`);
-          imageFormData.append('speed_test_image', formData.speedTestImage, formData.speedTestImage.name);
-        }
+        const imageParts: ImagePart[] = [];
+        const addImage = (field: string, file: File | null) => {
+          if (!file) return;
+          console.log(`[APPEND] ${field}: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+          imageParts.push({ field, file, fileName: file.name });
+        };
 
-        console.log('[UPLOAD] FormData prepared, sending to backend...');
+        addImage('signed_contract_image', formData.signedContractImage);
+        addImage('setup_image', formData.setupImage);
+        addImage('box_reading_image', formData.boxReadingImage);
+        addImage('router_reading_image', formData.routerReadingImage);
+        addImage('port_label_image', formData.portLabelImage);
+        addImage('client_signature_image', formData.clientSignatureImage || tempSigFile);
+        addImage('speed_test_image', formData.speedTestImage);
 
-        try {
-          const uploadResponse = await apiClient.post<{
-            success: boolean;
-            message: string;
-            data?: {
-              signed_contract_image_url?: string;
-              setup_image_url?: string;
-              box_reading_image_url?: string;
-              router_reading_image_url?: string;
-              port_label_image_url?: string;
-              client_signature_image_url?: string;
-              speedtest_image_url?: string;
-            };
-            folder_id?: string;
-          }>(`/job-orders/${jobOrderId}/upload-images`, imageFormData, {
-            headers: {
-              'Content-Type': 'multipart/form-data'
-            }
-          });
-
-          if (uploadResponse.data.success && uploadResponse.data.data) {
-            const imageUrls = uploadResponse.data.data;
-
-            if (imageUrls.signed_contract_image_url) {
-              jobOrderUpdateData.signed_contract_image_url = imageUrls.signed_contract_image_url;
-            }
-            if (imageUrls.setup_image_url) {
-              jobOrderUpdateData.setup_image_url = imageUrls.setup_image_url;
-            }
-            if (imageUrls.box_reading_image_url) {
-              jobOrderUpdateData.box_reading_image_url = imageUrls.box_reading_image_url;
-            }
-            if (imageUrls.router_reading_image_url) {
-              jobOrderUpdateData.router_reading_image_url = imageUrls.router_reading_image_url;
-            }
-            if (imageUrls.port_label_image_url) {
-              jobOrderUpdateData.port_label_image_url = imageUrls.port_label_image_url;
-            }
-            if (imageUrls.client_signature_image_url) {
-              jobOrderUpdateData.client_signature_url = imageUrls.client_signature_image_url;
-            }
-            if (imageUrls.speedtest_image_url) {
-              jobOrderUpdateData.speedtest_image_url = imageUrls.speedtest_image_url;
-            }
-          } else {
-            throw new Error(uploadResponse.data.message || 'The server did not return the uploaded image links');
+        // Nothing new to send when every photo is already on the job order from an earlier save.
+        if (imageParts.length > 0) {
+          // The loading modal stays up until the server has queued every photo. The job order
+          // itself is not touched before then, so a failure here leaves it exactly as it was.
+          try {
+            await queueJobOrderImages(jobOrderId, folderName, imageParts, (attempt, previousError) => {
+              setLoadingMessage(attempt === 1
+                ? `Uploading ${imageParts.length} photo${imageParts.length === 1 ? '' : 's'} to the server...`
+                : `Photo upload failed (${previousError}). Retrying, attempt ${attempt} of ${IMAGE_UPLOAD_ATTEMPTS}...`);
+            });
+            setLoadingMessage('Photos received by the server. Saving job order...');
+          } catch (uploadError: any) {
+            const errorMsg = uploadError.message || 'Unknown error';
+            clearInterval(progressInterval);
+            setLoading(false);
+            setShowLoadingModal(false);
+            setLoadingMessage('');
+            showMessageModal('Upload Failed', [
+              { type: 'error', text: `The photos could not be uploaded: ${errorMsg}. The job order was NOT saved. Your photos and entries are still in the form, so check your connection and click Save again.` }
+            ]);
+            return;
           }
-        } catch (uploadError: any) {
-          // Images are required for Done, so a failed upload stops the save here rather
-          // than closing the job order without them. Nothing has been written yet.
-          const errorMsg = uploadError.response?.data?.message || uploadError.message || 'Unknown error';
-          clearInterval(progressInterval);
-          setLoading(false);
-          setShowLoadingModal(false);
-          showMessageModal('Upload Failed', [
-            { type: 'error', text: `Failed to upload images: ${errorMsg}. The job order was not saved. Please try again.` }
-          ]);
-          return;
         }
       }
 
@@ -1819,6 +1810,11 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             <div className="text-center">
               <p className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>{loadingPercentage}%</p>
+              {loadingMessage && (
+                <p className={`mt-3 max-w-xs text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                  {loadingMessage}
+                </p>
+              )}
             </div>
           </div>
         </div>
